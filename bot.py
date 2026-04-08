@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
-# ====== بيانات ======
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("FINNHUB_API_KEY")
@@ -17,15 +16,6 @@ bot = Bot(token=TOKEN)
 
 WATCHLIST = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "SPY", "QQQ"]
 
-COMPANY_NAMES = {
-    "AAPL": "apple",
-    "MSFT": "microsoft",
-    "NVDA": "nvidia",
-    "AMZN": "amazon",
-    "GOOGL": "google"
-}
-
-# ====== فلترة متوسطة ======
 KEYWORDS = [
     "earnings","revenue","profit","loss","forecast",
     "surge","crash","drop","merge","acquire",
@@ -35,8 +25,7 @@ KEYWORDS = [
 
 # ====== منع تكرار ======
 def news_id(title):
-    t = title.lower().replace("breaking:", "").strip()
-    return hashlib.md5(t[:60].encode()).hexdigest()
+    return hashlib.md5(title.lower()[:60].encode()).hexdigest()
 
 def load_news():
     try:
@@ -51,31 +40,45 @@ def save_news():
 
 sent_news = load_news()
 
+# ====== تنظيف الرابط ======
+def clean_url(url):
+    if not url:
+        return None
+
+    if "finnhub.io" in url:
+        return None
+
+    if "news.google.com" in url:
+        try:
+            r = requests.get(url, allow_redirects=True, timeout=5)
+            if r.url:
+                return r.url
+        except:
+            return None
+
+    return url
+
+# ====== المصدر ======
+def extract_source(title):
+    if "-" in title:
+        return title.split("-")[-1].strip()
+    return "Unknown"
+
 # ====== Yahoo ======
 def get_yahoo_news():
-    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL&region=US&lang=en-US"
+    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL"
     feed = feedparser.parse(url)
 
-    news_list = []
-    for entry in feed.entries:
-        news_list.append({
-            "headline": entry.title,
-            "url": entry.link,
+    news = []
+    for e in feed.entries:
+        news.append({
+            "headline": e.title,
+            "url": e.link,
             "datetime": int(datetime.utcnow().timestamp())
         })
-    return news_list
+    return news
 
 # ====== Finnhub ======
-def get_stock_news(symbol):
-    today = datetime.utcnow()
-    yesterday = today - timedelta(days=1)
-
-    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={yesterday.date()}&to={today.date()}&token={API_KEY}"
-    try:
-        return requests.get(url).json()
-    except:
-        return []
-
 def get_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     try:
@@ -92,10 +95,9 @@ def sentiment(title):
         return "🔴 سلبي"
     return "⚪ عادي"
 
-# ====== تصنيف 🔥 ======
+# ====== تصنيف ======
 def classify(title):
     t = title.lower()
-
     if "fed" in t or "inflation" in t:
         return "🏦 اقتصادي"
     if "earnings" in t:
@@ -104,7 +106,6 @@ def classify(title):
         return "🚨 خطر"
     if "surge" in t:
         return "🔥 قوي"
-
     return "📰 خبر"
 
 # ====== سعر ======
@@ -112,7 +113,6 @@ def get_price(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
         d = requests.get(url).json()
-
         c = d.get("c")
         pc = d.get("pc")
 
@@ -132,7 +132,7 @@ def market(spy, qqq):
             return "📉 السوق هابط"
     return "⚖️ السوق متذبذب"
 
-# ====== تشغيل ======
+# ====== التشغيل ======
 async def main():
     while True:
         try:
@@ -143,21 +143,9 @@ async def main():
             _, qqq = get_price("QQQ")
             market_status = market(spy, qqq)
 
-            # Finnhub
-            for s in WATCHLIST:
-                news = get_stock_news(s)
-                for n in news:
-                    title = n.get("headline", "").lower()
-                    company_name = COMPANY_NAMES.get(s, "").lower()
-
-                    if company_name and company_name in title:
-                        n["symbol"] = s
-                        all_news.append(n)
-
             all_news.extend(get_general_news())
             all_news.extend(get_yahoo_news())
 
-            # ترتيب
             all_news = sorted(all_news, key=lambda x: x.get("datetime", 0), reverse=True)
 
             count = 0
@@ -167,24 +155,14 @@ async def main():
                     break
 
                 title = n.get("headline")
-                url = n.get("url")
-                symbol = n.get("symbol", "")
+                url = clean_url(n.get("url"))
 
-                if not title:
+                if not title or not url:
                     continue
 
-                # تحويل Google → مباشر
-                if url and "news.google.com" in url:
-                    try:
-                        r = requests.get(url, allow_redirects=True)
-                        url = r.url
-                    except:
-                        pass
-
-                clean = title.lower()[:60]
-                if clean in titles_seen:
+                if title.lower()[:60] in titles_seen:
                     continue
-                titles_seen.add(clean)
+                titles_seen.add(title.lower()[:60])
 
                 nid = news_id(title)
                 if nid in sent_news:
@@ -193,49 +171,25 @@ async def main():
                 if not any(k in title.lower() for k in KEYWORDS):
                     continue
 
-                s = sentiment(title)
                 tag = classify(title)
-
-                price_text = ""
-                sig = ""
-
-                if symbol:
-                    price, change = get_price(symbol)
-                    if price:
-                        price_text = f"💰 {price}$ | {change}%"
-
-                        if change > 5:
-                            sig = "🔥 فرصة"
-                        elif change < -5:
-                            sig = "🚨 خطر"
-
-                time = datetime.fromtimestamp(n["datetime"]).strftime('%H:%M')
+                sent = sentiment(title)
+                source = extract_source(title)
 
                 try:
                     ar = GoogleTranslator(source='auto', target='ar').translate(title)
                 except:
                     ar = title
 
-                msg = f"""
-{market_status}
+                time_str = datetime.fromtimestamp(n["datetime"]).strftime('%H:%M')
 
-{tag}
-
-{f"📈 {symbol}" if symbol else ""}
-
-{price_text}
-
-{s} {sig}
-
-📰 {ar}
-🌐 {title}
-
-🕒 {time}
-
-🔗 {url}
-"""
-
-                msg = msg.replace("\n\n\n", "\n\n")
+                msg = (
+                    f"{market_status}\n"
+                    f"━━━━━━━━━━━━━━\n"
+                    f"{tag} | {sent}\n\n"
+                    f"📰 {ar}\n\n"
+                    f"🌐 {source} | 🕒 {time_str}\n"
+                    f"🔗 {url}"
+                )
 
                 await bot.send_message(chat_id=CHAT_ID, text=msg)
 
