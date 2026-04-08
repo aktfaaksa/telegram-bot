@@ -9,8 +9,13 @@ from telegram import Bot
 from deep_translator import GoogleTranslator
 
 TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("FINNHUB_API_KEY")
+
+# 👇 إرسال لشخصين
+CHAT_IDS = [
+    int(os.getenv("CHAT_ID")),  # أنت
+    6315087880                 # الشخص الثاني
+]
 
 bot = Bot(token=TOKEN)
 
@@ -243,7 +248,12 @@ async def main():
                     f"🔗 {url}"
                 )
 
-                await bot.send_message(chat_id=CHAT_ID, text=msg)
+                # 👇 إرسال للجميع
+                for chat_id in CHAT_IDS:
+                    try:
+                        await bot.send_message(chat_id=chat_id, text=msg)
+                    except Exception as e:
+                        print(f"فشل الإرسال لـ {chat_id}:", e)
 
                 sent_news.add(nid)
                 save_news()
