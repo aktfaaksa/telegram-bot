@@ -3,21 +3,20 @@ import asyncio
 import json
 import hashlib
 import os
+import feedparser
 from datetime import datetime, timedelta
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
-# ====== بياناتك (من Render) ======
+# ====== بيانات ======
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 
 bot = Bot(token=TOKEN)
 
-# ====== الأسهم القيادية ======
 WATCHLIST = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "SPY", "QQQ"]
 
-# ====== أسماء الشركات ======
 COMPANY_NAMES = {
     "AAPL": "apple",
     "MSFT": "microsoft",
@@ -26,23 +25,19 @@ COMPANY_NAMES = {
     "GOOGL": "google"
 }
 
-# ====== كلمات ======
+# ====== فلترة متوسطة ======
 KEYWORDS = [
-    "earnings","revenue","profit","loss","guidance","forecast",
-    "surge","crash","drop","fall","merge","acquire",
-    "upgrade","downgrade","inflation","interest rate","fed",
-    "oil","war","economy","market"
+    "earnings","revenue","profit","loss","forecast",
+    "surge","crash","drop","merge","acquire",
+    "upgrade","downgrade","inflation","fed",
+    "interest rate","economy"
 ]
 
-STRONG_KEYWORDS = [
-    "earnings","surge","crash","fed","inflation"
-]
-
-# ====== بصمة الخبر ======
+# ====== منع تكرار ======
 def news_id(title):
-    return hashlib.md5(title.lower().encode()).hexdigest()
+    t = title.lower().replace("breaking:", "").strip()
+    return hashlib.md5(t[:60].encode()).hexdigest()
 
-# ====== تحميل ======
 def load_news():
     try:
         with open("sent.json", "r") as f:
@@ -56,26 +51,37 @@ def save_news():
 
 sent_news = load_news()
 
-# ====== API ======
-def safe_request(url):
-    try:
-        data = requests.get(url).json()
-        if isinstance(data, list):
-            return data
-        return []
-    except:
-        return []
+# ====== Yahoo ======
+def get_yahoo_news():
+    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL&region=US&lang=en-US"
+    feed = feedparser.parse(url)
 
+    news_list = []
+    for entry in feed.entries:
+        news_list.append({
+            "headline": entry.title,
+            "url": entry.link,
+            "datetime": int(datetime.utcnow().timestamp())
+        })
+    return news_list
+
+# ====== Finnhub ======
 def get_stock_news(symbol):
     today = datetime.utcnow()
     yesterday = today - timedelta(days=1)
 
     url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={yesterday.date()}&to={today.date()}&token={API_KEY}"
-    return safe_request(url)
+    try:
+        return requests.get(url).json()
+    except:
+        return []
 
 def get_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-    return safe_request(url)
+    try:
+        return requests.get(url).json()
+    except:
+        return []
 
 # ====== تحليل ======
 def sentiment(title):
@@ -84,13 +90,22 @@ def sentiment(title):
         return "🟢 إيجابي"
     elif "crash" in t or "loss" in t:
         return "🔴 سلبي"
-    return ""
+    return "⚪ عادي"
 
-def is_important(title):
-    return any(k in title.lower() for k in KEYWORDS)
+# ====== تصنيف 🔥 ======
+def classify(title):
+    t = title.lower()
 
-def is_strong(title):
-    return any(k in title.lower() for k in STRONG_KEYWORDS)
+    if "fed" in t or "inflation" in t:
+        return "🏦 اقتصادي"
+    if "earnings" in t:
+        return "📊 نتائج"
+    if "crash" in t:
+        return "🚨 خطر"
+    if "surge" in t:
+        return "🔥 قوي"
+
+    return "📰 خبر"
 
 # ====== سعر ======
 def get_price(symbol):
@@ -122,16 +137,15 @@ async def main():
     while True:
         try:
             all_news = []
+            titles_seen = set()
 
-            # السوق
             _, spy = get_price("SPY")
             _, qqq = get_price("QQQ")
             market_status = market(spy, qqq)
 
-            # أخبار الأسهم
+            # Finnhub
             for s in WATCHLIST:
                 news = get_stock_news(s)
-
                 for n in news:
                     title = n.get("headline", "").lower()
                     company_name = COMPANY_NAMES.get(s, "").lower()
@@ -140,8 +154,8 @@ async def main():
                         n["symbol"] = s
                         all_news.append(n)
 
-            # أخبار عامة
             all_news.extend(get_general_news())
+            all_news.extend(get_yahoo_news())
 
             # ترتيب
             all_news = sorted(all_news, key=lambda x: x.get("datetime", 0), reverse=True)
@@ -159,32 +173,41 @@ async def main():
                 if not title:
                     continue
 
+                # تحويل Google → مباشر
+                if url and "news.google.com" in url:
+                    try:
+                        r = requests.get(url, allow_redirects=True)
+                        url = r.url
+                    except:
+                        pass
+
+                clean = title.lower()[:60]
+                if clean in titles_seen:
+                    continue
+                titles_seen.add(clean)
+
                 nid = news_id(title)
                 if nid in sent_news:
                     continue
 
-                if not is_important(title):
-                    continue
-
-                if not is_strong(title):
+                if not any(k in title.lower() for k in KEYWORDS):
                     continue
 
                 s = sentiment(title)
+                tag = classify(title)
 
                 price_text = ""
-                change = None
+                sig = ""
 
                 if symbol:
                     price, change = get_price(symbol)
                     if price:
                         price_text = f"💰 {price}$ | {change}%"
 
-                sig = ""
-                if change:
-                    if change > 5:
-                        sig = "🔥 فرصة"
-                    elif change < -5:
-                        sig = "🚨 خطر"
+                        if change > 5:
+                            sig = "🔥 فرصة"
+                        elif change < -5:
+                            sig = "🚨 خطر"
 
                 time = datetime.fromtimestamp(n["datetime"]).strftime('%H:%M')
 
@@ -195,6 +218,8 @@ async def main():
 
                 msg = f"""
 {market_status}
+
+{tag}
 
 {f"📈 {symbol}" if symbol else ""}
 
@@ -229,4 +254,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    # update
