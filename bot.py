@@ -4,7 +4,7 @@ import json
 import hashlib
 import os
 import feedparser
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -14,16 +14,19 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 
 bot = Bot(token=TOKEN)
 
-WATCHLIST = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "SPY", "QQQ"]
+WATCHLIST = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA", "META", "SPY", "QQQ"]
 
-KEYWORDS = [
-    "earnings","revenue","profit","loss","forecast",
-    "surge","crash","drop","merge","acquire",
-    "upgrade","downgrade","inflation","fed",
-    "interest rate","economy"
-]
+TICKER_MAP = {
+    "apple": "AAPL",
+    "microsoft": "MSFT",
+    "nvidia": "NVDA",
+    "amazon": "AMZN",
+    "google": "GOOGL",
+    "tesla": "TSLA",
+    "meta": "META"
+}
 
-# ====== منع تكرار ======
+# ========= منع التكرار =========
 def news_id(title):
     return hashlib.md5(title.lower()[:60].encode()).hexdigest()
 
@@ -40,7 +43,7 @@ def save_news():
 
 sent_news = load_news()
 
-# ====== تنظيف الرابط ======
+# ========= تنظيف الرابط =========
 def clean_url(url):
     if not url:
         return None
@@ -51,34 +54,53 @@ def clean_url(url):
     if "news.google.com" in url:
         try:
             r = requests.get(url, allow_redirects=True, timeout=5)
-            if r.url:
-                return r.url
+            return r.url
         except:
             return None
 
     return url
 
-# ====== المصدر ======
+# ========= استخراج المصدر =========
 def extract_source(title):
     if "-" in title:
         return title.split("-")[-1].strip()
     return "Unknown"
 
-# ====== Yahoo ======
+# ========= استخراج الرمز =========
+def extract_ticker(title):
+    t = title.lower()
+
+    for symbol in WATCHLIST:
+        if symbol.lower() in t:
+            return symbol
+
+    for name, symbol in TICKER_MAP.items():
+        if name in t:
+            return symbol
+
+    return None
+
+# ========= Yahoo =========
 def get_yahoo_news():
-    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL"
+    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL,TSLA,META"
     feed = feedparser.parse(url)
 
     news = []
     for e in feed.entries:
+        try:
+            dt = int(datetime(*e.published_parsed[:6]).timestamp())
+        except:
+            dt = int(datetime.utcnow().timestamp())
+
         news.append({
             "headline": e.title,
             "url": e.link,
-            "datetime": int(datetime.utcnow().timestamp())
+            "datetime": dt
         })
+
     return news
 
-# ====== Finnhub ======
+# ========= Finnhub =========
 def get_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     try:
@@ -86,16 +108,16 @@ def get_general_news():
     except:
         return []
 
-# ====== تحليل ======
+# ========= تحليل =========
 def sentiment(title):
     t = title.lower()
-    if "surge" in t or "profit" in t:
+    if any(w in t for w in ["surge", "soar", "profit", "record"]):
         return "🟢 إيجابي"
-    elif "crash" in t or "loss" in t:
+    elif any(w in t for w in ["crash", "plunge", "loss"]):
         return "🔴 سلبي"
     return "⚪ عادي"
 
-# ====== تصنيف ======
+# ========= تصنيف =========
 def classify(title):
     t = title.lower()
     if "fed" in t or "inflation" in t:
@@ -108,7 +130,30 @@ def classify(title):
         return "🔥 قوي"
     return "📰 خبر"
 
-# ====== سعر ======
+# ========= تقييم ذكي =========
+def score_news(title):
+    t = title.lower()
+    score = 0
+
+    important = ["earnings","profit","loss","inflation","fed","interest rate"]
+    strong = ["surge","crash","plunge","soar","record"]
+
+    for w in important:
+        if w in t:
+            score += 2
+
+    for w in strong:
+        if w in t:
+            score += 3
+
+    return score
+
+# ========= عاجل =========
+def is_breaking(title):
+    t = title.lower()
+    return any(w in t for w in ["breaking","urgent","alert"])
+
+# ========= السعر =========
 def get_price(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
@@ -123,7 +168,7 @@ def get_price(symbol):
         pass
     return None, None
 
-# ====== السوق ======
+# ========= السوق =========
 def market(spy, qqq):
     if spy and qqq:
         if spy > 0 and qqq > 0:
@@ -132,7 +177,7 @@ def market(spy, qqq):
             return "📉 السوق هابط"
     return "⚖️ السوق متذبذب"
 
-# ====== التشغيل ======
+# ========= التشغيل =========
 async def main():
     while True:
         try:
@@ -168,12 +213,17 @@ async def main():
                 if nid in sent_news:
                     continue
 
-                if not any(k in title.lower() for k in KEYWORDS):
+                ticker = extract_ticker(title)
+                score = score_news(title)
+
+                # أول خبرين بدون فلترة
+                if count >= 2 and score < 2:
                     continue
 
                 tag = classify(title)
                 sent = sentiment(title)
                 source = extract_source(title)
+                breaking = "🚨 عاجل\n" if is_breaking(title) else ""
 
                 try:
                     ar = GoogleTranslator(source='auto', target='ar').translate(title)
@@ -183,9 +233,11 @@ async def main():
                 time_str = datetime.fromtimestamp(n["datetime"]).strftime('%H:%M')
 
                 msg = (
+                    f"{breaking}"
                     f"{market_status}\n"
                     f"━━━━━━━━━━━━━━\n"
                     f"{tag} | {sent}\n\n"
+                    f"🏢 {ticker if ticker else 'عام'}\n\n"
                     f"📰 {ar}\n\n"
                     f"🌐 {source} | 🕒 {time_str}\n"
                     f"🔗 {url}"
