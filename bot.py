@@ -21,18 +21,16 @@ CHAT_IDS = [
 sent_news = set()
 sent_movers = set()
 
-# ====== منع تكرار الأخبار ======
+# ====== أدوات ======
 def news_id(title):
     return hashlib.md5(title.lower()[:60].encode()).hexdigest()
 
-# ====== استخراج سهم ======
 def extract_ticker(title):
     for w in title.split():
         if w.isupper() and 2 <= len(w) <= 5:
             return w
     return None
 
-# ====== ترجمة ======
 def smart_translate(title):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(title)
@@ -73,21 +71,17 @@ def smart_analysis(title):
 
     return f"{label} | {conf}", emoji
 
-# ====== تقييم ======
 def news_impact(title):
     t = title.lower()
     score = 0
-
     if "earnings" in t:
         score += 4
     if "inflation" in t:
         score += 3
     if "surge" in t or "crash" in t:
         score += 2
-
     return score
 
-# ====== الفرص ======
 def detect_opportunity(analysis, impact):
     if "🚀" in analysis and impact >= 4:
         return "💥 فرصة قوية"
@@ -102,16 +96,13 @@ def get_price(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
         d = requests.get(url, timeout=5).json()
-
         c = d.get("c")
         pc = d.get("pc")
-
         if c and pc:
             change = ((c - pc) / pc) * 100
             return c, round(change, 2)
     except:
         pass
-
     return None, None
 
 # ====== السوق ======
@@ -135,18 +126,19 @@ def get_news():
     except:
         return []
 
-# ====== Top Movers ======
+# ====== Top Movers (NASDAQ + NYSE فقط 🔥) ======
 def get_top_movers():
     try:
-        url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={API_KEY}"
-        symbols = requests.get(url, timeout=5).json()
+        nasdaq_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NASDAQ&token={API_KEY}"
+        nyse_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NYSE&token={API_KEY}"
+
+        symbols = requests.get(nasdaq_url).json() + requests.get(nyse_url).json()
 
         movers = []
 
-        for s in symbols[:50]:
+        for s in symbols[:80]:
             symbol = s.get("symbol")
 
-            # فلترة رموز غريبة
             if len(symbol) > 5:
                 continue
 
@@ -155,7 +147,7 @@ def get_top_movers():
             if not price:
                 continue
 
-            # ===== فلترة ذكية =====
+            # فلترة ذكية
             if price < 1:
                 if abs(change) < 10:
                     continue
@@ -226,11 +218,10 @@ async def main():
 
                 direction = "📈 صعود قوي" if change > 0 else "📉 هبوط قوي"
                 emoji = "🚀" if change > 0 else "🔻"
-
                 risk = "⚠️ Penny Stock" if price < 1 else ""
 
                 msg = (
-                    f"{emoji} سهم يتحرك بقوة\n\n"
+                    f"{emoji} سهم قوي يتحرك\n\n"
                     f"🏢 {symbol}\n"
                     f"{direction}\n"
                     f"📊 {change}%\n"
@@ -243,7 +234,7 @@ async def main():
 
                 await asyncio.sleep(2)
 
-            # تنظيف التكرار
+            # تنظيف
             if len(sent_movers) > 50:
                 sent_movers.clear()
 
