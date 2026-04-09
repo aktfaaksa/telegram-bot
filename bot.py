@@ -165,15 +165,17 @@ async def main():
                     continue
 
                 ticker = extract_ticker(title)
-
-                if ticker and ticker not in WATCHLIST:
-                    continue
-
                 impact = news_impact(title)
 
-                if impact < 2:
-                    continue
+                # ====== SAFE MODE ======
+                if ticker:
+                    if impact < 2:
+                        continue
+                else:
+                    if impact < 4:
+                        continue
 
+                # ====== تنبيهات ======
                 if impact >= 5:
                     prefix = "🚨 تنبيه قوي\n"
                 elif impact >= 3:
