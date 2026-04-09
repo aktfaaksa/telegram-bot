@@ -3,35 +3,25 @@ import asyncio
 import json
 import hashlib
 import os
-import feedparser
-from datetime import datetime
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
+from openai import OpenAI
 
+# ====== إعدادات ======
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
-
-# 👇 إرسال لشخصين
-CHAT_IDS = [
-    int(os.getenv("CHAT_ID")),  # أنت
-    6315087880                 # الشخص الثاني
-]
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=TOKEN)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-WATCHLIST = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "TSLA", "META", "SPY", "QQQ"]
+CHAT_IDS = [
+    int(os.getenv("CHAT_ID")),
+    6315087880
+]
 
-TICKER_MAP = {
-    "apple": "AAPL",
-    "microsoft": "MSFT",
-    "nvidia": "NVDA",
-    "amazon": "AMZN",
-    "google": "GOOGL",
-    "tesla": "TSLA",
-    "meta": "META"
-}
-
-# ========= منع التكرار =========
+# ====== منع التكرار ======
 def news_id(title):
     return hashlib.md5(title.lower()[:60].encode()).hexdigest()
 
@@ -48,121 +38,83 @@ def save_news():
 
 sent_news = load_news()
 
-# ========= تنظيف الرابط =========
-def clean_url(url):
-    if not url:
+# ====== Ticker AI ======
+KNOWN_TICKERS = ["TSLA","AAPL","NVDA","MSFT","AMZN","GOOGL","META","SPY","QQQ","AMD","INTC"]
+
+NAME_TO_TICKER = {
+    "tesla": "TSLA",
+    "apple": "AAPL",
+    "nvidia": "NVDA",
+    "microsoft": "MSFT",
+    "amazon": "AMZN",
+    "google": "GOOGL",
+    "meta": "META"
+}
+
+def extract_ticker_ai(title):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": f"حدد رمز السهم من هذا الخبر:\n{title}\nأرجع فقط الرمز أو NONE"}]
+        )
+        t = response.choices[0].message.content.strip().upper()
+        return None if t == "NONE" else t
+    except:
         return None
 
-    if "finnhub.io" in url:
-        return None
-
-    if "news.google.com" in url:
-        try:
-            r = requests.get(url, allow_redirects=True, timeout=5)
-            return r.url
-        except:
-            return None
-
-    return url
-
-# ========= استخراج المصدر =========
-def extract_source(title):
-    if "-" in title:
-        return title.split("-")[-1].strip()
-    return "Unknown"
-
-# ========= استخراج الرمز =========
 def extract_ticker(title):
     t = title.lower()
 
-    for symbol in WATCHLIST:
-        if symbol.lower() in t:
-            return symbol
-
-    for name, symbol in TICKER_MAP.items():
+    for name, symbol in NAME_TO_TICKER.items():
         if name in t:
             return symbol
 
-    return None
+    for w in title.upper().split():
+        if w in KNOWN_TICKERS:
+            return w
 
-# ========= Yahoo =========
-def get_yahoo_news():
-    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL,TSLA,META"
-    feed = feedparser.parse(url)
+    return extract_ticker_ai(title)
 
-    news = []
-    for e in feed.entries:
-        try:
-            dt = int(datetime(*e.published_parsed[:6]).timestamp())
-        except:
-            dt = int(datetime.utcnow().timestamp())
-
-        news.append({
-            "headline": e.title,
-            "url": e.link,
-            "datetime": dt
-        })
-
-    return news
-
-# ========= Finnhub =========
-def get_general_news():
-    url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-    try:
-        return requests.get(url).json()
-    except:
-        return []
-
-# ========= تحليل =========
-def sentiment(title):
+# ====== ترجمة ======
+def smart_translate(title):
     t = title.lower()
-    if any(w in t for w in ["surge", "soar", "profit", "record"]):
-        return "🟢 إيجابي"
-    elif any(w in t for w in ["crash", "plunge", "loss"]):
-        return "🔴 سلبي"
-    return "⚪ عادي"
 
-# ========= تصنيف =========
-def classify(title):
-    t = title.lower()
-    if "fed" in t or "inflation" in t:
-        return "🏦 اقتصادي"
-    if "earnings" in t:
-        return "📊 نتائج"
-    if "crash" in t:
-        return "🚨 خطر"
+    if "earnings" in t and "beat" in t:
+        return "أرباح أعلى من التوقعات (إيجابي 📈)"
+    if "miss" in t:
+        return "أرباح أقل من المتوقع (سلبي 📉)"
     if "surge" in t:
-        return "🔥 قوي"
-    return "📰 خبر"
+        return "ارتفاع قوي (إيجابي 📈)"
+    if "crash" in t:
+        return "هبوط حاد (سلبي 📉)"
 
-# ========= تقييم ذكي =========
-def score_news(title):
+    try:
+        return GoogleTranslator(source='auto', target='ar').translate(title)
+    except:
+        return title
+
+# ====== تقييم الخبر ======
+def news_impact(title):
     t = title.lower()
     score = 0
 
-    important = ["earnings","profit","loss","inflation","fed","interest rate"]
-    strong = ["surge","crash","plunge","soar","record"]
-
-    for w in important:
-        if w in t:
-            score += 2
-
-    for w in strong:
-        if w in t:
-            score += 3
+    if any(w in t for w in ["earnings","revenue","forecast"]):
+        score += 4
+    if any(w in t for w in ["fed","inflation","interest rate"]):
+        score += 3
+    if any(w in t for w in ["merge","acquire","lawsuit"]):
+        score += 3
+    if any(w in t for w in ["surge","plunge","crash","soar"]):
+        score += 2
 
     return score
 
-# ========= عاجل =========
-def is_breaking(title):
-    t = title.lower()
-    return any(w in t for w in ["breaking","urgent","alert"])
-
-# ========= السعر =========
+# ====== السعر ======
 def get_price(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
         d = requests.get(url).json()
+
         c = d.get("c")
         pc = d.get("pc")
 
@@ -171,102 +123,171 @@ def get_price(symbol):
             return c, round(change, 2)
     except:
         pass
+
     return None, None
 
-# ========= السوق =========
-def market(spy, qqq):
-    if spy and qqq:
-        if spy > 0 and qqq > 0:
-            return "📈 السوق صاعد"
-        elif spy < 0 and qqq < 0:
-            return "📉 السوق هابط"
-    return "⚖️ السوق متذبذب"
+# ====== حالة السوق ======
+def get_market_status():
+    try:
+        indices = {
+            "S&P 500": "SPY",
+            "Nasdaq": "QQQ",
+            "Dow": "DIA"
+        }
 
-# ========= التشغيل =========
+        results = {}
+
+        for name, symbol in indices.items():
+            price, change = get_price(symbol)
+            results[name] = change if change else 0
+
+        spy = results["S&P 500"]
+        nasdaq = results["Nasdaq"]
+        dow = results["Dow"]
+
+        if spy > 0 and nasdaq > 0 and dow > 0:
+            sentiment = "🔥 السوق قوي"
+        elif nasdaq > 0 and spy <= 0:
+            sentiment = "⚡ مضاربة فقط"
+        elif spy < 0 and dow < 0:
+            sentiment = "📉 السوق ضعيف"
+        else:
+            sentiment = "⚠️ حذر"
+
+        return (
+            f"📊 حالة السوق:\n"
+            f"S&P 500: {spy}%\n"
+            f"Nasdaq: {nasdaq}%\n"
+            f"Dow: {dow}%\n\n"
+            f"{sentiment}"
+        )
+    except:
+        return "❌ ما قدرت أجيب السوق"
+
+# ====== AI ======
+def generate_ai_analysis(symbol, title):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": f"حلل هذا الخبر للسهم {symbol}: {title} بشكل مختصر"}]
+        )
+        return response.choices[0].message.content
+    except:
+        return "تعذر التحليل"
+
+# ====== الأخبار ======
+def get_news():
+    try:
+        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
+        return requests.get(url).json()
+    except:
+        return []
+
+# ====== الأوامر ======
+async def market_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id not in CHAT_IDS:
+        return
+    await update.message.reply_text(get_market_status())
+
+async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id not in CHAT_IDS:
+        return
+    symbol = context.args[0].upper()
+    analysis = generate_ai_analysis(symbol, "تحليل عام")
+    await update.message.reply_text(f"🤖 تحليل {symbol}\n\n{analysis}")
+
+async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id not in CHAT_IDS:
+        return
+    symbol = context.args[0].upper()
+    price, change = get_price(symbol)
+    arrow = "📈" if change > 0 else "📉"
+    await update.message.reply_text(f"{symbol}\n{price}$ {arrow} {change}%")
+
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id not in CHAT_IDS:
+        return
+    symbol = context.args[0].upper()
+    data = requests.get(f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from=2024-01-01&to=2025-12-31&token={API_KEY}").json()
+    msgs = [f"📰 {n['headline']}\n🔗 {n['url']}" for n in data[:3]]
+    await update.message.reply_text("\n\n".join(msgs))
+
+# ====== التشغيل ======
 async def main():
     while True:
         try:
-            all_news = []
-            titles_seen = set()
+            news_list = get_news()
 
-            _, spy = get_price("SPY")
-            _, qqq = get_price("QQQ")
-            market_status = market(spy, qqq)
-
-            all_news.extend(get_general_news())
-            all_news.extend(get_yahoo_news())
-
-            all_news = sorted(all_news, key=lambda x: x.get("datetime", 0), reverse=True)
-
-            count = 0
-
-            for n in all_news:
-                if count >= 5:
-                    break
-
+            for n in news_list:
                 title = n.get("headline")
-                url = clean_url(n.get("url"))
+                url = n.get("url")
 
                 if not title or not url:
                     continue
-
-                if title.lower()[:60] in titles_seen:
-                    continue
-                titles_seen.add(title.lower()[:60])
 
                 nid = news_id(title)
                 if nid in sent_news:
                     continue
 
-                ticker = extract_ticker(title)
-                score = score_news(title)
-
-                # أول خبرين بدون فلترة
-                if count >= 2 and score < 2:
+                impact = news_impact(title)
+                if impact < 3:
                     continue
 
-                tag = classify(title)
-                sent = sentiment(title)
-                source = extract_source(title)
-                breaking = "🚨 عاجل\n" if is_breaking(title) else ""
+                prefix = "🚨 تنبيه قوي\n" if impact >= 5 else "⚠️ تنبيه متوسط\n"
 
-                try:
-                    ar = GoogleTranslator(source='auto', target='ar').translate(title)
-                except:
-                    ar = title
+                ticker = extract_ticker(title)
+                price, change = get_price(ticker) if ticker else (None, None)
+                ar = smart_translate(title)
+                market = get_market_status()
 
-                time_str = datetime.fromtimestamp(n["datetime"]).strftime('%H:%M')
+                price_text = ""
+                if price:
+                    arrow = "📈" if change > 0 else "📉"
+                    price_text = f"📊 {price}$ {arrow} {change}%\n\n"
 
                 msg = (
-                    f"{breaking}"
-                    f"{market_status}\n"
-                    f"━━━━━━━━━━━━━━\n"
-                    f"{tag} | {sent}\n\n"
+                    f"{prefix}"
+                    f"{market}\n\n"
                     f"🏢 {ticker if ticker else 'عام'}\n\n"
-                    f"📰 {ar}\n\n"
-                    f"🌐 {source} | 🕒 {time_str}\n"
+                    f"{price_text}"
+                    f"📰 {title}\n"
+                    f"🇸🇦 {ar}\n\n"
                     f"🔗 {url}"
                 )
 
-                # 👇 إرسال للجميع
                 for chat_id in CHAT_IDS:
-                    try:
-                        await bot.send_message(chat_id=chat_id, text=msg)
-                    except Exception as e:
-                        print(f"فشل الإرسال لـ {chat_id}:", e)
+                    await bot.send_message(chat_id=chat_id, text=msg)
+
+                if ticker:
+                    analysis = generate_ai_analysis(ticker, title)
+                    for chat_id in CHAT_IDS:
+                        await bot.send_message(chat_id=chat_id, text=f"🤖 تحليل {ticker}\n\n{analysis}")
 
                 sent_news.add(nid)
                 save_news()
 
-                count += 1
                 await asyncio.sleep(2)
 
-            print("يتم التحديث...")
-            await asyncio.sleep(60)
+            await asyncio.sleep(15)
 
         except Exception as e:
-            print("خطأ:", e)
-            await asyncio.sleep(30)
+            print(e)
+            await asyncio.sleep(10)
+
+async def run_all():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("السوق", market_command))
+    app.add_handler(CommandHandler("تحليل", analyze_command))
+    app.add_handler(CommandHandler("سعر", price_command))
+    app.add_handler(CommandHandler("اخبار", news_command))
+
+    await app.initialize()
+    await app.start()
+
+    asyncio.create_task(main())
+
+    await app.updater.start_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_all())
