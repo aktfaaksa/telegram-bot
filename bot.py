@@ -1,23 +1,32 @@
 import requests
-import time
+import asyncio
 import json
 import hashlib
 import os
-import asyncio
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import feedparser
+from datetime import datetime
+from telegram import Bot
 from deep_translator import GoogleTranslator
-import threading
 
 # ====== إعدادات ======
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 
-# 👇 شخصين
+bot = Bot(token=TOKEN)
+
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
     6315087880
 ]
+
+# ====== الأسهم ======
+WATCHLIST = ["TSLA", "NVDA", "AAPL"]
+
+TICKER_MAP = {
+    "tesla": "TSLA",
+    "nvidia": "NVDA",
+    "apple": "AAPL"
+}
 
 # ====== منع التكرار ======
 def news_id(title):
@@ -36,12 +45,70 @@ def save_news():
 
 sent_news = load_news()
 
-# ====== ترجمة ======
-def smart_translate(text):
+# ====== استخراج السهم ======
+def extract_ticker(title):
+    t = title.lower()
+
+    for symbol in WATCHLIST:
+        if symbol.lower() in t:
+            return symbol
+
+    for name, symbol in TICKER_MAP.items():
+        if name in t:
+            return symbol
+
+    return None
+
+# ====== ترجمة ذكية ======
+def smart_translate(title):
+    t = title.lower()
+
+    if "earnings" in t and "beat" in t:
+        return "أرباح أعلى من التوقعات (إيجابي 📈)"
+    if "miss" in t:
+        return "أرباح أقل من المتوقع (سلبي 📉)"
+    if "surge" in t or "soar" in t:
+        return "ارتفاع قوي (إيجابي 📈)"
+    if "crash" in t or "plunge" in t:
+        return "هبوط حاد (سلبي 📉)"
+    if "fed" in t:
+        return "خبر عن الفيدرالي (تأثير على السوق)"
+
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(text)
+        return GoogleTranslator(source='auto', target='ar').translate(title)
     except:
-        return text
+        return title
+
+# ====== تحليل بسيط ======
+def simple_analysis(title):
+    t = title.lower()
+
+    if "earnings" in t and "beat" in t:
+        return "📈 إشارة إيجابية قوية"
+    if "miss" in t:
+        return "📉 إشارة سلبية"
+    if "surge" in t or "soar" in t:
+        return "🚀 زخم صعود"
+    if "crash" in t or "plunge" in t:
+        return "⚠️ ضغط هبوطي"
+    
+    return "⚖️ تأثير غير واضح"
+
+# ====== تقييم الخبر ======
+def news_impact(title):
+    t = title.lower()
+    score = 0
+
+    if any(w in t for w in ["earnings", "revenue", "forecast"]):
+        score += 4
+    if any(w in t for w in ["fed", "inflation", "interest rate"]):
+        score += 3
+    if any(w in t for w in ["acquire", "merge", "lawsuit"]):
+        score += 3
+    if any(w in t for w in ["surge", "plunge", "crash", "soar"]):
+        score += 2
+
+    return score
 
 # ====== السعر ======
 def get_price(symbol):
@@ -58,121 +125,74 @@ def get_price(symbol):
         pass
     return None, None
 
-# ====== السوق ======
-def get_market_status():
-    try:
-        indices = {"S&P 500": "SPY", "Nasdaq": "QQQ", "Dow": "DIA"}
-        results = {}
-
-        for name, symbol in indices.items():
-            _, change = get_price(symbol)
-            results[name] = change if change else 0
-
-        spy = results["S&P 500"]
-        nasdaq = results["Nasdaq"]
-        dow = results["Dow"]
-
-        if spy > 0 and nasdaq > 0:
-            sentiment = "🔥 السوق صاعد"
-        elif spy < 0 and dow < 0:
-            sentiment = "📉 السوق هابط"
-        else:
-            sentiment = "⚠️ السوق متذبذب"
-
-        return f"""
-📊 حالة السوق:
-
-S&P 500: {spy}%
-Nasdaq: {nasdaq}%
-Dow: {dow}%
-
-{sentiment}
-"""
-    except:
-        return "❌ خطأ في السوق"
-
-# ====== أوامر ======
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 أهلاً بك في بوت الأسهم\n\n"
-        "الأوامر:\n"
-        "/سعر TSLA\n"
-        "/السوق"
-    )
-
-async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗ اكتب: /سعر TSLA")
-        return
-
-    symbol = context.args[0].upper()
-    p, c = get_price(symbol)
-
-    if p:
-        arrow = "📈" if c > 0 else "📉"
-        await update.message.reply_text(f"{symbol}: {p}$ {arrow} {c}%")
-    else:
-        await update.message.reply_text("❌ خطأ في السعر")
-
-async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_market_status())
-
 # ====== الأخبار ======
-def send_news(app):
-    global sent_news
+def get_news():
+    url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
+    try:
+        return requests.get(url).json()
+    except:
+        return []
 
+# ====== التشغيل ======
+async def main():
     while True:
         try:
-            url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-            news = requests.get(url).json()
+            news_list = get_news()
 
-            for n in news[:5]:
+            for n in news_list:
                 title = n.get("headline")
-                link = n.get("url")
+                url = n.get("url")
 
-                if not title or not link:
+                if not title or not url:
                     continue
 
                 nid = news_id(title)
                 if nid in sent_news:
                     continue
 
-                msg = f"""
-🚨 خبر جديد
+                ticker = extract_ticker(title)
 
-📰 {title}
-🇸🇦 {smart_translate(title)}
+                if ticker and ticker not in WATCHLIST:
+                    continue
 
-🔗 {link}
-"""
+                impact = news_impact(title)
+
+                if impact < 2:
+                    continue
+
+                if impact >= 5:
+                    prefix = "🚨 تنبيه قوي\n"
+                elif impact >= 3:
+                    prefix = "⚠️ تنبيه متوسط\n"
+                else:
+                    prefix = ""
+
+                ar = smart_translate(title)
+                analysis = simple_analysis(title)
+
+                alert_msg = (
+                    f"{prefix}"
+                    f"🏢 {ticker if ticker else 'عام'}\n\n"
+                    f"📰 {title}\n"
+                    f"🇸🇦 {ar}\n\n"
+                    f"📊 {analysis}\n\n"
+                    f"🔗 {url}"
+                )
 
                 for chat_id in CHAT_IDS:
-                    asyncio.run(app.bot.send_message(chat_id=chat_id, text=msg))
+                    await bot.send_message(chat_id=chat_id, text=alert_msg)
 
                 sent_news.add(nid)
                 save_news()
 
-                time.sleep(2)
+                await asyncio.sleep(2)
 
-            time.sleep(60)
+            print("يتم التحديث...")
+            await asyncio.sleep(15)
 
         except Exception as e:
-            print(e)
-            time.sleep(10)
-
-# ====== تشغيل ======
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("سعر", price))
-    app.add_handler(CommandHandler("السوق", market))
-
-    print("Bot started...")
-
-    threading.Thread(target=send_news, args=(app,), daemon=True).start()
-
-    app.run_polling()
+            print("خطأ:", e)
+            await asyncio.sleep(10)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
