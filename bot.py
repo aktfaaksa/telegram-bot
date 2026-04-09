@@ -3,17 +3,19 @@ import asyncio
 import json
 import hashlib
 import os
+import google.generativeai as genai
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
-from openai import OpenAI
 
 # ====== إعدادات ======
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-pro")
 
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
@@ -144,16 +146,14 @@ def get_market_status():
     except:
         return "❌ خطأ في السوق"
 
-# ====== AI ======
+# ====== AI (Gemini) ======
 def generate_ai_analysis(symbol, title):
     try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": f"حلل الخبر {title} للسهم {symbol} بشكل مختصر"}]
-        )
-        return response.choices[0].message.content
+        prompt = f"حلل الخبر التالي وتأثيره على سهم {symbol}:\n{title}\nواذكر التوصية (شراء / بيع / حياد)"
+        response = model.generate_content(prompt)
+        return response.text
     except:
-        return "تعذر التحليل"
+        return "⚠️ تعذر التحليل"
 
 # ====== الأخبار ======
 def get_news():
@@ -238,6 +238,8 @@ async def news_loop(app):
                 ar = smart_translate(title)
                 market = get_market_status()
 
+                ai = generate_ai_analysis(ticker if ticker else "السوق", title)
+
                 msg = f"""
 🚨 تنبيه
 
@@ -248,6 +250,9 @@ async def news_loop(app):
 
 📰 {title}
 🇸🇦 {ar}
+
+🤖 التحليل:
+{ai}
 
 🔗 {url}
 """
