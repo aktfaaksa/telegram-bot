@@ -1,5 +1,5 @@
 import requests
-import asyncio
+import time
 import json
 import hashlib
 import os
@@ -14,7 +14,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 👇 تم التعديل هنا (إضافة شخص ثاني)
+# 👇 الشخصين هنا
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
     6315087880
@@ -41,11 +41,11 @@ def save_news():
 sent_news = load_news()
 
 # ====== ترجمة ======
-def smart_translate(title):
+def smart_translate(text):
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(title)
+        return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
-        return title
+        return text
 
 # ====== السعر ======
 def get_price(symbol):
@@ -81,7 +81,7 @@ def get_market_status():
         elif spy < 0 and dow < 0:
             sentiment = "📉 السوق هابط"
         else:
-            sentiment = "⚠️ حذر"
+            sentiment = "⚠️ السوق متذبذب"
 
         return f"""
 📊 حالة السوق:
@@ -93,12 +93,12 @@ Dow: {dow}%
 {sentiment}
 """
     except:
-        return "❌ خطأ في السوق"
+        return "❌ خطأ في جلب السوق"
 
 # ====== AI ======
 def analyze_stock(symbol):
     try:
-        prompt = f"حلل سهم {symbol} بشكل مختصر واذكر التوصية (شراء أو بيع أو حياد)"
+        prompt = f"حلل سهم {symbol} بشكل مختصر واذكر هل هو مناسب للشراء أو البيع"
         response = model.generate_content(prompt)
         return response.text
     except:
@@ -106,7 +106,7 @@ def analyze_stock(symbol):
 
 # ====== أوامر ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بك\nاستخدم /تحليل TSLA")
+    await update.message.reply_text("👋 أهلاً بك في بوت الأسهم\n\nالأوامر:\n/تحليل TSLA\n/سعر TSLA\n/السوق")
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -135,13 +135,15 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arrow = "📈" if c > 0 else "📉"
         await update.message.reply_text(f"{symbol}: {p}$ {arrow} {c}%")
     else:
-        await update.message.reply_text("❌ خطأ")
+        await update.message.reply_text("❌ خطأ في جلب السعر")
 
 async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(get_market_status())
 
-# ====== أخبار تلقائية ======
-async def news_loop(app):
+# ====== الأخبار ======
+def send_news(app):
+    global sent_news
+
     while True:
         try:
             url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
@@ -159,7 +161,7 @@ async def news_loop(app):
                     continue
 
                 msg = f"""
-🚨 خبر
+🚨 خبر جديد
 
 📰 {title}
 🇸🇦 {smart_translate(title)}
@@ -167,37 +169,22 @@ async def news_loop(app):
 🔗 {link}
 """
 
-                # 👇 تم التعديل هنا (إرسال للجميع)
+                # إرسال للجميع
                 for chat_id in CHAT_IDS:
-                    await app.bot.send_message(chat_id=chat_id, text=msg)
+                    app.bot.send_message(chat_id=chat_id, text=msg)
 
                 sent_news.add(nid)
                 save_news()
 
-                await asyncio.sleep(2)
+                time.sleep(2)
 
-            await asyncio.sleep(60)
+            time.sleep(60)
 
         except Exception as e:
             print(e)
-            await asyncio.sleep(10)
+            time.sleep(10)
 
 # ====== تشغيل ======
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("تحليل", analyze))
-    app.add_handler(CommandHandler("سعر", price))
-    app.add_handler(CommandHandler("السوق", market))
-
-    await app.initialize()
-    await app.start()
-
-    asyncio.create_task(news_loop(app))
-
-    await app.run_polling()
-
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -207,6 +194,10 @@ def main():
     app.add_handler(CommandHandler("السوق", market))
 
     print("Bot started...")
+
+    # تشغيل الأخبار بالخلفية
+    import threading
+    threading.Thread(target=send_news, args=(app,), daemon=True).start()
 
     app.run_polling()
 
