@@ -4,7 +4,7 @@ import json
 import hashlib
 import os
 import asyncio
-import google.generativeai as genai
+from google import genai
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -16,14 +16,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 👇 الشخصين
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),  # أنت
     6315087880                  # الشخص الثاني
 ]
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+# Gemini الجديد
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ====== منع التكرار ======
 def news_id(title):
@@ -68,6 +67,7 @@ def get_market_status():
     try:
         indices = {"S&P 500": "SPY", "Nasdaq": "QQQ", "Dow": "DIA"}
         results = {}
+
         for name, symbol in indices.items():
             _, change = get_price(symbol)
             results[name] = change if change else 0
@@ -99,9 +99,15 @@ Dow: {dow}%
 def analyze_stock(symbol):
     try:
         prompt = f"حلل سهم {symbol} بشكل مختصر واذكر هل هو مناسب للشراء أو البيع"
-        response = model.generate_content(prompt)
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
+
         return response.text
-    except:
+    except Exception as e:
+        print(e)
         return "⚠️ فشل التحليل"
 
 # ====== أوامر ======
@@ -132,6 +138,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = context.args[0].upper()
     p, c = get_price(symbol)
+
     if p:
         arrow = "📈" if c > 0 else "📉"
         await update.message.reply_text(f"{symbol}: {p}$ {arrow} {c}%")
@@ -144,6 +151,7 @@ async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====== الأخبار ======
 def send_news(app):
     global sent_news
+
     while True:
         try:
             url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
@@ -152,6 +160,7 @@ def send_news(app):
             for n in news[:5]:
                 title = n.get("headline")
                 link = n.get("url")
+
                 if not title or not link:
                     continue
 
@@ -168,20 +177,21 @@ def send_news(app):
 🔗 {link}
 """
 
-                # إرسال لجميع الأشخاص
                 for chat_id in CHAT_IDS:
                     asyncio.run(app.bot.send_message(chat_id=chat_id, text=msg))
 
                 sent_news.add(nid)
                 save_news()
+
                 time.sleep(2)
 
             time.sleep(60)
+
         except Exception as e:
             print(e)
             time.sleep(10)
 
-# ====== تشغيل البوت ======
+# ====== تشغيل ======
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -192,11 +202,9 @@ def main():
 
     print("Bot started...")
 
-    # تشغيل الأخبار في الخلفية
     threading.Thread(target=send_news, args=(app,), daemon=True).start()
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
