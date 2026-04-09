@@ -49,7 +49,7 @@ def smart_translate(title):
     except:
         return title
 
-# ====== تحليل ذكي ======
+# ====== تحليل ذكي متقدم ======
 def smart_analysis(title):
     t = title.lower()
     score = 0
@@ -69,6 +69,11 @@ def smart_analysis(title):
         "despite": -1, "however": -1, "but": -1
     }
 
+    # ===== كلمات اقتصادية =====
+    macro_negative = ["inflation", "risk", "crisis", "war", "rate hike"]
+    macro_positive = ["growth", "stability", "holds", "cooling inflation"]
+
+    # ===== حساب =====
     for word, val in positive.items():
         if word in t:
             score += val
@@ -82,6 +87,16 @@ def smart_analysis(title):
     for word, val in complex_words.items():
         if word in t:
             score += val
+
+    # ===== تحليل اقتصادي =====
+    for w in macro_negative:
+        if w in t:
+            score -= 2
+            confidence += 1
+
+    for w in macro_positive:
+        if w in t:
+            score += 1
 
     # ===== النتيجة =====
     if score >= 4:
@@ -143,7 +158,7 @@ def get_price(symbol):
 
     return None, None
 
-# ====== حالة السوق ======
+# ====== السوق ======
 def market_status():
     _, spy = get_price("SPY")
     _, qqq = get_price("QQQ")
