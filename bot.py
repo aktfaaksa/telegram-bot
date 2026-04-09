@@ -3,8 +3,6 @@ import asyncio
 import json
 import hashlib
 import os
-import feedparser
-from datetime import datetime
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -91,7 +89,7 @@ def simple_analysis(title):
         return "🚀 زخم صعود"
     if "crash" in t or "plunge" in t:
         return "⚠️ ضغط هبوطي"
-    
+
     return "⚖️ تأثير غير واضح"
 
 # ====== تقييم الخبر ======
@@ -114,7 +112,8 @@ def news_impact(title):
 def get_price(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-        d = requests.get(url).json()
+        d = requests.get(url, timeout=5).json()
+
         c = d.get("c")
         pc = d.get("pc")
 
@@ -123,13 +122,27 @@ def get_price(symbol):
             return c, round(change, 2)
     except:
         pass
+
     return None, None
+
+# ====== حالة السوق ======
+def market_status():
+    _, spy_change = get_price("SPY")
+    _, qqq_change = get_price("QQQ")
+
+    if spy_change is not None and qqq_change is not None:
+        if spy_change > 0 and qqq_change > 0:
+            return "📈 السوق صاعد"
+        elif spy_change < 0 and qqq_change < 0:
+            return "📉 السوق هابط"
+
+    return "⚖️ السوق متذبذب"
 
 # ====== الأخبار ======
 def get_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     try:
-        return requests.get(url).json()
+        return requests.get(url, timeout=5).json()
     except:
         return []
 
@@ -138,6 +151,7 @@ async def main():
     while True:
         try:
             news_list = get_news()
+            market = market_status()
 
             for n in news_list:
                 title = n.get("headline")
@@ -170,8 +184,10 @@ async def main():
                 ar = smart_translate(title)
                 analysis = simple_analysis(title)
 
-                alert_msg = (
+                msg = (
                     f"{prefix}"
+                    f"{market}\n"
+                    f"━━━━━━━━━━━━━━\n"
                     f"🏢 {ticker if ticker else 'عام'}\n\n"
                     f"📰 {title}\n"
                     f"🇸🇦 {ar}\n\n"
@@ -180,7 +196,10 @@ async def main():
                 )
 
                 for chat_id in CHAT_IDS:
-                    await bot.send_message(chat_id=chat_id, text=alert_msg)
+                    try:
+                        await bot.send_message(chat_id=chat_id, text=msg)
+                    except Exception as e:
+                        print(f"فشل الإرسال: {e}")
 
                 sent_news.add(nid)
                 save_news()
@@ -191,8 +210,9 @@ async def main():
             await asyncio.sleep(15)
 
         except Exception as e:
-            print("خطأ:", e)
+            print("خطأ عام:", e)
             await asyncio.sleep(10)
 
+# ====== تشغيل ======
 if __name__ == "__main__":
     asyncio.run(main())
