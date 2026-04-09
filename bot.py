@@ -198,5 +198,17 @@ async def main():
 
     await app.run_polling()
 
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("تحليل", analyze))
+    app.add_handler(CommandHandler("سعر", price))
+    app.add_handler(CommandHandler("السوق", market))
+
+    print("Bot started...")
+
+    app.run_polling()
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
