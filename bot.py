@@ -17,27 +17,17 @@ CHAT_IDS = [
     6315087880
 ]
 
-# ====== منع التكرار ======
+# ====== تخزين ======
+sent_news = set()
+sent_movers = set()
+
+# ====== منع تكرار الأخبار ======
 def news_id(title):
     return hashlib.md5(title.lower()[:60].encode()).hexdigest()
 
-def load_news():
-    try:
-        with open("sent.json", "r") as f:
-            return set(json.load(f))
-    except:
-        return set()
-
-def save_news():
-    with open("sent.json", "w") as f:
-        json.dump(list(sent_news), f)
-
-sent_news = load_news()
-
-# ====== استخراج السهم ======
+# ====== استخراج سهم ======
 def extract_ticker(title):
-    words = title.split()
-    for w in words:
+    for w in title.split():
         if w.isupper() and 2 <= len(w) <= 5:
             return w
     return None
@@ -49,23 +39,23 @@ def smart_translate(title):
     except:
         return title
 
-# ====== تحليل ذكي ======
+# ====== تحليل ======
 def smart_analysis(title):
     t = title.lower()
     score = 0
     confidence = 0
 
-    positive = {"surge":3,"soar":3,"beat":4,"growth":2,"record":3}
-    negative = {"miss":-4,"lower":-3,"drop":-2,"crash":-5,"plunge":-4}
+    positive = {"surge":3,"soar":3,"beat":4,"growth":2}
+    negative = {"miss":-4,"lower":-3,"drop":-2,"crash":-5}
 
-    for word,val in positive.items():
-        if word in t:
-            score += val
+    for w,v in positive.items():
+        if w in t:
+            score += v
             confidence += 1
 
-    for word,val in negative.items():
-        if word in t:
-            score += val
+    for w,v in negative.items():
+        if w in t:
+            score += v
             confidence += 1
 
     if score >= 4:
@@ -79,23 +69,20 @@ def smart_analysis(title):
     else:
         label,emoji = "⚖️ متضارب","⚪"
 
-    if confidence >= 2:
-        conf = "🔵 ثقة عالية"
-    else:
-        conf = "⚪ ثقة ضعيفة"
+    conf = "🔵 ثقة عالية" if confidence >= 2 else "⚪ ثقة ضعيفة"
 
     return f"{label} | {conf}", emoji
 
-# ====== تقييم الخبر ======
+# ====== تقييم ======
 def news_impact(title):
     t = title.lower()
     score = 0
 
-    if any(w in t for w in ["earnings","revenue","forecast"]):
+    if "earnings" in t:
         score += 4
-    if any(w in t for w in ["fed","inflation"]):
+    if "inflation" in t:
         score += 3
-    if any(w in t for w in ["surge","plunge","crash"]):
+    if "surge" in t or "crash" in t:
         score += 2
 
     return score
@@ -142,8 +129,8 @@ def market_status():
 
 # ====== الأخبار ======
 def get_news():
-    url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     try:
+        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
         return requests.get(url, timeout=5).json()
     except:
         return []
@@ -156,15 +143,30 @@ def get_top_movers():
 
         movers = []
 
-        for s in symbols[:20]:
+        for s in symbols[:50]:
             symbol = s.get("symbol")
+
+            # فلترة رموز غريبة
+            if len(symbol) > 5:
+                continue
+
             price, change = get_price(symbol)
 
-            if price and change:
-                if abs(change) >= 5:
-                    movers.append((symbol, change))
+            if not price:
+                continue
+
+            # ===== فلترة ذكية =====
+            if price < 1:
+                if abs(change) < 10:
+                    continue
+            else:
+                if abs(change) < 5:
+                    continue
+
+            movers.append((symbol, price, change))
 
         return movers[:3]
+
     except:
         return []
 
@@ -173,10 +175,9 @@ async def main():
     while True:
         try:
             market = market_status()
-            news_list = get_news()
 
             # ===== الأخبار =====
-            for n in news_list:
+            for n in get_news():
                 title = n.get("headline")
                 url = n.get("url")
 
@@ -212,23 +213,28 @@ async def main():
                     await bot.send_message(chat_id=chat_id, text=msg)
 
                 sent_news.add(nid)
-                save_news()
-
                 await asyncio.sleep(2)
 
             # ===== Top Movers =====
-            movers = get_top_movers()
+            for symbol, price, change in get_top_movers():
 
-            for symbol, change in movers:
+                mid = f"{symbol}_{round(change)}"
+                if mid in sent_movers:
+                    continue
+
+                sent_movers.add(mid)
 
                 direction = "📈 صعود قوي" if change > 0 else "📉 هبوط قوي"
                 emoji = "🚀" if change > 0 else "🔻"
+
+                risk = "⚠️ Penny Stock" if price < 1 else ""
 
                 msg = (
                     f"{emoji} سهم يتحرك بقوة\n\n"
                     f"🏢 {symbol}\n"
                     f"{direction}\n"
-                    f"📊 {change}%\n\n"
+                    f"📊 {change}%\n"
+                    f"{risk}\n\n"
                     f"💰 فرصة محتملة"
                 )
 
@@ -236,6 +242,10 @@ async def main():
                     await bot.send_message(chat_id=chat_id, text=msg)
 
                 await asyncio.sleep(2)
+
+            # تنظيف التكرار
+            if len(sent_movers) > 50:
+                sent_movers.clear()
 
             print("يتم التحديث...")
             await asyncio.sleep(20)
