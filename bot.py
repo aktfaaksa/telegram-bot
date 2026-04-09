@@ -4,8 +4,6 @@ import json
 import hashlib
 import os
 import asyncio
-from google import genai
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
@@ -14,15 +12,12 @@ import threading
 # ====== إعدادات ======
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# 👇 شخصين
 CHAT_IDS = [
-    int(os.getenv("CHAT_ID")),  # أنت
-    6315087880                  # الشخص الثاني
+    int(os.getenv("CHAT_ID")),
+    6315087880
 ]
-
-# Gemini الجديد
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ====== منع التكرار ======
 def news_id(title):
@@ -55,6 +50,7 @@ def get_price(symbol):
         d = requests.get(url).json()
         c = d.get("c")
         pc = d.get("pc")
+
         if c and pc:
             change = ((c - pc) / pc) * 100
             return c, round(change, 2)
@@ -93,43 +89,16 @@ Dow: {dow}%
 {sentiment}
 """
     except:
-        return "❌ خطأ في جلب السوق"
-
-# ====== AI ======
-def analyze_stock(symbol):
-    try:
-        prompt = f"حلل سهم {symbol} بشكل مختصر واذكر هل هو مناسب للشراء أو البيع"
-
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt
-        )
-
-        return response.text
-    except Exception as e:
-        print(e)
-        return "⚠️ فشل التحليل"
+        return "❌ خطأ في السوق"
 
 # ====== أوامر ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 أهلاً بك في بوت الأسهم\n\nالأوامر:\n/تحليل TSLA\n/سعر TSLA\n/السوق"
+        "👋 أهلاً بك في بوت الأسهم\n\n"
+        "الأوامر:\n"
+        "/سعر TSLA\n"
+        "/السوق"
     )
-
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗ اكتب: /تحليل TSLA")
-        return
-
-    symbol = context.args[0].upper()
-    result = analyze_stock(symbol)
-
-    await update.message.reply_text(f"""
-📊 سهم: {symbol}
-
-🤖 التحليل:
-{result}
-""")
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -143,7 +112,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arrow = "📈" if c > 0 else "📉"
         await update.message.reply_text(f"{symbol}: {p}$ {arrow} {c}%")
     else:
-        await update.message.reply_text("❌ خطأ في جلب السعر")
+        await update.message.reply_text("❌ خطأ في السعر")
 
 async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(get_market_status())
@@ -196,7 +165,6 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("تحليل", analyze))
     app.add_handler(CommandHandler("سعر", price))
     app.add_handler(CommandHandler("السوق", market))
 
