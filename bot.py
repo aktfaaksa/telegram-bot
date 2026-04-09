@@ -3,7 +3,7 @@ import asyncio
 import json
 import hashlib
 import os
-from telegram import Bot, Update
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
 from openai import OpenAI
@@ -13,7 +13,6 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-bot = Bot(token=TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 CHAT_IDS = [
@@ -38,8 +37,8 @@ def save_news():
 
 sent_news = load_news()
 
-# ====== Ticker AI ======
-KNOWN_TICKERS = ["TSLA","AAPL","NVDA","MSFT","AMZN","GOOGL","META","SPY","QQQ","AMD","INTC"]
+# ====== Ticker ======
+KNOWN_TICKERS = ["TSLA","AAPL","NVDA","MSFT","AMZN","GOOGL","META"]
 
 NAME_TO_TICKER = {
     "tesla": "TSLA",
@@ -50,17 +49,6 @@ NAME_TO_TICKER = {
     "google": "GOOGL",
     "meta": "META"
 }
-
-def extract_ticker_ai(title):
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": f"حدد رمز السهم من هذا الخبر:\n{title}\nأرجع فقط الرمز أو NONE"}]
-        )
-        t = response.choices[0].message.content.strip().upper()
-        return None if t == "NONE" else t
-    except:
-        return None
 
 def extract_ticker(title):
     t = title.lower()
@@ -73,7 +61,7 @@ def extract_ticker(title):
         if w in KNOWN_TICKERS:
             return w
 
-    return extract_ticker_ai(title)
+    return None
 
 # ====== ترجمة ======
 def smart_translate(title):
@@ -83,28 +71,22 @@ def smart_translate(title):
         return "أرباح أعلى من التوقعات (إيجابي 📈)"
     if "miss" in t:
         return "أرباح أقل من المتوقع (سلبي 📉)"
-    if "surge" in t:
-        return "ارتفاع قوي (إيجابي 📈)"
-    if "crash" in t:
-        return "هبوط حاد (سلبي 📉)"
 
     try:
         return GoogleTranslator(source='auto', target='ar').translate(title)
     except:
         return title
 
-# ====== تقييم الخبر ======
+# ====== تقييم ======
 def news_impact(title):
     t = title.lower()
     score = 0
 
-    if any(w in t for w in ["earnings","revenue","forecast"]):
+    if "earnings" in t:
         score += 4
-    if any(w in t for w in ["fed","inflation","interest rate"]):
+    if "fed" in t:
         score += 3
-    if any(w in t for w in ["merge","acquire","lawsuit"]):
-        score += 3
-    if any(w in t for w in ["surge","plunge","crash","soar"]):
+    if "surge" in t or "crash" in t:
         score += 2
 
     return score
@@ -126,7 +108,7 @@ def get_price(symbol):
 
     return None, None
 
-# ====== حالة السوق ======
+# ====== السوق ======
 def get_market_status():
     try:
         indices = {
@@ -138,7 +120,7 @@ def get_market_status():
         results = {}
 
         for name, symbol in indices.items():
-            price, change = get_price(symbol)
+            _, change = get_price(symbol)
             results[name] = change if change else 0
 
         spy = results["S&P 500"]
@@ -147,8 +129,6 @@ def get_market_status():
 
         if spy > 0 and nasdaq > 0 and dow > 0:
             sentiment = "🔥 السوق قوي"
-        elif nasdaq > 0 and spy <= 0:
-            sentiment = "⚡ مضاربة فقط"
         elif spy < 0 and dow < 0:
             sentiment = "📉 السوق ضعيف"
         else:
@@ -162,14 +142,14 @@ def get_market_status():
             f"{sentiment}"
         )
     except:
-        return "❌ ما قدرت أجيب السوق"
+        return "❌ خطأ في السوق"
 
 # ====== AI ======
 def generate_ai_analysis(symbol, title):
     try:
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": f"حلل هذا الخبر للسهم {symbol}: {title} بشكل مختصر"}]
+            messages=[{"role": "user", "content": f"حلل الخبر {title} للسهم {symbol} بشكل مختصر"}]
         )
         return response.choices[0].message.content
     except:
@@ -189,31 +169,51 @@ async def market_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(get_market_status())
 
-async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id not in CHAT_IDS:
-        return
-    symbol = context.args[0].upper()
-    analysis = generate_ai_analysis(symbol, "تحليل عام")
-    await update.message.reply_text(f"🤖 تحليل {symbol}\n\n{analysis}")
-
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id not in CHAT_IDS:
         return
-    symbol = context.args[0].upper()
+    try:
+        symbol = context.args[0].upper()
+    except:
+        await update.message.reply_text("❌ اكتب: /سعر TSLA")
+        return
+
     price, change = get_price(symbol)
-    arrow = "📈" if change > 0 else "📉"
+    arrow = "📈" if change and change > 0 else "📉"
     await update.message.reply_text(f"{symbol}\n{price}$ {arrow} {change}%")
+
+async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id not in CHAT_IDS:
+        return
+    try:
+        symbol = context.args[0].upper()
+    except:
+        await update.message.reply_text("❌ اكتب: /تحليل TSLA")
+        return
+
+    analysis = generate_ai_analysis(symbol, "تحليل عام")
+    await update.message.reply_text(f"🤖 تحليل {symbol}\n\n{analysis}")
 
 async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id not in CHAT_IDS:
         return
-    symbol = context.args[0].upper()
-    data = requests.get(f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from=2024-01-01&to=2025-12-31&token={API_KEY}").json()
-    msgs = [f"📰 {n['headline']}\n🔗 {n['url']}" for n in data[:3]]
+    try:
+        symbol = context.args[0].upper()
+    except:
+        await update.message.reply_text("❌ اكتب: /اخبار TSLA")
+        return
+
+    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from=2024-01-01&to=2025-12-31&token={API_KEY}"
+    data = requests.get(url).json()
+
+    msgs = []
+    for n in data[:3]:
+        msgs.append(f"📰 {n['headline']}\n🔗 {n['url']}")
+
     await update.message.reply_text("\n\n".join(msgs))
 
-# ====== التشغيل ======
-async def main():
+# ====== الأخبار التلقائية ======
+async def news_loop(app):
     while True:
         try:
             news_list = get_news()
@@ -233,35 +233,27 @@ async def main():
                 if impact < 3:
                     continue
 
-                prefix = "🚨 تنبيه قوي\n" if impact >= 5 else "⚠️ تنبيه متوسط\n"
-
                 ticker = extract_ticker(title)
                 price, change = get_price(ticker) if ticker else (None, None)
                 ar = smart_translate(title)
                 market = get_market_status()
 
-                price_text = ""
-                if price:
-                    arrow = "📈" if change > 0 else "📉"
-                    price_text = f"📊 {price}$ {arrow} {change}%\n\n"
+                msg = f"""
+🚨 تنبيه
 
-                msg = (
-                    f"{prefix}"
-                    f"{market}\n\n"
-                    f"🏢 {ticker if ticker else 'عام'}\n\n"
-                    f"{price_text}"
-                    f"📰 {title}\n"
-                    f"🇸🇦 {ar}\n\n"
-                    f"🔗 {url}"
-                )
+{market}
+
+🏢 {ticker if ticker else 'عام'}
+📊 {price}$ ({change}%)
+
+📰 {title}
+🇸🇦 {ar}
+
+🔗 {url}
+"""
 
                 for chat_id in CHAT_IDS:
-                    await bot.send_message(chat_id=chat_id, text=msg)
-
-                if ticker:
-                    analysis = generate_ai_analysis(ticker, title)
-                    for chat_id in CHAT_IDS:
-                        await bot.send_message(chat_id=chat_id, text=f"🤖 تحليل {ticker}\n\n{analysis}")
+                    await app.bot.send_message(chat_id=chat_id, text=msg)
 
                 sent_news.add(nid)
                 save_news()
@@ -274,7 +266,8 @@ async def main():
             print(e)
             await asyncio.sleep(10)
 
-async def run_all():
+# ====== التشغيل ======
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("السوق", market_command))
@@ -285,9 +278,9 @@ async def run_all():
     await app.initialize()
     await app.start()
 
-    asyncio.create_task(main())
+    asyncio.create_task(news_loop(app))
 
-    await app.updater.start_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(run_all())
+    asyncio.run(main())
