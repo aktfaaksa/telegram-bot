@@ -49,7 +49,7 @@ def smart_translate(title):
     except:
         return title
 
-# ====== تحليل ذكي متقدم ======
+# ====== تحليل ذكي ======
 def smart_analysis(title):
     t = title.lower()
     score = 0
@@ -65,15 +65,9 @@ def smart_analysis(title):
         "crash": -5, "plunge": -4, "weak": -2
     }
 
-    complex_words = {
-        "despite": -1, "however": -1, "but": -1
-    }
+    macro_negative = ["inflation", "risk", "crisis", "war"]
+    macro_positive = ["growth", "stability", "holds"]
 
-    # ===== كلمات اقتصادية =====
-    macro_negative = ["inflation", "risk", "crisis", "war", "rate hike"]
-    macro_positive = ["growth", "stability", "holds", "cooling inflation"]
-
-    # ===== حساب =====
     for word, val in positive.items():
         if word in t:
             score += val
@@ -84,11 +78,6 @@ def smart_analysis(title):
             score += val
             confidence += 1
 
-    for word, val in complex_words.items():
-        if word in t:
-            score += val
-
-    # ===== تحليل اقتصادي =====
     for w in macro_negative:
         if w in t:
             score -= 2
@@ -98,7 +87,6 @@ def smart_analysis(title):
         if w in t:
             score += 1
 
-    # ===== النتيجة =====
     if score >= 4:
         label = "🚀 إيجابي قوي"
         emoji = "🟢"
@@ -115,7 +103,6 @@ def smart_analysis(title):
         label = "⚖️ متضارب"
         emoji = "⚪"
 
-    # ===== الثقة =====
     if confidence >= 3:
         conf = "🔵 ثقة عالية"
     elif confidence == 2:
@@ -140,6 +127,19 @@ def news_impact(title):
         score += 2
 
     return score
+
+# ====== كشف الفرص ======
+def detect_opportunity(analysis, impact):
+    if "🚀 إيجابي قوي" in analysis and impact >= 4:
+        return "💰💥 فرصة قوية"
+    elif "📈 إيجابي" in analysis and impact >= 3:
+        return "💰 فرصة محتملة"
+    elif "⚠️ سلبي" in analysis:
+        return "🚫 تجنب"
+    elif "📉 سلبي قوي" in analysis:
+        return "🚫 خطر عالي"
+    else:
+        return "⚪ مراقبة"
 
 # ====== السعر ======
 def get_price(symbol):
@@ -218,6 +218,7 @@ async def main():
 
                 ar = smart_translate(title)
                 analysis, emoji = smart_analysis(title)
+                opportunity = detect_opportunity(analysis, impact)
 
                 msg = (
                     f"{emoji} {prefix}\n\n"
@@ -225,7 +226,8 @@ async def main():
                     f"━━━━━━━━━━━━━━\n\n"
 
                     f"🏢 السهم: {ticker if ticker else 'عام'}\n"
-                    f"📊 الاتجاه: {analysis}\n\n"
+                    f"📊 الاتجاه: {analysis}\n"
+                    f"💰 الفرصة: {opportunity}\n\n"
 
                     f"📰 الخبر:\n{title}\n\n"
                     f"🇸🇦 الترجمة:\n{ar}\n\n"
