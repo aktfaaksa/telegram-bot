@@ -55,58 +55,32 @@ def smart_analysis(title):
     score = 0
     confidence = 0
 
-    positive = {
-        "surge": 3, "soar": 3, "beat": 4,
-        "growth": 2, "record": 3, "strong": 2
-    }
+    positive = {"surge":3,"soar":3,"beat":4,"growth":2,"record":3}
+    negative = {"miss":-4,"lower":-3,"drop":-2,"crash":-5,"plunge":-4}
 
-    negative = {
-        "miss": -4, "lower": -3, "drop": -2,
-        "crash": -5, "plunge": -4, "weak": -2
-    }
-
-    macro_negative = ["inflation", "risk", "crisis", "war"]
-    macro_positive = ["growth", "stability", "holds"]
-
-    for word, val in positive.items():
+    for word,val in positive.items():
         if word in t:
             score += val
             confidence += 1
 
-    for word, val in negative.items():
+    for word,val in negative.items():
         if word in t:
             score += val
             confidence += 1
-
-    for w in macro_negative:
-        if w in t:
-            score -= 2
-            confidence += 1
-
-    for w in macro_positive:
-        if w in t:
-            score += 1
 
     if score >= 4:
-        label = "🚀 إيجابي قوي"
-        emoji = "🟢"
+        label,emoji = "🚀 إيجابي قوي","🟢"
     elif score >= 2:
-        label = "📈 إيجابي"
-        emoji = "🟢"
+        label,emoji = "📈 إيجابي","🟢"
     elif score <= -4:
-        label = "📉 سلبي قوي"
-        emoji = "🔴"
+        label,emoji = "📉 سلبي قوي","🔴"
     elif score <= -2:
-        label = "⚠️ سلبي"
-        emoji = "🔴"
+        label,emoji = "⚠️ سلبي","🔴"
     else:
-        label = "⚖️ متضارب"
-        emoji = "⚪"
+        label,emoji = "⚖️ متضارب","⚪"
 
-    if confidence >= 3:
+    if confidence >= 2:
         conf = "🔵 ثقة عالية"
-    elif confidence == 2:
-        conf = "🟡 ثقة متوسطة"
     else:
         conf = "⚪ ثقة ضعيفة"
 
@@ -117,29 +91,24 @@ def news_impact(title):
     t = title.lower()
     score = 0
 
-    if any(w in t for w in ["earnings", "revenue", "forecast"]):
+    if any(w in t for w in ["earnings","revenue","forecast"]):
         score += 4
-    if any(w in t for w in ["fed", "inflation", "interest rate"]):
+    if any(w in t for w in ["fed","inflation"]):
         score += 3
-    if any(w in t for w in ["acquire", "merge", "deal"]):
-        score += 3
-    if any(w in t for w in ["surge", "plunge", "crash"]):
+    if any(w in t for w in ["surge","plunge","crash"]):
         score += 2
 
     return score
 
-# ====== كشف الفرص ======
+# ====== الفرص ======
 def detect_opportunity(analysis, impact):
-    if "🚀 إيجابي قوي" in analysis and impact >= 4:
-        return "💰💥 فرصة قوية"
-    elif "📈 إيجابي" in analysis and impact >= 3:
+    if "🚀" in analysis and impact >= 4:
+        return "💥 فرصة قوية"
+    elif "📈" in analysis:
         return "💰 فرصة محتملة"
-    elif "⚠️ سلبي" in analysis:
+    elif "⚠️" in analysis or "📉" in analysis:
         return "🚫 تجنب"
-    elif "📉 سلبي قوي" in analysis:
-        return "🚫 خطر عالي"
-    else:
-        return "⚪ مراقبة"
+    return "⚪ مراقبة"
 
 # ====== السعر ======
 def get_price(symbol):
@@ -179,13 +148,34 @@ def get_news():
     except:
         return []
 
+# ====== Top Movers ======
+def get_top_movers():
+    try:
+        url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={API_KEY}"
+        symbols = requests.get(url, timeout=5).json()
+
+        movers = []
+
+        for s in symbols[:20]:
+            symbol = s.get("symbol")
+            price, change = get_price(symbol)
+
+            if price and change:
+                if abs(change) >= 5:
+                    movers.append((symbol, change))
+
+        return movers[:3]
+    except:
+        return []
+
 # ====== التشغيل ======
 async def main():
     while True:
         try:
-            news_list = get_news()
             market = market_status()
+            news_list = get_news()
 
+            # ===== الأخبار =====
             for n in news_list:
                 title = n.get("headline")
                 url = n.get("url")
@@ -197,61 +187,61 @@ async def main():
                 if nid in sent_news:
                     continue
 
-                ticker = extract_ticker(title)
                 impact = news_impact(title)
+                if impact < 2:
+                    continue
 
-                # ===== SAFE MODE =====
-                if ticker:
-                    if impact < 1:
-                        continue
-                else:
-                    if impact < 3:
-                        continue
-
-                # ===== تنبيه =====
-                if impact >= 5:
-                    prefix = "🚨 تنبيه قوي"
-                elif impact >= 3:
-                    prefix = "⚠️ تنبيه متوسط"
-                else:
-                    prefix = ""
-
-                ar = smart_translate(title)
                 analysis, emoji = smart_analysis(title)
                 opportunity = detect_opportunity(analysis, impact)
+                ar = smart_translate(title)
+                ticker = extract_ticker(title)
 
                 msg = (
-                    f"{emoji} {prefix}\n\n"
+                    f"{emoji} خبر جديد\n\n"
                     f"{market}\n"
                     f"━━━━━━━━━━━━━━\n\n"
-
-                    f"🏢 السهم: {ticker if ticker else 'عام'}\n"
-                    f"📊 الاتجاه: {analysis}\n"
-                    f"💰 الفرصة: {opportunity}\n\n"
-
-                    f"📰 الخبر:\n{title}\n\n"
-                    f"🇸🇦 الترجمة:\n{ar}\n\n"
-
-                    f"━━━━━━━━━━━━━━\n"
-                    f"🔗 المصدر:\n{url}"
+                    f"🏢 {ticker if ticker else 'عام'}\n"
+                    f"📊 {analysis}\n"
+                    f"💰 {opportunity}\n\n"
+                    f"📰 {title}\n\n"
+                    f"🇸🇦 {ar}\n\n"
+                    f"🔗 {url}"
                 )
 
                 for chat_id in CHAT_IDS:
-                    try:
-                        await bot.send_message(chat_id=chat_id, text=msg)
-                    except Exception as e:
-                        print("خطأ إرسال:", e)
+                    await bot.send_message(chat_id=chat_id, text=msg)
 
                 sent_news.add(nid)
                 save_news()
 
                 await asyncio.sleep(2)
 
+            # ===== Top Movers =====
+            movers = get_top_movers()
+
+            for symbol, change in movers:
+
+                direction = "📈 صعود قوي" if change > 0 else "📉 هبوط قوي"
+                emoji = "🚀" if change > 0 else "🔻"
+
+                msg = (
+                    f"{emoji} سهم يتحرك بقوة\n\n"
+                    f"🏢 {symbol}\n"
+                    f"{direction}\n"
+                    f"📊 {change}%\n\n"
+                    f"💰 فرصة محتملة"
+                )
+
+                for chat_id in CHAT_IDS:
+                    await bot.send_message(chat_id=chat_id, text=msg)
+
+                await asyncio.sleep(2)
+
             print("يتم التحديث...")
-            await asyncio.sleep(15)
+            await asyncio.sleep(20)
 
         except Exception as e:
-            print("خطأ عام:", e)
+            print("خطأ:", e)
             await asyncio.sleep(10)
 
 # ===== تشغيل =====
