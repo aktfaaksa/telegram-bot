@@ -14,13 +14,14 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-pro")
-
+# 👇 تم التعديل هنا (إضافة شخص ثاني)
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
     6315087880
 ]
+
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-pro")
 
 # ====== منع التكرار ======
 def news_id(title):
@@ -39,66 +40,18 @@ def save_news():
 
 sent_news = load_news()
 
-# ====== Ticker ======
-KNOWN_TICKERS = ["TSLA","AAPL","NVDA","MSFT","AMZN","GOOGL","META"]
-
-NAME_TO_TICKER = {
-    "tesla": "TSLA",
-    "apple": "AAPL",
-    "nvidia": "NVDA",
-    "microsoft": "MSFT",
-    "amazon": "AMZN",
-    "google": "GOOGL",
-    "meta": "META"
-}
-
-def extract_ticker(title):
-    t = title.lower()
-
-    for name, symbol in NAME_TO_TICKER.items():
-        if name in t:
-            return symbol
-
-    for w in title.upper().split():
-        if w in KNOWN_TICKERS:
-            return w
-
-    return None
-
 # ====== ترجمة ======
 def smart_translate(title):
-    t = title.lower()
-
-    if "earnings" in t and "beat" in t:
-        return "أرباح أعلى من التوقعات (إيجابي 📈)"
-    if "miss" in t:
-        return "أرباح أقل من المتوقع (سلبي 📉)"
-
     try:
         return GoogleTranslator(source='auto', target='ar').translate(title)
     except:
         return title
-
-# ====== تقييم ======
-def news_impact(title):
-    t = title.lower()
-    score = 0
-
-    if "earnings" in t:
-        score += 4
-    if "fed" in t:
-        score += 3
-    if "surge" in t or "crash" in t:
-        score += 2
-
-    return score
 
 # ====== السعر ======
 def get_price(symbol):
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
         d = requests.get(url).json()
-
         c = d.get("c")
         pc = d.get("pc")
 
@@ -107,18 +60,12 @@ def get_price(symbol):
             return c, round(change, 2)
     except:
         pass
-
     return None, None
 
 # ====== السوق ======
 def get_market_status():
     try:
-        indices = {
-            "S&P 500": "SPY",
-            "Nasdaq": "QQQ",
-            "Dow": "DIA"
-        }
-
+        indices = {"S&P 500": "SPY", "Nasdaq": "QQQ", "Dow": "DIA"}
         results = {}
 
         for name, symbol in indices.items():
@@ -129,134 +76,98 @@ def get_market_status():
         nasdaq = results["Nasdaq"]
         dow = results["Dow"]
 
-        if spy > 0 and nasdaq > 0 and dow > 0:
-            sentiment = "🔥 السوق قوي"
+        if spy > 0 and nasdaq > 0:
+            sentiment = "🔥 السوق صاعد"
         elif spy < 0 and dow < 0:
-            sentiment = "📉 السوق ضعيف"
+            sentiment = "📉 السوق هابط"
         else:
             sentiment = "⚠️ حذر"
 
-        return (
-            f"📊 حالة السوق:\n"
-            f"S&P 500: {spy}%\n"
-            f"Nasdaq: {nasdaq}%\n"
-            f"Dow: {dow}%\n\n"
-            f"{sentiment}"
-        )
+        return f"""
+📊 حالة السوق:
+
+S&P 500: {spy}%
+Nasdaq: {nasdaq}%
+Dow: {dow}%
+
+{sentiment}
+"""
     except:
         return "❌ خطأ في السوق"
 
-# ====== AI (Gemini) ======
-def generate_ai_analysis(symbol, title):
+# ====== AI ======
+def analyze_stock(symbol):
     try:
-        prompt = f"حلل الخبر التالي وتأثيره على سهم {symbol}:\n{title}\nواذكر التوصية (شراء / بيع / حياد)"
+        prompt = f"حلل سهم {symbol} بشكل مختصر واذكر التوصية (شراء أو بيع أو حياد)"
         response = model.generate_content(prompt)
         return response.text
     except:
-        return "⚠️ تعذر التحليل"
+        return "⚠️ فشل التحليل"
 
-# ====== الأخبار ======
-def get_news():
-    try:
-        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-        return requests.get(url).json()
-    except:
-        return []
+# ====== أوامر ======
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 أهلاً بك\nاستخدم /تحليل TSLA")
 
-# ====== الأوامر ======
-async def market_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id not in CHAT_IDS:
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❗ اكتب: /تحليل TSLA")
         return
+
+    symbol = context.args[0].upper()
+    result = analyze_stock(symbol)
+
+    await update.message.reply_text(f"""
+📊 سهم: {symbol}
+
+🤖 التحليل:
+{result}
+""")
+
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❗ اكتب: /سعر TSLA")
+        return
+
+    symbol = context.args[0].upper()
+    p, c = get_price(symbol)
+
+    if p:
+        arrow = "📈" if c > 0 else "📉"
+        await update.message.reply_text(f"{symbol}: {p}$ {arrow} {c}%")
+    else:
+        await update.message.reply_text("❌ خطأ")
+
+async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(get_market_status())
 
-async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id not in CHAT_IDS:
-        return
-    try:
-        symbol = context.args[0].upper()
-    except:
-        await update.message.reply_text("❌ اكتب: /سعر TSLA")
-        return
-
-    price, change = get_price(symbol)
-    arrow = "📈" if change and change > 0 else "📉"
-    await update.message.reply_text(f"{symbol}\n{price}$ {arrow} {change}%")
-
-async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id not in CHAT_IDS:
-        return
-    try:
-        symbol = context.args[0].upper()
-    except:
-        await update.message.reply_text("❌ اكتب: /تحليل TSLA")
-        return
-
-    analysis = generate_ai_analysis(symbol, "تحليل عام")
-    await update.message.reply_text(f"🤖 تحليل {symbol}\n\n{analysis}")
-
-async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id not in CHAT_IDS:
-        return
-    try:
-        symbol = context.args[0].upper()
-    except:
-        await update.message.reply_text("❌ اكتب: /اخبار TSLA")
-        return
-
-    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from=2024-01-01&to=2025-12-31&token={API_KEY}"
-    data = requests.get(url).json()
-
-    msgs = []
-    for n in data[:3]:
-        msgs.append(f"📰 {n['headline']}\n🔗 {n['url']}")
-
-    await update.message.reply_text("\n\n".join(msgs))
-
-# ====== الأخبار التلقائية ======
+# ====== أخبار تلقائية ======
 async def news_loop(app):
     while True:
         try:
-            news_list = get_news()
+            url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
+            news = requests.get(url).json()
 
-            for n in news_list:
+            for n in news[:5]:
                 title = n.get("headline")
-                url = n.get("url")
+                link = n.get("url")
 
-                if not title or not url:
+                if not title or not link:
                     continue
 
                 nid = news_id(title)
                 if nid in sent_news:
                     continue
 
-                impact = news_impact(title)
-                if impact < 3:
-                    continue
-
-                ticker = extract_ticker(title)
-                price, change = get_price(ticker) if ticker else (None, None)
-                ar = smart_translate(title)
-                market = get_market_status()
-
-                ai = generate_ai_analysis(ticker if ticker else "السوق", title)
-
                 msg = f"""
-🚨 تنبيه
-
-{market}
-
-🏢 {ticker if ticker else 'عام'}
-📊 {price}$ ({change}%)
+🚨 خبر
 
 📰 {title}
-🇸🇦 {ar}
+🇸🇦 {smart_translate(title)}
 
-🤖 التحليل:
-{ai}
-
-🔗 {url}
+🔗 {link}
 """
 
+                # 👇 تم التعديل هنا (إرسال للجميع)
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id=chat_id, text=msg)
 
@@ -265,20 +176,20 @@ async def news_loop(app):
 
                 await asyncio.sleep(2)
 
-            await asyncio.sleep(15)
+            await asyncio.sleep(60)
 
         except Exception as e:
             print(e)
             await asyncio.sleep(10)
 
-# ====== التشغيل ======
+# ====== تشغيل ======
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("السوق", market_command))
-    app.add_handler(CommandHandler("تحليل", analyze_command))
-    app.add_handler(CommandHandler("سعر", price_command))
-    app.add_handler(CommandHandler("اخبار", news_command))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("تحليل", analyze))
+    app.add_handler(CommandHandler("سعر", price))
+    app.add_handler(CommandHandler("السوق", market))
 
     await app.initialize()
     await app.start()
