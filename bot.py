@@ -17,15 +17,6 @@ CHAT_IDS = [
     6315087880
 ]
 
-# ====== الأسهم ======
-WATCHLIST = ["TSLA", "NVDA", "AAPL"]
-
-TICKER_MAP = {
-    "tesla": "TSLA",
-    "nvidia": "NVDA",
-    "apple": "AAPL"
-}
-
 # ====== منع التكرار ======
 def news_id(title):
     return hashlib.md5(title.lower()[:60].encode()).hexdigest()
@@ -45,52 +36,79 @@ sent_news = load_news()
 
 # ====== استخراج السهم ======
 def extract_ticker(title):
-    t = title.lower()
-
-    for symbol in WATCHLIST:
-        if symbol.lower() in t:
-            return symbol
-
-    for name, symbol in TICKER_MAP.items():
-        if name in t:
-            return symbol
-
+    words = title.split()
+    for w in words:
+        if w.isupper() and 2 <= len(w) <= 5:
+            return w
     return None
 
-# ====== ترجمة ذكية ======
+# ====== ترجمة ======
 def smart_translate(title):
-    t = title.lower()
-
-    if "earnings" in t and "beat" in t:
-        return "أرباح أعلى من التوقعات (إيجابي 📈)"
-    if "miss" in t:
-        return "أرباح أقل من المتوقع (سلبي 📉)"
-    if "surge" in t or "soar" in t:
-        return "ارتفاع قوي (إيجابي 📈)"
-    if "crash" in t or "plunge" in t:
-        return "هبوط حاد (سلبي 📉)"
-    if "fed" in t:
-        return "خبر عن الفيدرالي (تأثير على السوق)"
-
     try:
         return GoogleTranslator(source='auto', target='ar').translate(title)
     except:
         return title
 
-# ====== تحليل بسيط ======
-def simple_analysis(title):
+# ====== تحليل ذكي ======
+def smart_analysis(title):
     t = title.lower()
+    score = 0
+    confidence = 0
 
-    if "earnings" in t and "beat" in t:
-        return "📈 إشارة إيجابية قوية"
-    if "miss" in t:
-        return "📉 إشارة سلبية"
-    if "surge" in t or "soar" in t:
-        return "🚀 زخم صعود"
-    if "crash" in t or "plunge" in t:
-        return "⚠️ ضغط هبوطي"
+    positive = {
+        "surge": 3, "soar": 3, "beat": 4,
+        "growth": 2, "record": 3, "strong": 2
+    }
 
-    return "⚖️ تأثير غير واضح"
+    negative = {
+        "miss": -4, "lower": -3, "drop": -2,
+        "crash": -5, "plunge": -4, "weak": -2
+    }
+
+    complex_words = {
+        "despite": -1, "however": -1, "but": -1
+    }
+
+    for word, val in positive.items():
+        if word in t:
+            score += val
+            confidence += 1
+
+    for word, val in negative.items():
+        if word in t:
+            score += val
+            confidence += 1
+
+    for word, val in complex_words.items():
+        if word in t:
+            score += val
+
+    # ===== النتيجة =====
+    if score >= 4:
+        label = "🚀 إيجابي قوي"
+        emoji = "🟢"
+    elif score >= 2:
+        label = "📈 إيجابي"
+        emoji = "🟢"
+    elif score <= -4:
+        label = "📉 سلبي قوي"
+        emoji = "🔴"
+    elif score <= -2:
+        label = "⚠️ سلبي"
+        emoji = "🔴"
+    else:
+        label = "⚖️ متضارب"
+        emoji = "⚪"
+
+    # ===== الثقة =====
+    if confidence >= 3:
+        conf = "🔵 ثقة عالية"
+    elif confidence == 2:
+        conf = "🟡 ثقة متوسطة"
+    else:
+        conf = "⚪ ثقة ضعيفة"
+
+    return f"{label} | {conf}", emoji
 
 # ====== تقييم الخبر ======
 def news_impact(title):
@@ -101,9 +119,9 @@ def news_impact(title):
         score += 4
     if any(w in t for w in ["fed", "inflation", "interest rate"]):
         score += 3
-    if any(w in t for w in ["acquire", "merge", "lawsuit"]):
+    if any(w in t for w in ["acquire", "merge", "deal"]):
         score += 3
-    if any(w in t for w in ["surge", "plunge", "crash", "soar"]):
+    if any(w in t for w in ["surge", "plunge", "crash"]):
         score += 2
 
     return score
@@ -127,13 +145,13 @@ def get_price(symbol):
 
 # ====== حالة السوق ======
 def market_status():
-    _, spy_change = get_price("SPY")
-    _, qqq_change = get_price("QQQ")
+    _, spy = get_price("SPY")
+    _, qqq = get_price("QQQ")
 
-    if spy_change is not None and qqq_change is not None:
-        if spy_change > 0 and qqq_change > 0:
+    if spy and qqq:
+        if spy > 0 and qqq > 0:
             return "📈 السوق صاعد"
-        elif spy_change < 0 and qqq_change < 0:
+        elif spy < 0 and qqq < 0:
             return "📉 السوق هابط"
 
     return "⚖️ السوق متذبذب"
@@ -167,41 +185,45 @@ async def main():
                 ticker = extract_ticker(title)
                 impact = news_impact(title)
 
-                # ====== SAFE MODE ======
+                # ===== SAFE MODE =====
                 if ticker:
-                    if impact < 2:
+                    if impact < 1:
                         continue
                 else:
-                    if impact < 4:
+                    if impact < 3:
                         continue
 
-                # ====== تنبيهات ======
+                # ===== تنبيه =====
                 if impact >= 5:
-                    prefix = "🚨 تنبيه قوي\n"
+                    prefix = "🚨 تنبيه قوي"
                 elif impact >= 3:
-                    prefix = "⚠️ تنبيه متوسط\n"
+                    prefix = "⚠️ تنبيه متوسط"
                 else:
                     prefix = ""
 
                 ar = smart_translate(title)
-                analysis = simple_analysis(title)
+                analysis, emoji = smart_analysis(title)
 
                 msg = (
-                    f"{prefix}"
+                    f"{emoji} {prefix}\n\n"
                     f"{market}\n"
+                    f"━━━━━━━━━━━━━━\n\n"
+
+                    f"🏢 السهم: {ticker if ticker else 'عام'}\n"
+                    f"📊 الاتجاه: {analysis}\n\n"
+
+                    f"📰 الخبر:\n{title}\n\n"
+                    f"🇸🇦 الترجمة:\n{ar}\n\n"
+
                     f"━━━━━━━━━━━━━━\n"
-                    f"🏢 {ticker if ticker else 'عام'}\n\n"
-                    f"📰 {title}\n"
-                    f"🇸🇦 {ar}\n\n"
-                    f"📊 {analysis}\n\n"
-                    f"🔗 {url}"
+                    f"🔗 المصدر:\n{url}"
                 )
 
                 for chat_id in CHAT_IDS:
                     try:
                         await bot.send_message(chat_id=chat_id, text=msg)
                     except Exception as e:
-                        print(f"فشل الإرسال: {e}")
+                        print("خطأ إرسال:", e)
 
                 sent_news.add(nid)
                 save_news()
@@ -215,6 +237,6 @@ async def main():
             print("خطأ عام:", e)
             await asyncio.sleep(10)
 
-# ====== تشغيل ======
+# ===== تشغيل =====
 if __name__ == "__main__":
     asyncio.run(main())
