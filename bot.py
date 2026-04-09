@@ -3,25 +3,27 @@ import time
 import json
 import hashlib
 import os
+import asyncio
 import google.generativeai as genai
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from deep_translator import GoogleTranslator
+import threading
 
 # ====== إعدادات ======
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 👇 الشخصين هنا
+# 👇 الشخصين
 CHAT_IDS = [
-    int(os.getenv("CHAT_ID")),
-    6315087880
+    int(os.getenv("CHAT_ID")),  # أنت
+    6315087880                  # الشخص الثاني
 ]
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-pro")
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ====== منع التكرار ======
 def news_id(title):
@@ -54,7 +56,6 @@ def get_price(symbol):
         d = requests.get(url).json()
         c = d.get("c")
         pc = d.get("pc")
-
         if c and pc:
             change = ((c - pc) / pc) * 100
             return c, round(change, 2)
@@ -67,7 +68,6 @@ def get_market_status():
     try:
         indices = {"S&P 500": "SPY", "Nasdaq": "QQQ", "Dow": "DIA"}
         results = {}
-
         for name, symbol in indices.items():
             _, change = get_price(symbol)
             results[name] = change if change else 0
@@ -106,7 +106,9 @@ def analyze_stock(symbol):
 
 # ====== أوامر ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بك في بوت الأسهم\n\nالأوامر:\n/تحليل TSLA\n/سعر TSLA\n/السوق")
+    await update.message.reply_text(
+        "👋 أهلاً بك في بوت الأسهم\n\nالأوامر:\n/تحليل TSLA\n/سعر TSLA\n/السوق"
+    )
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -130,7 +132,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = context.args[0].upper()
     p, c = get_price(symbol)
-
     if p:
         arrow = "📈" if c > 0 else "📉"
         await update.message.reply_text(f"{symbol}: {p}$ {arrow} {c}%")
@@ -143,7 +144,6 @@ async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====== الأخبار ======
 def send_news(app):
     global sent_news
-
     while True:
         try:
             url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
@@ -152,7 +152,6 @@ def send_news(app):
             for n in news[:5]:
                 title = n.get("headline")
                 link = n.get("url")
-
                 if not title or not link:
                     continue
 
@@ -169,22 +168,20 @@ def send_news(app):
 🔗 {link}
 """
 
-                # إرسال للجميع
+                # إرسال لجميع الأشخاص
                 for chat_id in CHAT_IDS:
-                    app.bot.send_message(chat_id=chat_id, text=msg)
+                    asyncio.run(app.bot.send_message(chat_id=chat_id, text=msg))
 
                 sent_news.add(nid)
                 save_news()
-
                 time.sleep(2)
 
             time.sleep(60)
-
         except Exception as e:
             print(e)
             time.sleep(10)
 
-# ====== تشغيل ======
+# ====== تشغيل البوت ======
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -195,8 +192,7 @@ def main():
 
     print("Bot started...")
 
-    # تشغيل الأخبار بالخلفية
-    import threading
+    # تشغيل الأخبار في الخلفية
     threading.Thread(target=send_news, args=(app,), daemon=True).start()
 
     app.run_polling()
