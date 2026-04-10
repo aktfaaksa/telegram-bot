@@ -13,8 +13,8 @@ bot = Bot(token=TOKEN)
 
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
-    6315087880,   # حسابك
-    # 1234567890  # 👈 أضف الشخص الثاني هنا
+    6315087880,
+    # 1234567890
 ]
 
 # ====== تخزين ======
@@ -65,22 +65,19 @@ def analyze_news(title):
     else:
         label = "⚖️ متضارب"
 
-    return {
-        "score": score,
-        "label": label
-    }
+    return {"score": score, "label": label}
 
 # ====== تحديد القطاع ======
 def detect_sector(title):
     t = title.lower()
 
-    if any(word in t for word in ["oil", "crude", "energy", "gas", "opec", "iran"]):
+    if any(w in t for w in ["oil", "energy", "gas", "opec", "iran"]):
         return "energy"
 
-    if any(word in t for word in ["ai", "chip", "nvidia", "tech", "semiconductor"]):
+    if any(w in t for w in ["ai", "chip", "nvidia", "tech"]):
         return "tech"
 
-    if any(word in t for word in ["bank", "interest", "fed", "rates"]):
+    if any(w in t for w in ["bank", "interest", "fed", "rates"]):
         return "financial"
 
     return None
@@ -96,8 +93,7 @@ async def get_price(session, symbol):
             pc = data.get("pc")
 
             if c and pc:
-                change = ((c - pc) / pc) * 100
-                return round(change, 2)
+                return round(((c - pc) / pc) * 100, 2)
     except:
         pass
 
@@ -127,32 +123,16 @@ async def analyze_sector(session, sector):
 
     return trend, results
 
-# ====== Macro (النفط + الذهب + السوق) ======
+# ====== Macro ======
 async def get_macro(session, symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-
-    try:
-        async with session.get(url) as resp:
-            data = await resp.json()
-            c = data.get("c")
-            pc = data.get("pc")
-
-            if c and pc:
-                change = ((c - pc) / pc) * 100
-                return round(change, 2)
-    except:
-        pass
-
-    return None
-
+    return await get_price(session, symbol)
 
 async def get_macro_analysis(session):
-    oil = await get_macro(session, "CL=F")
-    gold = await get_macro(session, "GC=F")
+    oil = await get_macro(session, "USO")   # ✅ FIX
+    gold = await get_macro(session, "GLD")  # ✅ FIX
     spy = await get_macro(session, "SPY")
     qqq = await get_macro(session, "QQQ")
 
-    # السوق
     if spy is not None and qqq is not None:
         if spy > 0 and qqq > 0:
             market = "📈 صاعد"
@@ -163,27 +143,38 @@ async def get_macro_analysis(session):
     else:
         market = "غير واضح"
 
-    # تحليل عام
     signal = "⚖️ طبيعي"
 
-    if oil is not None and oil > 1:
-        signal = "🔥 ضغط تضخمي"
+    if oil and oil > 1:
+        signal = "🔥 تضخم"
 
-    if gold is not None and gold > 1:
-        signal = "🛡️ توجه للأمان"
+    if gold and gold > 1:
+        signal = "🛡️ خوف"
 
-    if oil is not None and gold is not None:
-        if oil > 1 and gold > 1:
-            signal = "⚠️ تضخم + خوف"
+    if oil and gold and oil > 1 and gold > 1:
+        signal = "⚠️ تضخم + خوف"
 
-    return {
-        "oil": oil,
-        "gold": gold,
-        "market": market,
-        "signal": signal
-    }
+    return {"oil": oil, "gold": gold, "market": market, "signal": signal}
 
-# ====== جلب الأخبار ======
+# ====== 🧠 Decision Engine ======
+def make_decision(analysis, sector_trend, macro):
+    score = analysis["score"]
+
+    if score > 0 and "صاعد" in sector_trend and macro["market"] == "📈 صاعد":
+        return "💥 فرصة قوية"
+
+    if score > 0 and "صاعد" in sector_trend:
+        return "💰 فرصة محتملة"
+
+    if score < 0 and "هابط" in sector_trend:
+        return "🚫 تجنب"
+
+    if macro["signal"] == "⚠️ تضخم + خوف":
+        return "⚠️ حذر"
+
+    return "⚪ مراقبة"
+
+# ====== الأخبار ======
 async def get_news(session):
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
 
@@ -199,9 +190,7 @@ async def main():
 
         while True:
             try:
-                # 🧠 تحليل السوق
                 macro = await get_macro_analysis(session)
-
                 news_list = await get_news(session)
 
                 for n in news_list:
@@ -224,14 +213,19 @@ async def main():
 
                     sector_text = "غير محدد"
                     stocks_text = ""
+                    sector_trend = ""
 
                     if sector:
                         trend, stocks = await analyze_sector(session, sector)
+                        sector_trend = trend
                         sector_text = f"{sector.upper()} ({trend})"
 
                         for s, c in stocks:
                             arrow = "↑" if c > 0 else "↓"
                             stocks_text += f"{s} {arrow} {c}%\n"
+
+                    # 🧠 القرار
+                    decision = make_decision(analysis, sector_trend, macro)
 
                     ar = smart_translate(title)
 
@@ -244,6 +238,7 @@ async def main():
                         f"🧠 {macro['signal']}\n\n"
                         f"🏭 القطاع: {sector_text}\n\n"
                         f"📈 الأسهم:\n{stocks_text if stocks_text else '—'}\n\n"
+                        f"💰 القرار: {decision}\n\n"
                         f"📰 {title}\n\n"
                         f"🇸🇦 {ar}\n\n"
                         f"🔗 {url}"
