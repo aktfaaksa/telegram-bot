@@ -11,11 +11,10 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 
 bot = Bot(token=TOKEN)
 
-# ✅ أضفنا Chat ID إضافي
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
-    6315087880,   # الموجود عندك
-    1234567890    # 👈 حط هنا ID الشخص الثاني
+    6315087880,   # حسابك
+    # 1234567890  # 👈 أضف الشخص الثاني هنا
 ]
 
 # ====== تخزين ======
@@ -75,11 +74,13 @@ def analyze_news(title):
 def detect_sector(title):
     t = title.lower()
 
-    if "oil" in t or "crude" in t:
+    if any(word in t for word in ["oil", "crude", "energy", "gas", "opec", "iran"]):
         return "energy"
-    if "ai" in t or "chip" in t or "nvidia" in t:
+
+    if any(word in t for word in ["ai", "chip", "nvidia", "tech", "semiconductor"]):
         return "tech"
-    if "bank" in t or "interest" in t:
+
+    if any(word in t for word in ["bank", "interest", "fed", "rates"]):
         return "financial"
 
     return None
@@ -126,6 +127,62 @@ async def analyze_sector(session, sector):
 
     return trend, results
 
+# ====== Macro (النفط + الذهب + السوق) ======
+async def get_macro(session, symbol):
+    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
+
+    try:
+        async with session.get(url) as resp:
+            data = await resp.json()
+            c = data.get("c")
+            pc = data.get("pc")
+
+            if c and pc:
+                change = ((c - pc) / pc) * 100
+                return round(change, 2)
+    except:
+        pass
+
+    return None
+
+
+async def get_macro_analysis(session):
+    oil = await get_macro(session, "CL=F")
+    gold = await get_macro(session, "GC=F")
+    spy = await get_macro(session, "SPY")
+    qqq = await get_macro(session, "QQQ")
+
+    # السوق
+    if spy is not None and qqq is not None:
+        if spy > 0 and qqq > 0:
+            market = "📈 صاعد"
+        elif spy < 0 and qqq < 0:
+            market = "📉 هابط"
+        else:
+            market = "⚖️ متذبذب"
+    else:
+        market = "غير واضح"
+
+    # تحليل عام
+    signal = "⚖️ طبيعي"
+
+    if oil is not None and oil > 1:
+        signal = "🔥 ضغط تضخمي"
+
+    if gold is not None and gold > 1:
+        signal = "🛡️ توجه للأمان"
+
+    if oil is not None and gold is not None:
+        if oil > 1 and gold > 1:
+            signal = "⚠️ تضخم + خوف"
+
+    return {
+        "oil": oil,
+        "gold": gold,
+        "market": market,
+        "signal": signal
+    }
+
 # ====== جلب الأخبار ======
 async def get_news(session):
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
@@ -142,6 +199,9 @@ async def main():
 
         while True:
             try:
+                # 🧠 تحليل السوق
+                macro = await get_macro_analysis(session)
+
                 news_list = await get_news(session)
 
                 for n in news_list:
@@ -155,14 +215,11 @@ async def main():
                     if nid in sent_news:
                         continue
 
-                    # تحليل
                     analysis = analyze_news(title)
 
-                    # فلترة الأخبار الضعيفة
                     if analysis["score"] == 0:
                         continue
 
-                    # قطاع
                     sector = detect_sector(title)
 
                     sector_text = "غير محدد"
@@ -170,20 +227,21 @@ async def main():
 
                     if sector:
                         trend, stocks = await analyze_sector(session, sector)
-
                         sector_text = f"{sector.upper()} ({trend})"
 
                         for s, c in stocks:
                             arrow = "↑" if c > 0 else "↓"
                             stocks_text += f"{s} {arrow} {c}%\n"
 
-                    # ترجمة
                     ar = smart_translate(title)
 
-                    # الرسالة
                     msg = (
                         f"{analysis['label']}\n\n"
+                        f"📈 السوق: {macro['market']}\n"
                         f"━━━━━━━━━━━━━━\n\n"
+                        f"🛢️ النفط: {macro['oil']}%\n"
+                        f"🪙 الذهب: {macro['gold']}%\n"
+                        f"🧠 {macro['signal']}\n\n"
                         f"🏭 القطاع: {sector_text}\n\n"
                         f"📈 الأسهم:\n{stocks_text if stocks_text else '—'}\n\n"
                         f"📰 {title}\n\n"
@@ -191,7 +249,6 @@ async def main():
                         f"🔗 {url}"
                     )
 
-                    # إرسال
                     for chat_id in CHAT_IDS:
                         try:
                             await bot.send_message(chat_id=chat_id, text=msg)
