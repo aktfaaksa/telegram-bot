@@ -3,6 +3,7 @@ import aiohttp
 import hashlib
 import os
 import random
+import time
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -19,6 +20,7 @@ CHAT_IDS = [
 
 sent_news = set()
 sent_alerts = set()
+last_index_sent = 0
 
 # ====== القطاعات ======
 SECTORS = {
@@ -51,19 +53,19 @@ def analyze_news(title):
     score = 0
     reasons = []
 
-    if any(w in t for w in ["beat", "strong", "growth", "surge", "record"]):
+    if any(w in t for w in ["beat", "strong", "growth", "surge"]):
         score += 3
         reasons.append("نتائج قوية")
 
-    if any(w in t for w in ["miss", "loss", "drop", "crash", "warning"]):
+    if any(w in t for w in ["miss", "loss", "drop", "crash"]):
         score -= 3
         reasons.append("نتائج ضعيفة")
 
-    if any(w in t for w in ["war", "iran", "conflict", "tension"]):
+    if any(w in t for w in ["war", "iran", "conflict", "hormuz"]):
         score -= 2
         reasons.append("توتر جيوسياسي")
 
-    if any(w in t for w in ["inflation", "oil", "energy"]):
+    if any(w in t for w in ["inflation", "oil"]):
         score += 1
         reasons.append("تأثير اقتصادي")
 
@@ -84,26 +86,18 @@ def analyze_news(title):
 def detect_sector(title):
     t = title.lower()
 
-    if any(w in t for w in ["oil", "energy", "gas", "opec", "iran"]):
+    if any(w in t for w in ["oil", "energy", "gas", "iran"]):
         return "energy"
-
-    if any(w in t for w in ["ai", "chip", "nvidia", "tech", "apple"]):
+    if any(w in t for w in ["ai", "chip", "nvidia", "tech"]):
         return "tech"
-
-    if any(w in t for w in ["bank", "interest", "fed", "rates"]):
+    if any(w in t for w in ["bank", "fed", "rates"]):
         return "financial"
-
-    if any(w in t for w in ["drug", "health", "fda", "pharma"]):
+    if any(w in t for w in ["drug", "health", "fda"]):
         return "healthcare"
-
-    if any(w in t for w in ["retail", "amazon", "consumer", "tesla"]):
+    if any(w in t for w in ["retail", "amazon", "tesla"]):
         return "consumer"
-
-    if any(w in t for w in ["industrial", "manufacturing", "boeing"]):
+    if any(w in t for w in ["industrial", "boeing"]):
         return "industrial"
-
-    if any(w in t for w in ["google", "meta", "netflix"]):
-        return "communication"
 
     return None
 
@@ -146,105 +140,33 @@ async def analyze_sector(session, sector):
 
     return trend, results
 
-# ====== Macro ======
-async def get_macro_analysis(session):
-    oil, _ = await get_price(session, "USO")
-    gold, _ = await get_price(session, "GLD")
-    spy, _ = await get_price(session, "SPY")
-    qqq, _ = await get_price(session, "QQQ")
+# ====== فلترة أسهم القطاع (بدون خلط) ======
+async def get_clean_sector_stocks(session, sector):
+    stocks = SECTORS.get(sector, [])
+    results = []
 
-    if spy is not None and qqq is not None:
-        if spy > 0 and qqq > 0:
-            market = "📈 صاعد"
-        elif spy < 0 and qqq < 0:
-            market = "📉 هابط"
-        else:
-            market = "⚖️ متذبذب"
-    else:
-        market = "غير واضح"
+    for symbol in stocks:
+        change, _ = await get_price(session, symbol)
 
-    signal = "⚖️ طبيعي"
+        if change is None:
+            continue
 
-    if oil is not None and oil > 1:
-        signal = "🔥 تضخم"
+        if abs(change) < 0.5:
+            continue
 
-    if gold is not None and gold > 1:
-        signal = "🛡️ خوف"
+        results.append((symbol, change))
 
-    if oil is not None and gold is not None:
-        if oil > 1 and gold > 1:
-            signal = "⚠️ تضخم + خوف"
-
-    return {"oil": oil, "gold": gold, "market": market, "signal": signal}
+    return sorted(results, key=lambda x: abs(x[1]), reverse=True)
 
 # ====== القرار ======
-def make_decision(score, sector_trend, macro):
+def make_decision(score, sector_trend):
     if score < 0 and "هابط" in sector_trend:
         return "🚫 تجنب قوي"
-
-    if score > 0 and "هابط" in sector_trend:
-        return "⚠️ تناقض - انتبه"
-
-    if score > 0 and "صاعد" in sector_trend and macro["market"] == "📈 صاعد":
-        return "💥 فرصة قوية"
-
+    if score < 0:
+        return "⚠️ ضعف - انتبه"
     if score > 0 and "صاعد" in sector_trend:
-        return "💰 فرصة محتملة"
-
-    if macro["signal"] == "⚠️ تضخم + خوف":
-        return "⚠️ حذر"
-
+        return "💥 فرصة قوية"
     return "⚪ مراقبة"
-
-# ====== Pre-Explosion Scanner ======
-async def get_explosion_candidates(session):
-    try:
-        nasdaq_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NASDAQ&token={API_KEY}"
-        nyse_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NYSE&token={API_KEY}"
-
-        async with session.get(nasdaq_url) as r1:
-            nasdaq = await r1.json()
-
-        async with session.get(nyse_url) as r2:
-            nyse = await r2.json()
-
-        symbols = nasdaq + nyse
-
-        if len(symbols) > 120:
-            start = random.randint(0, len(symbols) - 120)
-            symbols = symbols[start:start + 120]
-
-        candidates = []
-
-        for s in symbols:
-            symbol = s.get("symbol")
-
-            if not symbol or not symbol.isalpha() or len(symbol) > 5:
-                continue
-
-            change, price = await get_price(session, symbol)
-
-            if change is None or price is None:
-                continue
-
-            if price < 0.3:
-                continue
-
-            if 2 <= change < 5:
-                label = "🟡 مراقبة"
-            elif 5 <= change < 10:
-                label = "🔥 مرشح انفجار"
-            elif change >= 10:
-                label = "🚀 انفجار"
-            else:
-                continue
-
-            candidates.append((symbol, price, change, label))
-
-        return candidates[:5]
-
-    except:
-        return []
 
 # ====== الأخبار ======
 async def get_news(session):
@@ -257,18 +179,34 @@ async def get_news(session):
 
 # ====== التشغيل ======
 async def main():
-    async with aiohttp.ClientSession() as session:
+    global last_index_sent
 
+    async with aiohttp.ClientSession() as session:
         while True:
             try:
-                macro = await get_macro_analysis(session)
-                news_list = await get_news(session)
+                current_time = time.time()
 
-                # تنظيف الذاكرة
-                if len(sent_news) > 100:
-                    sent_news.clear()
+                # ===== مؤشرات السوق =====
+                if current_time - last_index_sent > 1800:
+                    last_index_sent = current_time
+
+                    spy, _ = await get_price(session, "SPY")
+                    qqq, _ = await get_price(session, "QQQ")
+                    dia, _ = await get_price(session, "DIA")
+
+                    msg = (
+                        f"📊 مؤشرات السوق\n\n"
+                        f"💻 ناسداك: {qqq if qqq else '—'}%\n"
+                        f"📈 S&P500: {spy if spy else '—'}%\n"
+                        f"🏛️ داو جونز: {dia if dia else '—'}%"
+                    )
+
+                    for chat_id in CHAT_IDS:
+                        await bot.send_message(chat_id=chat_id, text=msg)
 
                 # ===== الأخبار =====
+                news_list = await get_news(session)
+
                 for n in news_list[:10]:
                     title = n.get("headline")
                     url = n.get("url")
@@ -281,7 +219,6 @@ async def main():
                         continue
 
                     analysis = analyze_news(title)
-
                     if abs(analysis["score"]) < 1:
                         continue
 
@@ -292,7 +229,9 @@ async def main():
                     sector_trend = ""
 
                     if sector:
-                        trend, stocks = await analyze_sector(session, sector)
+                        trend, _ = await analyze_sector(session, sector)
+                        stocks = await get_clean_sector_stocks(session, sector)
+
                         sector_trend = trend
                         sector_text = f"{sector.upper()} ({trend})"
 
@@ -300,7 +239,7 @@ async def main():
                             arrow = "↑" if c > 0 else "↓"
                             stocks_text += f"{s} {arrow} {c}%\n"
 
-                    decision = make_decision(analysis["score"], sector_trend, macro)
+                    decision = make_decision(analysis["score"], sector_trend)
                     ar = smart_translate(title)
 
                     msg = (
@@ -315,42 +254,10 @@ async def main():
                     )
 
                     for chat_id in CHAT_IDS:
-                        try:
-                            await bot.send_message(chat_id=chat_id, text=msg)
-                        except:
-                            pass
+                        await bot.send_message(chat_id=chat_id, text=msg)
 
                     sent_news.add(nid)
                     await asyncio.sleep(2)
-
-                # ===== Pre-Explosion =====
-                candidates = await get_explosion_candidates(session)
-
-                for symbol, price, change, label in candidates:
-                    cid = f"{symbol}_{round(change)}"
-                    if cid in sent_alerts:
-                        continue
-
-                    sent_alerts.add(cid)
-
-                    msg = (
-                        f"{label}\n\n"
-                        f"🏢 {symbol}\n"
-                        f"📊 {change}%\n"
-                        f"💵 ${price}\n\n"
-                        f"⚡ حركة غير طبيعية"
-                    )
-
-                    for chat_id in CHAT_IDS:
-                        try:
-                            await bot.send_message(chat_id=chat_id, text=msg)
-                        except:
-                            pass
-
-                    await asyncio.sleep(2)
-
-                if len(sent_alerts) > 50:
-                    sent_alerts.clear()
 
                 print("يتم التحديث...")
                 await asyncio.sleep(20)
@@ -359,6 +266,5 @@ async def main():
                 print("خطأ:", e)
                 await asyncio.sleep(10)
 
-# ===== تشغيل =====
 if __name__ == "__main__":
     asyncio.run(main())
