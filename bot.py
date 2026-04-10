@@ -20,15 +20,24 @@ CHAT_IDS = [
 sent_news = set()
 sent_alerts = set()
 
+# ====== القطاعات ======
 SECTORS = {
-    "energy": ["XOM", "CVX", "OXY"],
-    "tech": ["AAPL", "MSFT", "NVDA"],
-    "financial": ["JPM", "GS", "BAC"]
+    "tech": ["AAPL", "MSFT", "NVDA", "AMD", "META"],
+    "energy": ["XOM", "CVX", "OXY", "SLB"],
+    "financial": ["JPM", "GS", "BAC", "MS"],
+    "healthcare": ["JNJ", "PFE", "MRK", "UNH"],
+    "consumer": ["AMZN", "TSLA", "HD", "MCD"],
+    "industrial": ["BA", "CAT", "GE", "HON"],
+    "communication": ["META", "GOOGL", "NFLX"],
+    "utilities": ["NEE", "DUK", "SO"],
+    "real_estate": ["PLD", "AMT", "O"]
 }
 
 # ====== أدوات ======
 def news_id(title):
-    return hashlib.md5(title.lower().encode()).hexdigest()
+    words = title.lower().split()
+    key = " ".join(words[:8])
+    return hashlib.md5(key.encode()).hexdigest()
 
 def smart_translate(text):
     try:
@@ -39,7 +48,6 @@ def smart_translate(text):
 # ====== تحليل الخبر ======
 def analyze_news(title):
     t = title.lower()
-
     score = 0
     reasons = []
 
@@ -79,11 +87,23 @@ def detect_sector(title):
     if any(w in t for w in ["oil", "energy", "gas", "opec", "iran"]):
         return "energy"
 
-    if any(w in t for w in ["ai", "chip", "nvidia", "tech"]):
+    if any(w in t for w in ["ai", "chip", "nvidia", "tech", "apple"]):
         return "tech"
 
-    if any(w in t for w in ["bank", "interest", "fed"]):
+    if any(w in t for w in ["bank", "interest", "fed", "rates"]):
         return "financial"
+
+    if any(w in t for w in ["drug", "health", "fda", "pharma"]):
+        return "healthcare"
+
+    if any(w in t for w in ["retail", "amazon", "consumer", "tesla"]):
+        return "consumer"
+
+    if any(w in t for w in ["industrial", "manufacturing", "boeing"]):
+        return "industrial"
+
+    if any(w in t for w in ["google", "meta", "netflix"]):
+        return "communication"
 
     return None
 
@@ -95,6 +115,7 @@ async def get_price(session, symbol):
             data = await resp.json()
             c = data.get("c")
             pc = data.get("pc")
+
             if c and pc:
                 return round(((c - pc) / pc) * 100, 2), c
     except:
@@ -132,7 +153,7 @@ async def get_macro_analysis(session):
     spy, _ = await get_price(session, "SPY")
     qqq, _ = await get_price(session, "QQQ")
 
-    if spy and qqq:
+    if spy is not None and qqq is not None:
         if spy > 0 and qqq > 0:
             market = "📈 صاعد"
         elif spy < 0 and qqq < 0:
@@ -144,12 +165,15 @@ async def get_macro_analysis(session):
 
     signal = "⚖️ طبيعي"
 
-    if oil and oil > 1:
+    if oil is not None and oil > 1:
         signal = "🔥 تضخم"
-    if gold and gold > 1:
+
+    if gold is not None and gold > 1:
         signal = "🛡️ خوف"
-    if oil and gold and oil > 1 and gold > 1:
-        signal = "⚠️ تضخم + خوف"
+
+    if oil is not None and gold is not None:
+        if oil > 1 and gold > 1:
+            signal = "⚠️ تضخم + خوف"
 
     return {"oil": oil, "gold": gold, "market": market, "signal": signal}
 
@@ -172,7 +196,7 @@ def make_decision(score, sector_trend, macro):
 
     return "⚪ مراقبة"
 
-# ====== 🔥 Pre-Explosion Scanner ======
+# ====== Pre-Explosion Scanner ======
 async def get_explosion_candidates(session):
     try:
         nasdaq_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NASDAQ&token={API_KEY}"
@@ -186,7 +210,6 @@ async def get_explosion_candidates(session):
 
         symbols = nasdaq + nyse
 
-        # 🔁 Rotation
         if len(symbols) > 120:
             start = random.randint(0, len(symbols) - 120)
             symbols = symbols[start:start + 120]
@@ -204,11 +227,8 @@ async def get_explosion_candidates(session):
             if change is None or price is None:
                 continue
 
-            # ❌ استبعاد صغير جدًا
             if price < 0.3:
                 continue
-
-            label = None
 
             if 2 <= change < 5:
                 label = "🟡 مراقبة"
@@ -216,9 +236,10 @@ async def get_explosion_candidates(session):
                 label = "🔥 مرشح انفجار"
             elif change >= 10:
                 label = "🚀 انفجار"
+            else:
+                continue
 
-            if label:
-                candidates.append((symbol, price, change, label))
+            candidates.append((symbol, price, change, label))
 
         return candidates[:5]
 
@@ -241,11 +262,14 @@ async def main():
         while True:
             try:
                 macro = await get_macro_analysis(session)
-
-                # ===== الأخبار =====
                 news_list = await get_news(session)
 
-                for n in news_list:
+                # تنظيف الذاكرة
+                if len(sent_news) > 100:
+                    sent_news.clear()
+
+                # ===== الأخبار =====
+                for n in news_list[:10]:
                     title = n.get("headline")
                     url = n.get("url")
 
@@ -258,7 +282,7 @@ async def main():
 
                     analysis = analyze_news(title)
 
-                    if analysis["score"] == 0:
+                    if abs(analysis["score"]) < 1:
                         continue
 
                     sector = detect_sector(title)
@@ -281,11 +305,6 @@ async def main():
 
                     msg = (
                         f"{analysis['label']}\n\n"
-                        f"📈 السوق: {macro['market']}\n"
-                        f"━━━━━━━━━━━━━━\n\n"
-                        f"🛢️ النفط: {macro['oil']}%\n"
-                        f"🪙 الذهب: {macro['gold']}%\n"
-                        f"🧠 {macro['signal']}\n\n"
                         f"🏭 القطاع: {sector_text}\n\n"
                         f"📈 الأسهم:\n{stocks_text if stocks_text else '—'}\n\n"
                         f"🧠 الأسباب: {', '.join(analysis['reasons'])}\n\n"
@@ -304,7 +323,7 @@ async def main():
                     sent_news.add(nid)
                     await asyncio.sleep(2)
 
-                # ===== 🔥 Pre-Explosion =====
+                # ===== Pre-Explosion =====
                 candidates = await get_explosion_candidates(session)
 
                 for symbol, price, change, label in candidates:
