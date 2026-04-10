@@ -1,6 +1,5 @@
-import requests
 import asyncio
-import json
+import aiohttp
 import hashlib
 import os
 from telegram import Bot
@@ -12,238 +11,202 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 
 bot = Bot(token=TOKEN)
 
+# ✅ أضفنا Chat ID إضافي
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
-    6315087880
+    6315087880,   # الموجود عندك
+    1234567890    # 👈 حط هنا ID الشخص الثاني
 ]
 
 # ====== تخزين ======
 sent_news = set()
-sent_movers = set()
+
+# ====== القطاعات ======
+SECTORS = {
+    "energy": ["XOM", "CVX", "OXY"],
+    "tech": ["AAPL", "MSFT", "NVDA"],
+    "financial": ["JPM", "GS", "BAC"]
+}
 
 # ====== أدوات ======
 def news_id(title):
-    return hashlib.md5(title.lower()[:60].encode()).hexdigest()
+    return hashlib.md5(title.lower().encode()).hexdigest()
 
-def extract_ticker(title):
-    for w in title.split():
-        if w.isupper() and 2 <= len(w) <= 5:
-            return w
+def smart_translate(text):
+    try:
+        return GoogleTranslator(source='auto', target='ar').translate(text)
+    except:
+        return text
+
+# ====== تحليل الخبر ======
+def analyze_news(title):
+    t = title.lower()
+
+    positive = ["surge", "soar", "beat", "growth", "strong", "upgrade"]
+    negative = ["miss", "drop", "crash", "loss", "downgrade"]
+
+    score = 0
+
+    for w in positive:
+        if w in t:
+            score += 2
+
+    for w in negative:
+        if w in t:
+            score -= 2
+
+    if score >= 3:
+        label = "🚀 إيجابي قوي"
+    elif score > 0:
+        label = "📈 إيجابي"
+    elif score <= -3:
+        label = "📉 سلبي قوي"
+    elif score < 0:
+        label = "⚠️ سلبي"
+    else:
+        label = "⚖️ متضارب"
+
+    return {
+        "score": score,
+        "label": label
+    }
+
+# ====== تحديد القطاع ======
+def detect_sector(title):
+    t = title.lower()
+
+    if "oil" in t or "crude" in t:
+        return "energy"
+    if "ai" in t or "chip" in t or "nvidia" in t:
+        return "tech"
+    if "bank" in t or "interest" in t:
+        return "financial"
+
     return None
 
-def smart_translate(title):
+# ====== جلب السعر ======
+async def get_price(session, symbol):
+    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
+
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(title)
-    except:
-        return title
+        async with session.get(url) as resp:
+            data = await resp.json()
+            c = data.get("c")
+            pc = data.get("pc")
 
-# ====== تحليل ======
-def smart_analysis(title):
-    t = title.lower()
-    score = 0
-    confidence = 0
-
-    positive = {"surge":3,"soar":3,"beat":4,"growth":2}
-    negative = {"miss":-4,"lower":-3,"drop":-2,"crash":-5}
-
-    for w,v in positive.items():
-        if w in t:
-            score += v
-            confidence += 1
-
-    for w,v in negative.items():
-        if w in t:
-            score += v
-            confidence += 1
-
-    if score >= 4:
-        label,emoji = "🚀 إيجابي قوي","🟢"
-    elif score >= 2:
-        label,emoji = "📈 إيجابي","🟢"
-    elif score <= -4:
-        label,emoji = "📉 سلبي قوي","🔴"
-    elif score <= -2:
-        label,emoji = "⚠️ سلبي","🔴"
-    else:
-        label,emoji = "⚖️ متضارب","⚪"
-
-    conf = "🔵 ثقة عالية" if confidence >= 2 else "⚪ ثقة ضعيفة"
-
-    return f"{label} | {conf}", emoji
-
-def news_impact(title):
-    t = title.lower()
-    score = 0
-    if "earnings" in t:
-        score += 4
-    if "inflation" in t:
-        score += 3
-    if "surge" in t or "crash" in t:
-        score += 2
-    return score
-
-def detect_opportunity(analysis, impact):
-    if "🚀" in analysis and impact >= 4:
-        return "💥 فرصة قوية"
-    elif "📈" in analysis:
-        return "💰 فرصة محتملة"
-    elif "⚠️" in analysis or "📉" in analysis:
-        return "🚫 تجنب"
-    return "⚪ مراقبة"
-
-# ====== السعر ======
-def get_price(symbol):
-    try:
-        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-        d = requests.get(url, timeout=5).json()
-        c = d.get("c")
-        pc = d.get("pc")
-        if c and pc:
-            change = ((c - pc) / pc) * 100
-            return c, round(change, 2)
+            if c and pc:
+                change = ((c - pc) / pc) * 100
+                return round(change, 2)
     except:
         pass
-    return None, None
 
-# ====== السوق ======
-def market_status():
-    _, spy = get_price("SPY")
-    _, qqq = get_price("QQQ")
+    return None
 
-    if spy and qqq:
-        if spy > 0 and qqq > 0:
-            return "📈 السوق صاعد"
-        elif spy < 0 and qqq < 0:
-            return "📉 السوق هابط"
+# ====== تحليل القطاع ======
+async def analyze_sector(session, sector):
+    stocks = SECTORS.get(sector, [])
+    results = []
 
-    return "⚖️ السوق متذبذب"
+    for s in stocks:
+        change = await get_price(session, s)
+        if change is not None:
+            results.append((s, change))
 
-# ====== الأخبار ======
-def get_news():
+    if not results:
+        return "غير واضح", []
+
+    avg = sum(c for _, c in results) / len(results)
+
+    if avg > 1:
+        trend = "📈 صاعد"
+    elif avg < -1:
+        trend = "📉 هابط"
+    else:
+        trend = "⚖️ متذبذب"
+
+    return trend, results
+
+# ====== جلب الأخبار ======
+async def get_news(session):
+    url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
+
     try:
-        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-        return requests.get(url, timeout=5).json()
-    except:
-        return []
-
-# ====== Top Movers (NASDAQ + NYSE فقط 🔥) ======
-def get_top_movers():
-    try:
-        nasdaq_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NASDAQ&token={API_KEY}"
-        nyse_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NYSE&token={API_KEY}"
-
-        symbols = requests.get(nasdaq_url).json() + requests.get(nyse_url).json()
-
-        movers = []
-
-        for s in symbols[:80]:
-            symbol = s.get("symbol")
-
-            if len(symbol) > 5:
-                continue
-
-            price, change = get_price(symbol)
-
-            if not price:
-                continue
-
-            # فلترة ذكية
-            if price < 1:
-                if abs(change) < 10:
-                    continue
-            else:
-                if abs(change) < 5:
-                    continue
-
-            movers.append((symbol, price, change))
-
-        return movers[:3]
-
+        async with session.get(url) as resp:
+            return await resp.json()
     except:
         return []
 
 # ====== التشغيل ======
 async def main():
-    while True:
-        try:
-            market = market_status()
+    async with aiohttp.ClientSession() as session:
 
-            # ===== الأخبار =====
-            for n in get_news():
-                title = n.get("headline")
-                url = n.get("url")
+        while True:
+            try:
+                news_list = await get_news(session)
 
-                if not title or not url:
-                    continue
+                for n in news_list:
+                    title = n.get("headline")
+                    url = n.get("url")
 
-                nid = news_id(title)
-                if nid in sent_news:
-                    continue
+                    if not title or not url:
+                        continue
 
-                impact = news_impact(title)
-                if impact < 2:
-                    continue
+                    nid = news_id(title)
+                    if nid in sent_news:
+                        continue
 
-                analysis, emoji = smart_analysis(title)
-                opportunity = detect_opportunity(analysis, impact)
-                ar = smart_translate(title)
-                ticker = extract_ticker(title)
+                    # تحليل
+                    analysis = analyze_news(title)
 
-                msg = (
-                    f"{emoji} خبر جديد\n\n"
-                    f"{market}\n"
-                    f"━━━━━━━━━━━━━━\n\n"
-                    f"🏢 {ticker if ticker else 'عام'}\n"
-                    f"📊 {analysis}\n"
-                    f"💰 {opportunity}\n\n"
-                    f"📰 {title}\n\n"
-                    f"🇸🇦 {ar}\n\n"
-                    f"🔗 {url}"
-                )
+                    # فلترة الأخبار الضعيفة
+                    if analysis["score"] == 0:
+                        continue
 
-                for chat_id in CHAT_IDS:
-                    await bot.send_message(chat_id=chat_id, text=msg)
+                    # قطاع
+                    sector = detect_sector(title)
 
-                sent_news.add(nid)
-                await asyncio.sleep(2)
+                    sector_text = "غير محدد"
+                    stocks_text = ""
 
-            # ===== Top Movers =====
-            for symbol, price, change in get_top_movers():
+                    if sector:
+                        trend, stocks = await analyze_sector(session, sector)
 
-                mid = f"{symbol}_{round(change)}"
-                if mid in sent_movers:
-                    continue
+                        sector_text = f"{sector.upper()} ({trend})"
 
-                sent_movers.add(mid)
+                        for s, c in stocks:
+                            arrow = "↑" if c > 0 else "↓"
+                            stocks_text += f"{s} {arrow} {c}%\n"
 
-                direction = "📈 صعود قوي" if change > 0 else "📉 هبوط قوي"
-                emoji = "🚀" if change > 0 else "🔻"
-                risk = "⚠️ Penny Stock" if price < 1 else ""
+                    # ترجمة
+                    ar = smart_translate(title)
 
-                msg = (
-                    f"{emoji} سهم قوي يتحرك\n\n"
-                    f"🏢 {symbol}\n"
-                    f"{direction}\n"
-                    f"📊 {change}%\n"
-                    f"{risk}\n\n"
-                    f"💰 فرصة محتملة"
-                )
+                    # الرسالة
+                    msg = (
+                        f"{analysis['label']}\n\n"
+                        f"━━━━━━━━━━━━━━\n\n"
+                        f"🏭 القطاع: {sector_text}\n\n"
+                        f"📈 الأسهم:\n{stocks_text if stocks_text else '—'}\n\n"
+                        f"📰 {title}\n\n"
+                        f"🇸🇦 {ar}\n\n"
+                        f"🔗 {url}"
+                    )
 
-                for chat_id in CHAT_IDS:
-                    await bot.send_message(chat_id=chat_id, text=msg)
+                    # إرسال
+                    for chat_id in CHAT_IDS:
+                        try:
+                            await bot.send_message(chat_id=chat_id, text=msg)
+                        except:
+                            pass
 
-                await asyncio.sleep(2)
+                    sent_news.add(nid)
+                    await asyncio.sleep(2)
 
-            # تنظيف
-            if len(sent_movers) > 50:
-                sent_movers.clear()
+                print("يتم التحديث...")
+                await asyncio.sleep(20)
 
-            print("يتم التحديث...")
-            await asyncio.sleep(20)
-
-        except Exception as e:
-            print("خطأ:", e)
-            await asyncio.sleep(10)
+            except Exception as e:
+                print("خطأ:", e)
+                await asyncio.sleep(10)
 
 # ===== تشغيل =====
 if __name__ == "__main__":
