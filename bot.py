@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import hashlib
 import os
+import random
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -17,7 +18,7 @@ CHAT_IDS = [
 ]
 
 sent_news = set()
-sent_movers = set()
+sent_alerts = set()
 
 SECTORS = {
     "energy": ["XOM", "CVX", "OXY"],
@@ -39,16 +40,24 @@ def smart_translate(text):
 def analyze_news(title):
     t = title.lower()
 
-    positive = ["surge", "soar", "beat", "growth", "strong"]
-    negative = ["miss", "drop", "crash", "loss", "downgrade"]
-
     score = 0
-    for w in positive:
-        if w in t:
-            score += 2
-    for w in negative:
-        if w in t:
-            score -= 2
+    reasons = []
+
+    if any(w in t for w in ["beat", "strong", "growth", "surge", "record"]):
+        score += 3
+        reasons.append("نتائج قوية")
+
+    if any(w in t for w in ["miss", "loss", "drop", "crash", "warning"]):
+        score -= 3
+        reasons.append("نتائج ضعيفة")
+
+    if any(w in t for w in ["war", "iran", "conflict", "tension"]):
+        score -= 2
+        reasons.append("توتر جيوسياسي")
+
+    if any(w in t for w in ["inflation", "oil", "energy"]):
+        score += 1
+        reasons.append("تأثير اقتصادي")
 
     if score >= 3:
         label = "🚀 إيجابي قوي"
@@ -61,16 +70,18 @@ def analyze_news(title):
     else:
         label = "⚖️ متضارب"
 
-    return {"score": score, "label": label}
+    return {"score": score, "label": label, "reasons": reasons}
 
-# ====== القطاع ======
+# ====== تحديد القطاع ======
 def detect_sector(title):
     t = title.lower()
 
     if any(w in t for w in ["oil", "energy", "gas", "opec", "iran"]):
         return "energy"
+
     if any(w in t for w in ["ai", "chip", "nvidia", "tech"]):
         return "tech"
+
     if any(w in t for w in ["bank", "interest", "fed"]):
         return "financial"
 
@@ -90,7 +101,7 @@ async def get_price(session, symbol):
         pass
     return None, None
 
-# ====== القطاع ======
+# ====== تحليل القطاع ======
 async def analyze_sector(session, sector):
     stocks = SECTORS.get(sector, [])
     results = []
@@ -132,6 +143,7 @@ async def get_macro_analysis(session):
         market = "غير واضح"
 
     signal = "⚖️ طبيعي"
+
     if oil and oil > 1:
         signal = "🔥 تضخم"
     if gold and gold > 1:
@@ -141,7 +153,7 @@ async def get_macro_analysis(session):
 
     return {"oil": oil, "gold": gold, "market": market, "signal": signal}
 
-# ====== 🧠 Decision Engine (محسن) ======
+# ====== القرار ======
 def make_decision(score, sector_trend, macro):
     if score < 0 and "هابط" in sector_trend:
         return "🚫 تجنب قوي"
@@ -160,19 +172,31 @@ def make_decision(score, sector_trend, macro):
 
     return "⚪ مراقبة"
 
-# ====== Top Movers ======
-async def get_top_movers(session):
-    url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={API_KEY}"
+# ====== 🔥 Pre-Explosion Scanner ======
+async def get_explosion_candidates(session):
     try:
-        async with session.get(url) as resp:
-            symbols = await resp.json()
+        nasdaq_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NASDAQ&token={API_KEY}"
+        nyse_url = f"https://finnhub.io/api/v1/stock/symbol?exchange=NYSE&token={API_KEY}"
 
-        movers = []
+        async with session.get(nasdaq_url) as r1:
+            nasdaq = await r1.json()
 
-        for s in symbols[:60]:
+        async with session.get(nyse_url) as r2:
+            nyse = await r2.json()
+
+        symbols = nasdaq + nyse
+
+        # 🔁 Rotation
+        if len(symbols) > 120:
+            start = random.randint(0, len(symbols) - 120)
+            symbols = symbols[start:start + 120]
+
+        candidates = []
+
+        for s in symbols:
             symbol = s.get("symbol")
 
-            if not symbol or len(symbol) > 5:
+            if not symbol or not symbol.isalpha() or len(symbol) > 5:
                 continue
 
             change, price = await get_price(session, symbol)
@@ -180,17 +204,23 @@ async def get_top_movers(session):
             if change is None or price is None:
                 continue
 
-            # فلترة ذكية
-            if price < 1:
-                if abs(change) < 10:
-                    continue
-            else:
-                if abs(change) < 5:
-                    continue
+            # ❌ استبعاد صغير جدًا
+            if price < 0.3:
+                continue
 
-            movers.append((symbol, price, change))
+            label = None
 
-        return movers[:3]
+            if 2 <= change < 5:
+                label = "🟡 مراقبة"
+            elif 5 <= change < 10:
+                label = "🔥 مرشح انفجار"
+            elif change >= 10:
+                label = "🚀 انفجار"
+
+            if label:
+                candidates.append((symbol, price, change, label))
+
+        return candidates[:5]
 
     except:
         return []
@@ -207,6 +237,7 @@ async def get_news(session):
 # ====== التشغيل ======
 async def main():
     async with aiohttp.ClientSession() as session:
+
         while True:
             try:
                 macro = await get_macro_analysis(session)
@@ -257,6 +288,7 @@ async def main():
                         f"🧠 {macro['signal']}\n\n"
                         f"🏭 القطاع: {sector_text}\n\n"
                         f"📈 الأسهم:\n{stocks_text if stocks_text else '—'}\n\n"
+                        f"🧠 الأسباب: {', '.join(analysis['reasons'])}\n\n"
                         f"💰 القرار: {decision}\n\n"
                         f"📰 {title}\n\n"
                         f"🇸🇦 {ar}\n\n"
@@ -272,26 +304,22 @@ async def main():
                     sent_news.add(nid)
                     await asyncio.sleep(2)
 
-                # ===== Top Movers =====
-                movers = await get_top_movers(session)
+                # ===== 🔥 Pre-Explosion =====
+                candidates = await get_explosion_candidates(session)
 
-                for symbol, price, change in movers:
-                    mid = f"{symbol}_{round(change)}"
-                    if mid in sent_movers:
+                for symbol, price, change, label in candidates:
+                    cid = f"{symbol}_{round(change)}"
+                    if cid in sent_alerts:
                         continue
 
-                    sent_movers.add(mid)
-
-                    direction = "📈 صعود قوي" if change > 0 else "📉 هبوط قوي"
-                    emoji = "🚀" if change > 0 else "🔻"
+                    sent_alerts.add(cid)
 
                     msg = (
-                        f"{emoji} سهم يتحرك بقوة\n\n"
+                        f"{label}\n\n"
                         f"🏢 {symbol}\n"
-                        f"{direction}\n"
                         f"📊 {change}%\n"
                         f"💵 ${price}\n\n"
-                        f"💰 فرصة محتملة"
+                        f"⚡ حركة غير طبيعية"
                     )
 
                     for chat_id in CHAT_IDS:
@@ -302,8 +330,8 @@ async def main():
 
                     await asyncio.sleep(2)
 
-                if len(sent_movers) > 50:
-                    sent_movers.clear()
+                if len(sent_alerts) > 50:
+                    sent_alerts.clear()
 
                 print("يتم التحديث...")
                 await asyncio.sleep(20)
