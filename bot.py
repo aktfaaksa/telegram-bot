@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence ULTRA (Balanced Mode) =====
+# ===== Alpha Market Intelligence ULTRA (Fixed & Stable) =====
 
 import asyncio
 import aiohttp
@@ -174,25 +174,21 @@ async def main():
                                 continue
 
                         score = score_news(title)
-
-                        # 🔥 التعديل هنا
-                        if score < 1:
+                        if score < 2:
                             continue
 
                         change = await get_price(session, symbol)
-
-                        # 🔥 التعديل هنا (خففنا الشرط)
-                        if change is None:
+                        if not change or abs(change) < 0.1:
                             continue
 
                         sector = detect_sector(title)
-
-                        print(f"DEBUG: {symbol} | score={score} | change={change}")
 
                         last_sent_symbol[symbol] = now_time
                         sent_news.add(nid)
 
                         arrow = "📈" if change > 0 else "📉"
+
+                        print(f"🚀 Sending: {symbol} | Score: {score} | Change: {change}")
 
                         msg = f"""🚨 ULTRA Signal
 
