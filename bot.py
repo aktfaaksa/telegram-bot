@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v3.2 =====
-# Ultra Stable Version + Full Protection
+# ===== Alpha Market Intelligence v3.4 =====
+# Clean Version - No Spam (Only Company News)
 
 import asyncio
 import aiohttp
@@ -37,8 +37,6 @@ WATCHLIST = [
 sent_news = set()
 last_news_sent = 0
 last_index_sent = 0
-market_open_sent = False
-market_close_sent = False
 
 # ====== أدوات ======
 def normalize_title(title):
@@ -46,8 +44,7 @@ def normalize_title(title):
 
 def news_id(title):
     try:
-        clean = normalize_title(title)
-        return hashlib.md5(clean.encode()).hexdigest()
+        return hashlib.md5(normalize_title(title).encode()).hexdigest()
     except:
         return None
 
@@ -57,44 +54,29 @@ def translate(text):
     except:
         return text
 
+# 🔥 كشف السهم بشكل ذكي
 def detect_stock(title):
     t = str(title).lower()
+
     for s in WATCHLIST:
-        if s.lower() in t:
+        name = s.lower()
+        if f" {name} " in f" {t} ":
             return s
     return None
 
 # ====== تحليل ======
 def analyze(title):
     t = str(title).lower()
-    score = 0
 
-    if any(w in t for w in ["beat","strong","growth","surge","profit"]):
-        score += 3
-    if any(w in t for w in ["miss","loss","drop","crash"]):
-        score -= 3
-
-    if score >= 3:
+    if any(w in t for w in ["beat","strong","growth","surge","profit","record"]):
         return "🚀 إيجابي قوي"
-    elif score > 0:
-        return "📈 إيجابي"
-    elif score <= -3:
+
+    if any(w in t for w in ["miss","loss","drop","crash","weak"]):
         return "📉 سلبي قوي"
-    elif score < 0:
-        return "⚠️ سلبي"
-    else:
-        return "⚖️ عادي"
+
+    return "📊 خبر مهم"
 
 # ====== Finnhub ======
-async def get_general_news(session):
-    try:
-        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-        async with session.get(url) as r:
-            data = await r.json()
-            return data if isinstance(data, list) else []
-    except:
-        return []
-
 async def get_company_news(session, symbol):
     try:
         url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&token={API_KEY}"
@@ -103,31 +85,6 @@ async def get_company_news(session, symbol):
             return data if isinstance(data, list) else []
     except:
         return []
-
-# ====== RSS ======
-def get_rss(url):
-    try:
-        feed = feedparser.parse(url)
-        return feed.entries[:5] if feed.entries else []
-    except:
-        return []
-
-# ====== السوق ======
-def is_market_open():
-    now = datetime.now()
-    if now.weekday() > 4:
-        return False
-
-    minutes = now.hour * 60 + now.minute
-    return 990 <= minutes <= 1380
-
-def is_market_just_open():
-    now = datetime.now()
-    return now.hour == 16 and now.minute == 30
-
-def is_market_close():
-    now = datetime.now()
-    return now.hour == 23 and now.minute == 0
 
 # ====== السعر ======
 async def get_price(session, symbol):
@@ -144,97 +101,50 @@ async def get_price(session, symbol):
 
 # ====== التشغيل ======
 async def main():
-    global last_news_sent, last_index_sent
-    global market_open_sent, market_close_sent
-    global sent_news
+    global last_news_sent, sent_news
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                now = datetime.now()
                 now_time = time.time()
 
-                # ===== افتتاح =====
-                if is_market_just_open() and not market_open_sent:
-                    for c in CHAT_IDS:
-                        await bot.send_message(chat_id=c, text="🟢 افتتاح السوق الأمريكي")
-                    market_open_sent = True
-
-                # ===== إغلاق =====
-                if is_market_close() and not market_close_sent:
-                    for c in CHAT_IDS:
-                        await bot.send_message(chat_id=c, text="🔴 إغلاق السوق الأمريكي")
-                    market_close_sent = True
-
-                if now.hour == 1:
-                    market_open_sent = False
-                    market_close_sent = False
-
-                # ===== مؤشرات =====
-                if is_market_open() and (now_time - last_index_sent > 3600):
-                    last_index_sent = now_time
-
-                    spy = await get_price(session,"SPY")
-                    qqq = await get_price(session,"QQQ")
-                    dia = await get_price(session,"DIA")
-
-                    msg = f"""📊 مؤشرات السوق
-
-💻 ناسداك: {qqq if qqq else '—'}%
-📈 S&P500: {spy if spy else '—'}%
-🏛️ داو جونز: {dia if dia else '—'}%"""
-
-                    for c in CHAT_IDS:
-                        await bot.send_message(chat_id=c, text=msg)
-
-                # ===== الأخبار =====
-                if now_time - last_news_sent > 300:
+                if now_time - last_news_sent > 180:
                     last_news_sent = now_time
 
-                    news = []
-
-                    # Finnhub عام
-                    for n in await get_general_news(session):
-                        if not isinstance(n, dict):
-                            continue
-                        news.append((n.get("headline"), n.get("url")))
-
-                    # RSS
-                    for n in get_rss("https://www.cnbc.com/id/100003114/device/rss/rss.html"):
-                        news.append((n.title, n.link))
-
-                    for n in get_rss("https://feeds.reuters.com/reuters/businessNews"):
-                        news.append((n.title, n.link))
-
-                    # شركات
                     for symbol in WATCHLIST[:10]:
-                        for n in await get_company_news(session, symbol):
+                        news_list = await get_company_news(session, symbol)
+
+                        for n in news_list[:1]:
                             if not isinstance(n, dict):
                                 continue
-                            news.append((n.get("headline"), n.get("url")))
 
-                    # معالجة
-                    for title, url in news:
-                        if not title or not url:
-                            continue
+                            title = n.get("headline")
+                            url = n.get("url")
 
-                        nid = news_id(title)
-                        if not nid or nid in sent_news:
-                            continue
+                            if not title or not url:
+                                continue
 
-                        label = analyze(title)
-                        stock = detect_stock(title)
+                            # 🚨 فلترة سياسية
+                            if any(word in title.lower() for word in [
+                                "iran","israel","war","nato","politics","trump"
+                            ]):
+                                continue
 
-                        price_text = ""
-                        if stock:
-                            change = await get_price(session, stock)
+                            nid = news_id(title)
+                            if not nid or nid in sent_news:
+                                continue
+
+                            label = analyze(title)
+                            change = await get_price(session, symbol)
+
+                            price_text = ""
                             if change:
                                 arrow = "📈" if change > 0 else "📉"
-                                price_text = f"\n💼 {stock} {arrow} {change}%\n"
+                                price_text = f"\n💼 {symbol} {arrow} {change}%\n"
 
-                        ar = translate(title)
+                            ar = translate(title)
 
-                        msg = f"""{label}
+                            msg = f"""{label}
 {price_text}
 📰 {title}
 
@@ -242,15 +152,12 @@ async def main():
 
 🔗 {url}"""
 
-                        for c in CHAT_IDS:
-                            await bot.send_message(chat_id=c, text=msg)
+                            for c in CHAT_IDS:
+                                await bot.send_message(chat_id=c, text=msg)
 
-                        sent_news.add(nid)
+                            sent_news.add(nid)
 
-                        if len(sent_news) > 500:
-                            sent_news = set(list(sent_news)[-400:])
-
-                        await asyncio.sleep(1)
+                            await asyncio.sleep(1)
 
                 await asyncio.sleep(20)
 
