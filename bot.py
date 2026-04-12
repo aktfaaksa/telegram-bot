@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v3.1 =====
-# Fixed Version + Stable News Handling
+# ===== Alpha Market Intelligence v3.2 =====
+# Ultra Stable Version + Full Protection
 
 import asyncio
 import aiohttp
@@ -87,18 +87,20 @@ def analyze(title):
 
 # ====== Finnhub ======
 async def get_general_news(session):
-    url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     try:
+        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
         async with session.get(url) as r:
-            return await r.json()
+            data = await r.json()
+            return data if isinstance(data, list) else []
     except:
         return []
 
 async def get_company_news(session, symbol):
-    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&token={API_KEY}"
     try:
+        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&token={API_KEY}"
         async with session.get(url) as r:
-            return await r.json()
+            data = await r.json()
+            return data if isinstance(data, list) else []
     except:
         return []
 
@@ -106,7 +108,7 @@ async def get_company_news(session, symbol):
 def get_rss(url):
     try:
         feed = feedparser.parse(url)
-        return feed.entries[:5]
+        return feed.entries[:5] if feed.entries else []
     except:
         return []
 
@@ -129,11 +131,12 @@ def is_market_close():
 
 # ====== السعر ======
 async def get_price(session, symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     try:
+        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
         async with session.get(url) as r:
             d = await r.json()
-            if d.get("c") and d.get("pc"):
+
+            if isinstance(d, dict) and d.get("c") and d.get("pc"):
                 return round(((d["c"] - d["pc"]) / d["pc"]) * 100, 2)
     except:
         pass
@@ -190,8 +193,10 @@ async def main():
 
                     news = []
 
-                    # Finnhub
+                    # Finnhub عام
                     for n in await get_general_news(session):
+                        if not isinstance(n, dict):
+                            continue
                         news.append((n.get("headline"), n.get("url")))
 
                     # RSS
@@ -204,6 +209,8 @@ async def main():
                     # شركات
                     for symbol in WATCHLIST[:10]:
                         for n in await get_company_news(session, symbol):
+                            if not isinstance(n, dict):
+                                continue
                             news.append((n.get("headline"), n.get("url")))
 
                     # معالجة
@@ -240,7 +247,6 @@ async def main():
 
                         sent_news.add(nid)
 
-                        # تنظيف آمن
                         if len(sent_news) > 500:
                             sent_news = set(list(sent_news)[-400:])
 
@@ -254,4 +260,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
