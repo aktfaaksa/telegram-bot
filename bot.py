@@ -1,4 +1,3 @@
-
 # ===== Alpha News Engine v2.1 =====
 # Market Indices (Market Hours) + News 24/7
 
