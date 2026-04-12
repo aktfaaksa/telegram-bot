@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v6.0 =====
-# News + Finnhub + Translation + Anti-Spam System
+# ===== Alpha Market Intelligence v7.0 =====
+# Smart News + Finnhub + Clean Output + No Spam
 
 import asyncio
 import aiohttp
@@ -23,10 +23,22 @@ CHAT_IDS = [
 bot = Bot(token=TOKEN)
 
 # ===== WATCHLIST =====
-WATCHLIST = [
-    "AAPL", "TSLA", "NVDA", "AMD",
-    "META", "MSFT", "AMZN"
-]
+WATCHLIST = ["AAPL", "TSLA", "NVDA", "AMD", "META", "MSFT", "AMZN"]
+
+# ===== COMPANY MAP =====
+COMPANY_MAP = {
+    "TESLA": "TSLA",
+    "APPLE": "AAPL",
+    "NVIDIA": "NVDA",
+    "ADVANCED MICRO DEVICES": "AMD",
+    "AMD": "AMD",
+    "META": "META",
+    "MICROSOFT": "MSFT",
+    "AMAZON": "AMZN",
+    "NETFLIX": "NFLX",
+    "INTEL": "INTC",
+    "BANK OF AMERICA": "BAC"
+}
 
 # ===== RSS =====
 RSS_FEEDS = [
@@ -38,10 +50,9 @@ RSS_FEEDS = [
 sent_hashes = set()
 seen_titles = set()
 
-# ===== LIMIT =====
+# ===== SETTINGS =====
 MAX_NEWS_PER_CYCLE = 10
 
-# ===== FILTER =====
 IMPORTANT_WORDS = [
     "earnings", "eps", "revenue", "guidance",
     "acquisition", "merger", "buyout",
@@ -56,16 +67,14 @@ def translate_text(text):
     except:
         return text
 
-# ===== HASH (ANTI DUPLICATE) =====
+# ===== ANTI DUP =====
 def is_new(title, link):
-    text = title + link
-    h = hashlib.md5(text.encode()).hexdigest()
+    h = hashlib.md5((title + link).encode()).hexdigest()
     if h in sent_hashes:
         return False
     sent_hashes.add(h)
     return True
 
-# ===== SIMILARITY FILTER =====
 def normalize_title(title):
     return title.lower()[:60]
 
@@ -78,45 +87,60 @@ def is_unique(title):
 
 # ===== CATEGORY =====
 def categorize_news(title):
-    title = title.lower()
-
-    if any(x in title for x in ["earnings", "eps", "revenue", "guidance"]):
+    t = title.lower()
+    if any(x in t for x in ["earnings", "eps", "revenue", "guidance"]):
         return "🟢 Earnings"
-    elif any(x in title for x in ["acquisition", "merger", "buyout"]):
+    elif any(x in t for x in ["acquisition", "merger", "buyout"]):
         return "🔵 M&A"
-    elif any(x in title for x in ["upgrade", "downgrade", "rating", "price target"]):
+    elif any(x in t for x in ["upgrade", "downgrade", "rating"]):
         return "🟡 Analyst"
-    elif any(x in title for x in ["fda", "approval"]):
+    elif any(x in t for x in ["fda", "approval"]):
         return "🟣 Approval"
     else:
         return "🔴 Macro"
 
-# ===== SYMBOL =====
+# ===== SYMBOL DETECTION =====
 def extract_symbol(title):
-    title = title.upper()
+    t = title.upper()
+
+    # ticker مباشر
     for symbol in WATCHLIST:
-        if symbol in title:
+        if symbol in t:
             return symbol
+
+    # اسم شركة
+    for name, symbol in COMPANY_MAP.items():
+        if name in t:
+            return symbol
+
     return None
 
-# ===== FINNHUB PRICE =====
+# ===== FINNHUB =====
 async def get_stock_data(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     async with session.get(url) as resp:
         return await resp.json()
 
-# ===== FINNHUB MARKET NEWS =====
 async def get_finnhub_market_news(session):
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     async with session.get(url) as resp:
         data = await resp.json()
 
-    return [
-        {"title": item["headline"], "link": item["url"]}
-        for item in data[:10]
-    ]
+    news = []
+    for item in data[:10]:
+        link = item.get("url")
 
-# ===== FINNHUB COMPANY NEWS =====
+        # تنظيف الرابط
+        if not link or "finnhub.io/api" in link:
+            continue
+
+        news.append({
+            "title": item["headline"],
+            "link": link
+        })
+
+    return news
+
 async def get_company_news(session, symbol):
     today = datetime.utcnow().date()
     past = today - timedelta(days=2)
@@ -126,10 +150,20 @@ async def get_company_news(session, symbol):
     async with session.get(url) as resp:
         data = await resp.json()
 
-    return [
-        {"title": item["headline"], "link": item["url"], "symbol": symbol}
-        for item in data[:5]
-    ]
+    news = []
+    for item in data[:5]:
+        link = item.get("url")
+
+        if not link or "finnhub.io/api" in link:
+            continue
+
+        news.append({
+            "title": item["headline"],
+            "link": link,
+            "symbol": symbol
+        })
+
+    return news
 
 # ===== RSS =====
 def get_rss_news():
@@ -156,11 +190,10 @@ async def get_all_news(session):
     return all_news
 
 # ===== SEND =====
-async def send_news(bot, session, news):
+async def send_news(bot, session, news, sent_symbols):
     title = news["title"]
     link = news["link"]
 
-    # 🧠 Anti-spam filters
     if not is_new(title, link):
         return False
 
@@ -177,7 +210,12 @@ async def send_news(bot, session, news):
 
     stock_info = ""
 
+    # منع تكرار نفس السهم
     if symbol:
+        if symbol in sent_symbols:
+            return False
+        sent_symbols.add(symbol)
+
         try:
             data = await get_stock_data(session, symbol)
             price = data.get("c")
@@ -187,7 +225,7 @@ async def send_news(bot, session, news):
 
 📊 {symbol}
 💰 Price: {price}$
-📈 Change: {change}%
+📈 Change: {round(change,2)}%
 """
         except:
             pass
@@ -217,7 +255,7 @@ async def send_news(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot Running (No Spam Mode)...")
+    print("🚀 Bot Running v7 (Clean Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -225,12 +263,13 @@ async def main():
                 news_list = await get_all_news(session)
 
                 news_sent = 0
+                sent_symbols = set()
 
                 for news in news_list:
                     if news_sent >= MAX_NEWS_PER_CYCLE:
                         break
 
-                    sent = await send_news(bot, session, news)
+                    sent = await send_news(bot, session, news, sent_symbols)
 
                     if sent:
                         news_sent += 1
