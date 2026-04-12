@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence ULTRA (Smart AI-like) =====
+# ===== Alpha Market Intelligence ULTRA (Fixed & Stable) =====
 
 import asyncio
 import aiohttp
@@ -30,26 +30,14 @@ WATCHLIST = [
     "NFLX","CRM","UBER"
 ]
 
-# ===== أسماء الشركات =====
 NAME_MAP = {
-    "apple": "AAPL",
-    "microsoft": "MSFT",
-    "nvidia": "NVDA",
-    "amazon": "AMZN",
-    "tesla": "TSLA",
-    "google": "GOOGL",
-    "meta": "META",
-    "netflix": "NFLX",
-    "uber": "UBER",
-    "intel": "INTC",
-    "amd": "AMD",
-    "exxon": "XOM",
-    "chevron": "CVX",
-    "goldman": "GS",
-    "nike": "NKE"
+    "apple": "AAPL","microsoft": "MSFT","nvidia": "NVDA",
+    "amazon": "AMZN","tesla": "TSLA","google": "GOOGL",
+    "meta": "META","netflix": "NFLX","uber": "UBER",
+    "intel": "INTC","amd": "AMD","exxon": "XOM",
+    "chevron": "CVX","goldman": "GS","nike": "NKE"
 }
 
-# ===== القطاعات =====
 SECTORS = {
     "TECH": ["ai","chip","cloud","data","software"],
     "ENERGY": ["oil","gas","energy","crude","opec"],
@@ -58,7 +46,6 @@ SECTORS = {
     "FINANCE": ["bank","fed","interest","inflation"],
 }
 
-# ===== فلترة غير مالية =====
 BLOCK_WORDS = [
     "couple","relationship","psychologist",
     "lifestyle","dating","family","health"
@@ -110,16 +97,13 @@ def score_news(title):
 
     return score
 
-# ===== استخراج السهم الصحيح 🔥 =====
 def find_symbol(title):
     title_lower = title.lower()
 
-    # 1. من اسم الشركة
     for name, sym in NAME_MAP.items():
         if name in title_lower:
             return sym
 
-    # 2. من التكرز (AAPL)
     words = re.findall(r'\b[A-Z]{2,5}\b', title)
     for w in words:
         if w in WATCHLIST:
@@ -130,11 +114,12 @@ def find_symbol(title):
 # ===== API =====
 async def get_news(session):
     try:
-        url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
+        url = f"https://finnhub.io/api/v1/news?category=business&token={API_KEY}"
         async with session.get(url) as r:
             data = await r.json()
             return data if isinstance(data, list) else []
-    except:
+    except Exception as e:
+        print("❌ News error:", e)
         return []
 
 async def get_price(session, symbol):
@@ -152,6 +137,8 @@ async def get_price(session, symbol):
 async def main():
     global last_run, sent_news, last_sent_symbol
 
+    print("🚀 BOT STARTED")
+
     async with aiohttp.ClientSession() as session:
         while True:
             try:
@@ -161,6 +148,7 @@ async def main():
                     last_run = now
 
                     news = await get_news(session)
+                    print("📰 News count:", len(news))
 
                     for n in news[:25]:
                         title = n.get("headline")
@@ -180,18 +168,17 @@ async def main():
                         if not symbol:
                             continue
 
-                        # منع التكرار
                         now_time = time.time()
                         if symbol in last_sent_symbol:
                             if now_time - last_sent_symbol[symbol] < 600:
                                 continue
 
                         score = score_news(title)
-                        if score < 3:
+                        if score < 2:
                             continue
 
                         change = await get_price(session, symbol)
-                        if not change or abs(change) < 0.3:
+                        if not change or abs(change) < 0.1:
                             continue
 
                         sector = detect_sector(title)
@@ -200,6 +187,8 @@ async def main():
                         sent_news.add(nid)
 
                         arrow = "📈" if change > 0 else "📉"
+
+                        print(f"🚀 Sending: {symbol} | Score: {score} | Change: {change}")
 
                         msg = f"""🚨 ULTRA Signal
 
@@ -222,7 +211,7 @@ async def main():
                 await asyncio.sleep(20)
 
             except Exception as e:
-                print("خطأ:", e)
+                print("❌ Error:", e)
                 await asyncio.sleep(10)
 
 if __name__ == "__main__":
