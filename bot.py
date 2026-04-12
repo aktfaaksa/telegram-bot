@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v8.0 =====
-# Smart Trading News Only (No Noise)
+# ===== Alpha Market Intelligence v9.0 =====
+# Smart Impact + No Spam + Trading Focus
 
 import asyncio
 import aiohttp
@@ -15,32 +15,19 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-CHAT_IDS = [
-    CHAT_ID_MAIN,
-    6315087880,
-]
+CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
 # ===== WATCHLIST =====
-WATCHLIST = ["AAPL", "TSLA", "NVDA", "AMD", "META", "MSFT", "AMZN", "NFLX", "INTC", "BAC"]
+WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 
 # ===== COMPANY MAP =====
 COMPANY_MAP = {
-    "TESLA": "TSLA",
-    "APPLE": "AAPL",
-    "NVIDIA": "NVDA",
-    "ADVANCED MICRO DEVICES": "AMD",
-    "AMD": "AMD",
-    "META": "META",
-    "MICROSOFT": "MSFT",
-    "AMAZON": "AMZN",
-    "NETFLIX": "NFLX",
-    "INTEL": "INTC",
-    "BANK OF AMERICA": "BAC",
-    "GOOGLE": "GOOGL",
-    "ALPHABET": "GOOGL",
-    "GOLDMAN SACHS": "GS"
+    "TESLA":"TSLA","APPLE":"AAPL","NVIDIA":"NVDA","AMD":"AMD",
+    "META":"META","MICROSOFT":"MSFT","AMAZON":"AMZN",
+    "NETFLIX":"NFLX","INTEL":"INTC","BANK OF AMERICA":"BAC",
+    "GOOGLE":"GOOGL","ALPHABET":"GOOGL","GOLDMAN SACHS":"GS"
 }
 
 # ===== RSS =====
@@ -56,16 +43,21 @@ seen_titles = set()
 # ===== SETTINGS =====
 MAX_NEWS_PER_CYCLE = 10
 
-IMPORTANT_WORDS = [
-    "earnings", "eps", "revenue", "guidance",
-    "acquisition", "merger", "buyout",
-    "upgrade", "downgrade", "rating",
-    "approval", "forecast", "beats", "misses"
+# ===== IMPACT LEVELS =====
+HIGH_IMPACT = [
+    "beats","misses","raises guidance","cuts forecast",
+    "acquisition","merger","buyout"
 ]
 
-WEAK_NEWS = [
-    "season", "outlook", "preview", "what to expect",
-    "kicks off", "entering", "expected to"
+MEDIUM_IMPACT = [
+    "upgrade","downgrade",
+    "fda","approval","clinical",
+    "contract","deal","partnership"
+]
+
+LOW_IMPACT = [
+    "buyback","dividend",
+    "insider buying","insider selling"
 ]
 
 # ===== TRANSLATION =====
@@ -75,80 +67,66 @@ def translate_text(text):
     except:
         return text
 
-# ===== ANTI DUP =====
+# ===== ANTI SPAM =====
 def is_new(title, link):
-    h = hashlib.md5((title + link).encode()).hexdigest()
+    h = hashlib.md5((title+link).encode()).hexdigest()
     if h in sent_hashes:
         return False
     sent_hashes.add(h)
     return True
 
-def normalize_title(title):
-    return title.lower()[:60]
-
 def is_unique(title):
-    short = normalize_title(title)
+    short = title.lower()[:60]
     if short in seen_titles:
         return False
     seen_titles.add(short)
     return True
 
-# ===== CATEGORY =====
-def categorize_news(title):
+# ===== IMPACT DETECTION =====
+def get_impact(title):
     t = title.lower()
 
-    if any(x in t for x in ["beats", "misses", "reports earnings", "eps"]):
-        return "🟢 Earnings Report"
-
-    elif "earnings" in t:
-        return "🟡 Earnings (General)"
-
-    elif any(x in t for x in ["acquisition", "merger", "buyout"]):
-        return "🔵 M&A"
-
-    elif any(x in t for x in ["upgrade", "downgrade", "rating"]):
-        return "🟣 Analyst"
-
+    if any(x in t for x in HIGH_IMPACT):
+        return "🔥 HIGH"
+    elif any(x in t for x in MEDIUM_IMPACT):
+        return "⚡ MEDIUM"
+    elif any(x in t for x in LOW_IMPACT):
+        return "⚪ LOW"
     else:
-        return "🔴 Macro"
+        return None
 
-# ===== SYMBOL DETECTION =====
+# ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
 
-    for symbol in WATCHLIST:
-        if symbol in t:
-            return symbol
+    for s in WATCHLIST:
+        if s in t:
+            return s
 
-    for name, symbol in COMPANY_MAP.items():
+    for name, s in COMPANY_MAP.items():
         if name in t:
-            return symbol
+            return s
 
     return None
 
 # ===== FINNHUB =====
-async def get_stock_data(session, symbol):
+async def get_stock(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-    async with session.get(url) as resp:
-        return await resp.json()
+    async with session.get(url) as r:
+        return await r.json()
 
-async def get_finnhub_market_news(session):
+async def get_market_news(session):
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-    async with session.get(url) as resp:
-        data = await resp.json()
+    async with session.get(url) as r:
+        data = await r.json()
 
-    news = []
-    for item in data[:10]:
-        link = item.get("url")
-        if not link or "finnhub.io/api" in link:
+    out = []
+    for n in data[:10]:
+        link = n.get("url")
+        if not link or "finnhub" in link:
             continue
-
-        news.append({
-            "title": item["headline"],
-            "link": link
-        })
-
-    return news
+        out.append({"title": n["headline"], "link": link})
+    return out
 
 async def get_company_news(session, symbol):
     today = datetime.utcnow().date()
@@ -156,68 +134,55 @@ async def get_company_news(session, symbol):
 
     url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={past}&to={today}&token={API_KEY}"
 
-    async with session.get(url) as resp:
-        data = await resp.json()
+    async with session.get(url) as r:
+        data = await r.json()
 
-    news = []
-    for item in data[:5]:
-        link = item.get("url")
-        if not link or "finnhub.io/api" in link:
+    out = []
+    for n in data[:5]:
+        link = n.get("url")
+        if not link or "finnhub" in link:
             continue
+        out.append({"title": n["headline"], "link": link, "symbol": symbol})
+    return out
 
-        news.append({
-            "title": item["headline"],
-            "link": link,
-            "symbol": symbol
-        })
-
-    return news
-
-# ===== RSS =====
-def get_rss_news():
-    news = []
+def get_rss():
+    out = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        for entry in feed.entries:
-            news.append({
-                "title": entry.title,
-                "link": entry.link
-            })
-    return news
+        for e in feed.entries:
+            out.append({"title": e.title, "link": e.link})
+    return out
 
 # ===== COLLECT =====
-async def get_all_news(session):
-    all_news = []
+async def get_all(session):
+    data = []
+    data.extend(get_rss())
+    data.extend(await get_market_news(session))
 
-    all_news.extend(get_rss_news())
-    all_news.extend(await get_finnhub_market_news(session))
+    for s in WATCHLIST:
+        data.extend(await get_company_news(session, s))
 
-    for symbol in WATCHLIST:
-        all_news.extend(await get_company_news(session, symbol))
-
-    return all_news
+    return data
 
 # ===== SEND =====
-async def send_news(bot, session, news, sent_symbols):
+async def send(bot, session, news, sent_symbols):
     title = news["title"]
     link = news["link"]
 
-    # Anti-spam
     if not is_new(title, link):
         return False
 
     if not is_unique(title):
         return False
 
-    if not any(word in title.lower() for word in IMPORTANT_WORDS):
-        return False
+    impact = get_impact(title)
 
-    if any(w in title.lower() for w in WEAK_NEWS):
+    # ❌ تجاهل غير المهم
+    if not impact:
         return False
 
     symbol = news.get("symbol") or extract_symbol(title)
 
-    # 🔥 أهم شرط: لازم سهم
     if not symbol:
         return False
 
@@ -226,27 +191,26 @@ async def send_news(bot, session, news, sent_symbols):
 
     sent_symbols.add(symbol)
 
-    category = categorize_news(title)
+    # 🔥 فقط HIGH + MEDIUM (اختياري)
+    if impact == "⚪ LOW":
+        return False
+
     translated = translate_text(title)
 
     stock_info = ""
-
     try:
-        data = await get_stock_data(session, symbol)
-        price = data.get("c")
-        change = data.get("dp")
-
+        d = await get_stock(session, symbol)
         stock_info = f"""
 
 📊 {symbol}
-💰 Price: {price}$
-📈 Change: {round(change,2)}%
+💰 Price: {d.get('c')}$
+📈 Change: {round(d.get('dp',0),2)}%
 """
     except:
         pass
 
     message = f"""
-{category}
+{impact}
 
 📰 {title}
 
@@ -258,11 +222,7 @@ async def send_news(bot, session, news, sent_symbols):
 
     for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                disable_web_page_preview=False
-            )
+            await bot.send_message(chat_id=chat_id, text=message)
         except Exception as e:
             print("Send error:", e)
 
@@ -270,29 +230,29 @@ async def send_news(bot, session, news, sent_symbols):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot Running v8 (Pro Filter Mode)...")
+    print("🚀 Smart Bot v9 Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                news_list = await get_all_news(session)
+                news = await get_all(session)
 
-                news_sent = 0
                 sent_symbols = set()
+                count = 0
 
-                for news in news_list:
-                    if news_sent >= MAX_NEWS_PER_CYCLE:
+                for n in news:
+                    if count >= MAX_NEWS_PER_CYCLE:
                         break
 
-                    sent = await send_news(bot, session, news, sent_symbols)
+                    sent = await send(bot, session, n, sent_symbols)
 
                     if sent:
-                        news_sent += 1
+                        count += 1
 
                 await asyncio.sleep(300)
 
             except Exception as e:
-                print("Main error:", e)
+                print("Error:", e)
                 await asyncio.sleep(60)
 
 # ===== RUN =====
