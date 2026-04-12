@@ -1,5 +1,3 @@
-# ===== Alpha Market Intelligence (Stable Working Version) =====
-
 import asyncio
 import aiohttp
 import hashlib
@@ -10,10 +8,9 @@ from deep_translator import GoogleTranslator
 
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
+CHAT_ID = int(os.getenv("CHAT_ID"))
 
 bot = Bot(token=TOKEN)
-
-CHAT_ID = int(os.getenv("CHAT_ID"))
 
 WATCHLIST = [
     "NVDA","AAPL","MSFT","GOOGL","AMZN","META","TSLA",
@@ -28,6 +25,10 @@ WATCHLIST = [
 sent_news = set()
 last_run = 0
 
+# =========================
+# 🧠 أدوات
+# =========================
+
 def normalize_title(title):
     return " ".join(str(title).lower().split()[:6])
 
@@ -40,16 +41,54 @@ def translate(text):
     except:
         return text
 
+# =========================
+# 🧠 تحليل الخبر
+# =========================
+
 def analyze(title):
     t = title.lower()
 
-    if any(w in t for w in ["beat","strong","growth","surge","profit","record","ai"]):
+    positive = ["beat","strong","growth","surge","profit","record","ai"]
+    negative = ["miss","loss","drop","crash","weak","fear","cut"]
+
+    if any(w in t for w in positive):
         return "🚀 إيجابي"
 
-    if any(w in t for w in ["miss","loss","drop","crash","weak"]):
+    if any(w in t for w in negative):
         return "📉 سلبي"
 
     return None
+
+# =========================
+# 🎯 Impact Score (المهم)
+# =========================
+
+def impact_score(title, change):
+    t = title.lower()
+    score = 0
+
+    strong_pos = ["earnings","beat","record","surge","guidance","ai","growth"]
+    strong_neg = ["miss","loss","cut","downgrade","crash","warn"]
+
+    if any(w in t for w in strong_pos):
+        score += 2
+
+    if any(w in t for w in strong_neg):
+        score += 2
+
+    if change is not None:
+        if abs(change) >= 3:
+            score += 3
+        elif abs(change) >= 1.5:
+            score += 2
+        elif abs(change) >= 1:
+            score += 1
+
+    return score
+
+# =========================
+# 🌐 API
+# =========================
 
 async def get_news(session):
     try:
@@ -71,6 +110,10 @@ async def get_price(session, symbol):
         pass
     return None
 
+# =========================
+# 🚀 MAIN
+# =========================
+
 async def main():
     global last_run, sent_news
 
@@ -85,9 +128,8 @@ async def main():
                     last_run = now
 
                     news = await get_news(session)
-                    print("📰 News:", len(news))
 
-                    for n in news[:20]:
+                    for n in news[:25]:
                         title = n.get("headline")
                         url = n.get("url")
 
@@ -105,36 +147,42 @@ async def main():
                         title_lower = title.lower()
                         symbol = None
 
-                        # ===== الطريقة المرنة (مثل v4) =====
+                        # ربط السهم
                         for s in WATCHLIST:
                             if s.lower() in title_lower:
                                 symbol = s
                                 break
-
-                        # fallback
-                        if not symbol:
-                            words = title.split()
-                            for w in words:
-                                if w.isupper() and len(w) <= 5:
-                                    symbol = w
-                                    break
 
                         if not symbol:
                             continue
 
                         change = await get_price(session, symbol)
 
-                        # خففنا الشرط عشان يرسل
                         if change is None:
                             continue
 
+                        score = impact_score(title, change)
+
+                        # 🎯 التوازن المثالي
+                        if score >= 6:
+                            strength = "🚀 قوي جدًا"
+                        elif score >= 5:
+                            strength = "🔥 قوي"
+                        elif score >= 3:
+                            strength = "🟡 متابعة"
+                        else:
+                            continue
+
+                        action = "BUY" if change > 0 else "SELL"
                         arrow = "📈" if change > 0 else "📉"
 
-                        msg = f"""🚨 Signal
+                        msg = f"""🚨 MARKET SIGNAL
 
 💼 {symbol} {arrow} {change}%
 
-🧠 {label}
+🧠 {label} | {strength}
+
+🎯 Action: {action}
 
 📰 {title}
 
@@ -142,11 +190,13 @@ async def main():
 
 🔗 {url}"""
 
-                        print(f"🚀 Sending {symbol}")
-
                         await bot.send_message(chat_id=CHAT_ID, text=msg)
 
                         sent_news.add(nid)
+
+                        # 🧠 تنظيف الذاكرة
+                        if len(sent_news) > 500:
+                            sent_news = set(list(sent_news)[-250:])
 
                         await asyncio.sleep(1)
 
