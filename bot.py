@@ -1,11 +1,12 @@
-# ===== Alpha Market Intelligence v9.0 =====
-# Smart Impact + No Spam + Trading Focus
+# ===== Alpha Market Intelligence v10.0 =====
+# Smart Impact + Accurate Symbol Detection
 
 import asyncio
 import aiohttp
 import feedparser
 import hashlib
 import os
+import re
 from datetime import datetime, timedelta
 from telegram import Bot
 from deep_translator import GoogleTranslator
@@ -43,7 +44,7 @@ seen_titles = set()
 # ===== SETTINGS =====
 MAX_NEWS_PER_CYCLE = 10
 
-# ===== IMPACT LEVELS =====
+# ===== IMPACT =====
 HIGH_IMPACT = [
     "beats","misses","raises guidance","cuts forecast",
     "acquisition","merger","buyout"
@@ -61,9 +62,12 @@ LOW_IMPACT = [
 ]
 
 # ===== TRANSLATION =====
+def clean_text(text):
+    return text.replace("’", "'").replace("“", "").replace("”", "")
+
 def translate_text(text):
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(text)
+        return GoogleTranslator(source='auto', target='ar').translate(clean_text(text))
     except:
         return text
 
@@ -95,14 +99,21 @@ def get_impact(title):
     else:
         return None
 
-# ===== SYMBOL =====
+# ===== SYMBOL DETECTION (FIXED) =====
 def extract_symbol(title):
     t = title.upper()
 
+    # 1️⃣ ticker داخل أقواس (CRWV)
+    match = re.findall(r'\(([A-Z]{1,5})\)', t)
+    if match:
+        return match[0]
+
+    # 2️⃣ ticker مباشر
     for s in WATCHLIST:
         if s in t:
             return s
 
+    # 3️⃣ اسم شركة
     for name, s in COMPANY_MAP.items():
         if name in t:
             return s
@@ -142,7 +153,7 @@ async def get_company_news(session, symbol):
         link = n.get("url")
         if not link or "finnhub" in link:
             continue
-        out.append({"title": n["headline"], "link": link, "symbol": symbol})
+        out.append({"title": n["headline"], "link": link})
     return out
 
 def get_rss():
@@ -176,22 +187,22 @@ async def send(bot, session, news, sent_symbols):
         return False
 
     impact = get_impact(title)
-
-    # ❌ تجاهل غير المهم
     if not impact:
         return False
 
-    symbol = news.get("symbol") or extract_symbol(title)
+    # 🔥 استخراج السهم (مصَحّح)
+    symbol = extract_symbol(title)
 
     if not symbol:
         return False
 
+    # منع تكرار نفس السهم
     if symbol in sent_symbols:
         return False
 
     sent_symbols.add(symbol)
 
-    # 🔥 فقط HIGH + MEDIUM (اختياري)
+    # تجاهل LOW
     if impact == "⚪ LOW":
         return False
 
@@ -212,9 +223,10 @@ async def send(bot, session, news, sent_symbols):
     message = f"""
 {impact}
 
-📰 {title}
+📰 *{title}*
 
-🇸🇦 {translated}
+🇸🇦 _{translated}_
+
 {stock_info}
 
 🔗 {link}
@@ -222,7 +234,11 @@ async def send(bot, session, news, sent_symbols):
 
     for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(chat_id=chat_id, text=message)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode="Markdown"
+            )
         except Exception as e:
             print("Send error:", e)
 
@@ -230,7 +246,7 @@ async def send(bot, session, news, sent_symbols):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Smart Bot v9 Running...")
+    print("🚀 Bot v10 Running (Accurate Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
