@@ -1,8 +1,8 @@
+```python
 import asyncio
 import aiohttp
 import hashlib
 import os
-import random
 import time
 from telegram import Bot
 from deep_translator import GoogleTranslator
@@ -19,8 +19,10 @@ CHAT_IDS = [
 ]
 
 sent_news = set()
-sent_alerts = set()
 last_index_sent = 0
+
+# وضع النخبة (يشغل فقط الأخبار القوية)
+ELITE_MODE = False
 
 # ====== القطاعات ======
 SECTORS = {
@@ -37,9 +39,7 @@ SECTORS = {
 
 # ====== أدوات ======
 def news_id(title):
-    words = title.lower().split()
-    key = " ".join(words[:8])
-    return hashlib.md5(key.encode()).hexdigest()
+    return hashlib.md5(title.lower().encode()).hexdigest()
 
 def smart_translate(text):
     try:
@@ -53,21 +53,27 @@ def analyze_news(title):
     score = 0
     reasons = []
 
-    if any(w in t for w in ["beat", "strong", "growth", "surge"]):
+    positive = ["beat", "strong", "growth", "surge", "record", "profit"]
+    negative = ["miss", "loss", "drop", "crash", "decline"]
+
+    geo = ["war", "iran", "conflict", "hormuz"]
+    macro = ["inflation", "rates", "fed", "interest"]
+
+    if any(w in t for w in positive):
         score += 3
         reasons.append("نتائج قوية")
 
-    if any(w in t for w in ["miss", "loss", "drop", "crash"]):
+    if any(w in t for w in negative):
         score -= 3
         reasons.append("نتائج ضعيفة")
 
-    if any(w in t for w in ["war", "iran", "conflict", "hormuz"]):
+    if any(w in t for w in geo):
         score -= 2
         reasons.append("توتر جيوسياسي")
 
-    if any(w in t for w in ["inflation", "oil"]):
+    if any(w in t for w in macro):
         score += 1
-        reasons.append("تأثير اقتصادي")
+        reasons.append("بيانات اقتصادية")
 
     if score >= 3:
         label = "🚀 إيجابي قوي"
@@ -116,13 +122,14 @@ async def get_price(session, symbol):
         pass
     return None, None
 
-# ====== تحليل القطاع ======
+# ====== تحليل القطاع (سريع) ======
 async def analyze_sector(session, sector):
     stocks = SECTORS.get(sector, [])
-    results = []
+    tasks = [get_price(session, s) for s in stocks]
+    results_raw = await asyncio.gather(*tasks)
 
-    for s in stocks:
-        change, _ = await get_price(session, s)
+    results = []
+    for s, (change, _) in zip(stocks, results_raw):
         if change is not None:
             results.append((s, change))
 
@@ -140,21 +147,19 @@ async def analyze_sector(session, sector):
 
     return trend, results
 
-# ====== فلترة أسهم القطاع (بدون خلط) ======
+# ====== فلترة الأسهم ======
 async def get_clean_sector_stocks(session, sector):
     stocks = SECTORS.get(sector, [])
+    tasks = [get_price(session, s) for s in stocks]
+    results_raw = await asyncio.gather(*tasks)
+
     results = []
-
-    for symbol in stocks:
-        change, _ = await get_price(session, symbol)
-
+    for s, (change, _) in zip(stocks, results_raw):
         if change is None:
             continue
-
         if abs(change) < 0.5:
             continue
-
-        results.append((symbol, change))
+        results.append((s, change))
 
     return sorted(results, key=lambda x: abs(x[1]), reverse=True)
 
@@ -219,8 +224,17 @@ async def main():
                         continue
 
                     analysis = analyze_news(title)
-                    if abs(analysis["score"]) < 1:
+
+                    # فلترة ذكية
+                    IMPORTANT_KEYWORDS = ["earnings", "fed", "interest", "inflation", "war", "oil"]
+
+                    if abs(analysis["score"]) < 2 and not any(k in title.lower() for k in IMPORTANT_KEYWORDS):
                         continue
+
+                    # وضع النخبة
+                    if ELITE_MODE:
+                        if "🚀" not in analysis["label"] and "📉" not in analysis["label"]:
+                            continue
 
                     sector = detect_sector(title)
 
@@ -243,20 +257,28 @@ async def main():
                     ar = smart_translate(title)
 
                     msg = (
-                        f"{analysis['label']}\n\n"
+                        f"{analysis['label']}\n"
+                        f"{'='*25}\n\n"
                         f"🏭 القطاع: {sector_text}\n\n"
-                        f"📈 الأسهم:\n{stocks_text if stocks_text else '—'}\n\n"
-                        f"🧠 الأسباب: {', '.join(analysis['reasons'])}\n\n"
-                        f"💰 القرار: {decision}\n\n"
+                        f"📊 الأسهم الأقوى:\n{stocks_text if stocks_text else '—'}\n"
+                        f"{'-'*25}\n"
+                        f"🧠 الأسباب:\n• " + "\n• ".join(analysis['reasons']) + "\n\n"
+                        f"💰 القرار: {decision}\n"
+                        f"{'='*25}\n\n"
                         f"📰 {title}\n\n"
                         f"🇸🇦 {ar}\n\n"
-                        f"🔗 {url}"
+                        f"🔗 المصدر:\n{url}"
                     )
 
                     for chat_id in CHAT_IDS:
                         await bot.send_message(chat_id=chat_id, text=msg)
 
                     sent_news.add(nid)
+
+                    # تنظيف الذاكرة
+                    if len(sent_news) > 500:
+                        sent_news.pop()
+
                     await asyncio.sleep(2)
 
                 print("يتم التحديث...")
@@ -268,3 +290,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
