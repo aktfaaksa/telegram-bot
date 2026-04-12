@@ -1,10 +1,11 @@
-# ===== Alpha Market Intelligence PRO+ (Final Version) =====
+# ===== Alpha Market Intelligence ULTRA (Smart AI-like) =====
 
 import asyncio
 import aiohttp
 import hashlib
 import os
 import time
+import re
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -29,7 +30,7 @@ WATCHLIST = [
     "NFLX","CRM","UBER"
 ]
 
-# ===== ربط أسماء الشركات =====
+# ===== أسماء الشركات =====
 NAME_MAP = {
     "apple": "AAPL",
     "microsoft": "MSFT",
@@ -43,18 +44,25 @@ NAME_MAP = {
     "intel": "INTC",
     "amd": "AMD",
     "exxon": "XOM",
-    "chevron": "CVX"
+    "chevron": "CVX",
+    "goldman": "GS",
+    "nike": "NKE"
 }
 
 # ===== القطاعات =====
 SECTORS = {
-    "TECH": ["ai","chip","semiconductor","cloud","data","software"],
-    "ENERGY": ["oil","gas","energy","opec","crude","renewable"],
-    "MINING": ["gold","copper","lithium","mining","silver","iron"],
-    "REAL_ESTATE": ["real estate","property","housing","reit"],
-    "FINANCE": ["bank","interest","fed","inflation"],
-    "GENERAL": ["growth","profit","revenue","forecast","deal"]
+    "TECH": ["ai","chip","cloud","data","software"],
+    "ENERGY": ["oil","gas","energy","crude","opec"],
+    "MINING": ["gold","copper","lithium","silver"],
+    "REAL_ESTATE": ["real estate","housing","reit"],
+    "FINANCE": ["bank","fed","interest","inflation"],
 }
+
+# ===== فلترة غير مالية =====
+BLOCK_WORDS = [
+    "couple","relationship","psychologist",
+    "lifestyle","dating","family","health"
+]
 
 sent_news = set()
 last_run = 0
@@ -74,12 +82,16 @@ def translate(text):
         return text
 
 # ===== تحليل =====
+def is_irrelevant(title):
+    t = title.lower()
+    return any(w in t for w in BLOCK_WORDS)
+
 def detect_sector(title):
     t = title.lower()
     for sector, words in SECTORS.items():
         if any(w in t for w in words):
             return sector
-    return "OTHER"
+    return "GENERAL"
 
 def score_news(title):
     t = title.lower()
@@ -97,6 +109,23 @@ def score_news(title):
             score += 2
 
     return score
+
+# ===== استخراج السهم الصحيح 🔥 =====
+def find_symbol(title):
+    title_lower = title.lower()
+
+    # 1. من اسم الشركة
+    for name, sym in NAME_MAP.items():
+        if name in title_lower:
+            return sym
+
+    # 2. من التكرز (AAPL)
+    words = re.findall(r'\b[A-Z]{2,5}\b', title)
+    for w in words:
+        if w in WATCHLIST:
+            return w
+
+    return None
 
 # ===== API =====
 async def get_news(session):
@@ -140,53 +169,39 @@ async def main():
                         if not title or not url:
                             continue
 
+                        if is_irrelevant(title):
+                            continue
+
                         nid = news_id(title)
                         if nid in sent_news:
                             continue
 
-                        title_lower = title.lower()
-
-                        # ===== تحديد السهم =====
-                        symbol = None
-
-                        for name, sym in NAME_MAP.items():
-                            if name in title_lower:
-                                symbol = sym
-                                break
-
-                        if not symbol:
-                            for s in WATCHLIST:
-                                if s.lower() in title_lower:
-                                    symbol = s
-                                    break
-
+                        symbol = find_symbol(title)
                         if not symbol:
                             continue
 
-                        # ===== منع التكرار =====
+                        # منع التكرار
                         now_time = time.time()
                         if symbol in last_sent_symbol:
                             if now_time - last_sent_symbol[symbol] < 600:
                                 continue
 
-                        # ===== تحليل =====
-                        sector = detect_sector(title)
                         score = score_news(title)
-
-                        if score < 2:
+                        if score < 3:
                             continue
 
                         change = await get_price(session, symbol)
-
                         if not change or abs(change) < 0.3:
                             continue
+
+                        sector = detect_sector(title)
 
                         last_sent_symbol[symbol] = now_time
                         sent_news.add(nid)
 
                         arrow = "📈" if change > 0 else "📉"
 
-                        msg = f"""🚨 PRO+ Signal
+                        msg = f"""🚨 ULTRA Signal
 
 🏭 Sector: {sector}
 💼 {symbol} {arrow} {change}%
