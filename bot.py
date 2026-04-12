@@ -1,4 +1,4 @@
-# ===== Alpha News Engine v2.1 =====
+# ===== Alpha Market Intelligence v2.1 =====
 # Market Indices (Market Hours) + News 24/7
 
 import asyncio
@@ -47,8 +47,8 @@ def is_market_open():
         return False
 
     minutes = now.hour * 60 + now.minute
-    open_time = 16 * 60 + 30   # 4:30 PM
-    close_time = 23 * 60       # 11:00 PM
+    open_time = 16 * 60 + 30
+    close_time = 23 * 60
 
     return open_time <= minutes <= close_time
 
@@ -147,7 +147,7 @@ async def main():
                     market_open_sent = False
                     market_close_sent = False
 
-                # ===== مؤشرات السوق (فقط وقت السوق) =====
+                # ===== مؤشرات السوق =====
                 if is_market_open() and (current_time - last_index_sent > 3600):
                     last_index_sent = current_time
 
@@ -167,8 +167,8 @@ async def main():
 
                 # ===== الأخبار (24/7) =====
                 if current_time - last_news_sent > 300:
-
                     last_news_sent = current_time
+
                     news_list = await get_news(session)
 
                     for n in news_list[:5]:
