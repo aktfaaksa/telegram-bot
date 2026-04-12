@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v10.0 =====
-# Smart Impact + Accurate Symbol Detection
+# ===== Alpha Market Intelligence v11.0 =====
+# Ultra Accurate + No Wrong Symbols + Smart Impact
 
 import asyncio
 import aiohttp
@@ -30,6 +30,9 @@ COMPANY_MAP = {
     "NETFLIX":"NFLX","INTEL":"INTC","BANK OF AMERICA":"BAC",
     "GOOGLE":"GOOGL","ALPHABET":"GOOGL","GOLDMAN SACHS":"GS"
 }
+
+# ===== ALL SYMBOLS (STRICT FILTER) =====
+ALL_SYMBOLS = set(WATCHLIST) | set(COMPANY_MAP.values())
 
 # ===== RSS =====
 RSS_FEEDS = [
@@ -86,7 +89,7 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT DETECTION =====
+# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
 
@@ -99,26 +102,29 @@ def get_impact(title):
     else:
         return None
 
-# ===== SYMBOL DETECTION (FIXED) =====
+# ===== SYMBOL DETECTION =====
 def extract_symbol(title):
     t = title.upper()
 
-    # 1️⃣ ticker داخل أقواس (CRWV)
+    # 1. ticker داخل ()
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
 
-    # 2️⃣ ticker مباشر
+    # 2. ticker مباشر
     for s in WATCHLIST:
         if s in t:
             return s
 
-    # 3️⃣ اسم شركة
+    # 3. اسم شركة
     for name, s in COMPANY_MAP.items():
         if name in t:
             return s
 
     return None
+
+def is_valid_symbol(symbol):
+    return symbol in ALL_SYMBOLS
 
 # ===== FINNHUB =====
 async def get_stock(session, symbol):
@@ -190,13 +196,12 @@ async def send(bot, session, news, sent_symbols):
     if not impact:
         return False
 
-    # 🔥 استخراج السهم (مصَحّح)
     symbol = extract_symbol(title)
 
-    if not symbol:
+    # 🔥 أهم فلتر (دقة 100%)
+    if not symbol or not is_valid_symbol(symbol):
         return False
 
-    # منع تكرار نفس السهم
     if symbol in sent_symbols:
         return False
 
@@ -246,7 +251,7 @@ async def send(bot, session, news, sent_symbols):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v10 Running (Accurate Mode)...")
+    print("🚀 Bot v11 Running (Ultra Accurate Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
