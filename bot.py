@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v2.1 =====
-# Market Indices (Market Hours) + News 24/7
+# ===== Alpha Market Intelligence v2.2 =====
+# Market Indices (Market Hours) + Multi News Sources
 
 import asyncio
 import aiohttp
@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from telegram import Bot
 from deep_translator import GoogleTranslator
+import feedparser
 
 # ====== إعدادات ======
 TOKEN = os.getenv("BOT_TOKEN")
@@ -30,8 +31,11 @@ market_open_sent = False
 market_close_sent = False
 
 # ====== أدوات ======
+def normalize_title(title):
+    return " ".join(title.lower().split()[:6])
+
 def news_id(title):
-    return hashlib.md5(title.lower().encode()).hexdigest()
+    return hashlib.md5(normalize_title(title).encode()).hexdigest()
 
 def smart_translate(text):
     try:
@@ -119,6 +123,13 @@ async def get_news(session):
     except:
         return []
 
+def get_rss(url):
+    try:
+        feed = feedparser.parse(url)
+        return feed.entries[:5]
+    except:
+        return []
+
 # ====== التشغيل ======
 async def main():
     global last_index_sent, last_news_sent
@@ -142,12 +153,12 @@ async def main():
                         await bot.send_message(chat_id=chat_id, text="🔴 إغلاق السوق الأمريكي")
                     market_close_sent = True
 
-                # ===== إعادة ضبط يوم جديد =====
+                # ===== إعادة ضبط =====
                 if now.hour == 1:
                     market_open_sent = False
                     market_close_sent = False
 
-                # ===== مؤشرات السوق =====
+                # ===== مؤشرات =====
                 if is_market_open() and (current_time - last_index_sent > 3600):
                     last_index_sent = current_time
 
@@ -165,16 +176,26 @@ async def main():
                     for chat_id in CHAT_IDS:
                         await bot.send_message(chat_id=chat_id, text=msg)
 
-                # ===== الأخبار (24/7) =====
+                # ===== الأخبار (3 مصادر) =====
                 if current_time - last_news_sent > 300:
                     last_news_sent = current_time
 
-                    news_list = await get_news(session)
+                    news = []
 
-                    for n in news_list[:5]:
-                        title = n.get("headline")
-                        url = n.get("url")
+                    # Finnhub
+                    fh = await get_news(session)
+                    for n in fh[:5]:
+                        news.append((n.get("headline"), n.get("url")))
 
+                    # CNBC
+                    for n in get_rss("https://www.cnbc.com/id/100003114/device/rss/rss.html"):
+                        news.append((n.title, n.link))
+
+                    # Reuters
+                    for n in get_rss("https://feeds.reuters.com/reuters/businessNews"):
+                        news.append((n.title, n.link))
+
+                    for title, url in news:
                         if not title or not url:
                             continue
 
@@ -209,4 +230,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
+    
