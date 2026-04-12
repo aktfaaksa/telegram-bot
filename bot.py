@@ -1,9 +1,13 @@
 ```python
+# ===== Alpha News Engine v2.1 =====
+# Market Indices (Market Hours) + News 24/7
+
 import asyncio
 import aiohttp
 import hashlib
 import os
 import time
+from datetime import datetime
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -19,23 +23,12 @@ CHAT_IDS = [
 ]
 
 sent_news = set()
+
 last_index_sent = 0
+last_news_sent = 0
 
-# وضع النخبة (يشغل فقط الأخبار القوية)
-ELITE_MODE = False
-
-# ====== القطاعات ======
-SECTORS = {
-    "tech": ["AAPL", "MSFT", "NVDA", "AMD", "META"],
-    "energy": ["XOM", "CVX", "OXY", "SLB"],
-    "financial": ["JPM", "GS", "BAC", "MS"],
-    "healthcare": ["JNJ", "PFE", "MRK", "UNH"],
-    "consumer": ["AMZN", "TSLA", "HD", "MCD"],
-    "industrial": ["BA", "CAT", "GE", "HON"],
-    "communication": ["META", "GOOGL", "NFLX"],
-    "utilities": ["NEE", "DUK", "SO"],
-    "real_estate": ["PLD", "AMT", "O"]
-}
+market_open_sent = False
+market_close_sent = False
 
 # ====== أدوات ======
 def news_id(title):
@@ -47,31 +40,46 @@ def smart_translate(text):
     except:
         return text
 
+# ====== وقت السوق ======
+def is_market_open():
+    now = datetime.now()
+
+    if now.weekday() > 4:
+        return False
+
+    minutes = now.hour * 60 + now.minute
+    open_time = 16 * 60 + 30   # 4:30 PM
+    close_time = 23 * 60       # 11:00 PM
+
+    return open_time <= minutes <= close_time
+
+def is_market_just_open():
+    now = datetime.now()
+    return now.hour == 16 and now.minute == 30
+
+def is_market_close():
+    now = datetime.now()
+    return now.hour == 23 and now.minute == 0
+
 # ====== تحليل الخبر ======
 def analyze_news(title):
     t = title.lower()
     score = 0
     reasons = []
 
-    positive = ["beat", "strong", "growth", "surge", "record", "profit"]
-    negative = ["miss", "loss", "drop", "crash", "decline"]
-
-    geo = ["war", "iran", "conflict", "hormuz"]
-    macro = ["inflation", "rates", "fed", "interest"]
-
-    if any(w in t for w in positive):
+    if any(w in t for w in ["beat", "strong", "growth", "surge", "profit"]):
         score += 3
         reasons.append("نتائج قوية")
 
-    if any(w in t for w in negative):
+    if any(w in t for w in ["miss", "loss", "drop", "crash"]):
         score -= 3
         reasons.append("نتائج ضعيفة")
 
-    if any(w in t for w in geo):
+    if any(w in t for w in ["war", "iran"]):
         score -= 2
         reasons.append("توتر جيوسياسي")
 
-    if any(w in t for w in macro):
+    if any(w in t for w in ["inflation", "fed", "rates"]):
         score += 1
         reasons.append("بيانات اقتصادية")
 
@@ -88,25 +96,6 @@ def analyze_news(title):
 
     return {"score": score, "label": label, "reasons": reasons}
 
-# ====== تحديد القطاع ======
-def detect_sector(title):
-    t = title.lower()
-
-    if any(w in t for w in ["oil", "energy", "gas", "iran"]):
-        return "energy"
-    if any(w in t for w in ["ai", "chip", "nvidia", "tech"]):
-        return "tech"
-    if any(w in t for w in ["bank", "fed", "rates"]):
-        return "financial"
-    if any(w in t for w in ["drug", "health", "fda"]):
-        return "healthcare"
-    if any(w in t for w in ["retail", "amazon", "tesla"]):
-        return "consumer"
-    if any(w in t for w in ["industrial", "boeing"]):
-        return "industrial"
-
-    return None
-
 # ====== الأسعار ======
 async def get_price(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
@@ -122,57 +111,6 @@ async def get_price(session, symbol):
         pass
     return None, None
 
-# ====== تحليل القطاع (سريع) ======
-async def analyze_sector(session, sector):
-    stocks = SECTORS.get(sector, [])
-    tasks = [get_price(session, s) for s in stocks]
-    results_raw = await asyncio.gather(*tasks)
-
-    results = []
-    for s, (change, _) in zip(stocks, results_raw):
-        if change is not None:
-            results.append((s, change))
-
-    if not results:
-        return "غير واضح", []
-
-    avg = sum(c for _, c in results) / len(results)
-
-    if avg > 1:
-        trend = "📈 صاعد"
-    elif avg < -1:
-        trend = "📉 هابط"
-    else:
-        trend = "⚖️ متذبذب"
-
-    return trend, results
-
-# ====== فلترة الأسهم ======
-async def get_clean_sector_stocks(session, sector):
-    stocks = SECTORS.get(sector, [])
-    tasks = [get_price(session, s) for s in stocks]
-    results_raw = await asyncio.gather(*tasks)
-
-    results = []
-    for s, (change, _) in zip(stocks, results_raw):
-        if change is None:
-            continue
-        if abs(change) < 0.5:
-            continue
-        results.append((s, change))
-
-    return sorted(results, key=lambda x: abs(x[1]), reverse=True)
-
-# ====== القرار ======
-def make_decision(score, sector_trend):
-    if score < 0 and "هابط" in sector_trend:
-        return "🚫 تجنب قوي"
-    if score < 0:
-        return "⚠️ ضعف - انتبه"
-    if score > 0 and "صاعد" in sector_trend:
-        return "💥 فرصة قوية"
-    return "⚪ مراقبة"
-
 # ====== الأخبار ======
 async def get_news(session):
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
@@ -184,15 +122,34 @@ async def get_news(session):
 
 # ====== التشغيل ======
 async def main():
-    global last_index_sent
+    global last_index_sent, last_news_sent
+    global market_open_sent, market_close_sent
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
+                now = datetime.now()
                 current_time = time.time()
 
-                # ===== مؤشرات السوق =====
-                if current_time - last_index_sent > 1800:
+                # ===== افتتاح السوق =====
+                if is_market_just_open() and not market_open_sent:
+                    for chat_id in CHAT_IDS:
+                        await bot.send_message(chat_id=chat_id, text="🟢 افتتاح السوق الأمريكي")
+                    market_open_sent = True
+
+                # ===== إغلاق السوق =====
+                if is_market_close() and not market_close_sent:
+                    for chat_id in CHAT_IDS:
+                        await bot.send_message(chat_id=chat_id, text="🔴 إغلاق السوق الأمريكي")
+                    market_close_sent = True
+
+                # ===== إعادة ضبط يوم جديد =====
+                if now.hour == 1:
+                    market_open_sent = False
+                    market_close_sent = False
+
+                # ===== مؤشرات السوق (فقط وقت السوق) =====
+                if is_market_open() and (current_time - last_index_sent > 3600):
                     last_index_sent = current_time
 
                     spy, _ = await get_price(session, "SPY")
@@ -209,79 +166,42 @@ async def main():
                     for chat_id in CHAT_IDS:
                         await bot.send_message(chat_id=chat_id, text=msg)
 
-                # ===== الأخبار =====
-                news_list = await get_news(session)
+                # ===== الأخبار (24/7) =====
+                if current_time - last_news_sent > 300:
 
-                for n in news_list[:10]:
-                    title = n.get("headline")
-                    url = n.get("url")
+                    last_news_sent = current_time
+                    news_list = await get_news(session)
 
-                    if not title or not url:
-                        continue
+                    for n in news_list[:5]:
+                        title = n.get("headline")
+                        url = n.get("url")
 
-                    nid = news_id(title)
-                    if nid in sent_news:
-                        continue
-
-                    analysis = analyze_news(title)
-
-                    # فلترة ذكية
-                    IMPORTANT_KEYWORDS = ["earnings", "fed", "interest", "inflation", "war", "oil"]
-
-                    if abs(analysis["score"]) < 2 and not any(k in title.lower() for k in IMPORTANT_KEYWORDS):
-                        continue
-
-                    # وضع النخبة
-                    if ELITE_MODE:
-                        if "🚀" not in analysis["label"] and "📉" not in analysis["label"]:
+                        if not title or not url:
                             continue
 
-                    sector = detect_sector(title)
+                        nid = news_id(title)
+                        if nid in sent_news:
+                            continue
 
-                    sector_text = "غير محدد"
-                    stocks_text = ""
-                    sector_trend = ""
+                        analysis = analyze_news(title)
 
-                    if sector:
-                        trend, _ = await analyze_sector(session, sector)
-                        stocks = await get_clean_sector_stocks(session, sector)
+                        if abs(analysis["score"]) < 2:
+                            continue
 
-                        sector_trend = trend
-                        sector_text = f"{sector.upper()} ({trend})"
+                        ar = smart_translate(title)
 
-                        for s, c in stocks:
-                            arrow = "↑" if c > 0 else "↓"
-                            stocks_text += f"{s} {arrow} {c}%\n"
+                        msg = (
+                            f"{analysis['label']}\n\n"
+                            f"📰 {title}\n\n"
+                            f"🇸🇦 {ar}\n\n"
+                            f"🔗 {url}"
+                        )
 
-                    decision = make_decision(analysis["score"], sector_trend)
-                    ar = smart_translate(title)
+                        for chat_id in CHAT_IDS:
+                            await bot.send_message(chat_id=chat_id, text=msg)
 
-                    msg = (
-                        f"{analysis['label']}\n"
-                        f"{'='*25}\n\n"
-                        f"🏭 القطاع: {sector_text}\n\n"
-                        f"📊 الأسهم الأقوى:\n{stocks_text if stocks_text else '—'}\n"
-                        f"{'-'*25}\n"
-                        f"🧠 الأسباب:\n• " + "\n• ".join(analysis['reasons']) + "\n\n"
-                        f"💰 القرار: {decision}\n"
-                        f"{'='*25}\n\n"
-                        f"📰 {title}\n\n"
-                        f"🇸🇦 {ar}\n\n"
-                        f"🔗 المصدر:\n{url}"
-                    )
+                        sent_news.add(nid)
 
-                    for chat_id in CHAT_IDS:
-                        await bot.send_message(chat_id=chat_id, text=msg)
-
-                    sent_news.add(nid)
-
-                    # تنظيف الذاكرة
-                    if len(sent_news) > 500:
-                        sent_news.pop()
-
-                    await asyncio.sleep(2)
-
-                print("يتم التحديث...")
                 await asyncio.sleep(20)
 
             except Exception as e:
