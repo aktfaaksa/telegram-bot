@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v7.0 =====
-# Smart News + Finnhub + Clean Output + No Spam
+# ===== Alpha Market Intelligence v8.0 =====
+# Smart Trading News Only (No Noise)
 
 import asyncio
 import aiohttp
@@ -23,7 +23,7 @@ CHAT_IDS = [
 bot = Bot(token=TOKEN)
 
 # ===== WATCHLIST =====
-WATCHLIST = ["AAPL", "TSLA", "NVDA", "AMD", "META", "MSFT", "AMZN"]
+WATCHLIST = ["AAPL", "TSLA", "NVDA", "AMD", "META", "MSFT", "AMZN", "NFLX", "INTC", "BAC"]
 
 # ===== COMPANY MAP =====
 COMPANY_MAP = {
@@ -37,7 +37,10 @@ COMPANY_MAP = {
     "AMAZON": "AMZN",
     "NETFLIX": "NFLX",
     "INTEL": "INTC",
-    "BANK OF AMERICA": "BAC"
+    "BANK OF AMERICA": "BAC",
+    "GOOGLE": "GOOGL",
+    "ALPHABET": "GOOGL",
+    "GOLDMAN SACHS": "GS"
 }
 
 # ===== RSS =====
@@ -57,7 +60,12 @@ IMPORTANT_WORDS = [
     "earnings", "eps", "revenue", "guidance",
     "acquisition", "merger", "buyout",
     "upgrade", "downgrade", "rating",
-    "approval", "forecast"
+    "approval", "forecast", "beats", "misses"
+]
+
+WEAK_NEWS = [
+    "season", "outlook", "preview", "what to expect",
+    "kicks off", "entering", "expected to"
 ]
 
 # ===== TRANSLATION =====
@@ -88,14 +96,19 @@ def is_unique(title):
 # ===== CATEGORY =====
 def categorize_news(title):
     t = title.lower()
-    if any(x in t for x in ["earnings", "eps", "revenue", "guidance"]):
-        return "🟢 Earnings"
+
+    if any(x in t for x in ["beats", "misses", "reports earnings", "eps"]):
+        return "🟢 Earnings Report"
+
+    elif "earnings" in t:
+        return "🟡 Earnings (General)"
+
     elif any(x in t for x in ["acquisition", "merger", "buyout"]):
         return "🔵 M&A"
+
     elif any(x in t for x in ["upgrade", "downgrade", "rating"]):
-        return "🟡 Analyst"
-    elif any(x in t for x in ["fda", "approval"]):
-        return "🟣 Approval"
+        return "🟣 Analyst"
+
     else:
         return "🔴 Macro"
 
@@ -103,12 +116,10 @@ def categorize_news(title):
 def extract_symbol(title):
     t = title.upper()
 
-    # ticker مباشر
     for symbol in WATCHLIST:
         if symbol in t:
             return symbol
 
-    # اسم شركة
     for name, symbol in COMPANY_MAP.items():
         if name in t:
             return symbol
@@ -129,8 +140,6 @@ async def get_finnhub_market_news(session):
     news = []
     for item in data[:10]:
         link = item.get("url")
-
-        # تنظيف الرابط
         if not link or "finnhub.io/api" in link:
             continue
 
@@ -153,7 +162,6 @@ async def get_company_news(session, symbol):
     news = []
     for item in data[:5]:
         link = item.get("url")
-
         if not link or "finnhub.io/api" in link:
             continue
 
@@ -194,6 +202,7 @@ async def send_news(bot, session, news, sent_symbols):
     title = news["title"]
     link = news["link"]
 
+    # Anti-spam
     if not is_new(title, link):
         return False
 
@@ -203,32 +212,38 @@ async def send_news(bot, session, news, sent_symbols):
     if not any(word in title.lower() for word in IMPORTANT_WORDS):
         return False
 
-    category = categorize_news(title)
-    translated = translate_text(title)
+    if any(w in title.lower() for w in WEAK_NEWS):
+        return False
 
     symbol = news.get("symbol") or extract_symbol(title)
 
+    # 🔥 أهم شرط: لازم سهم
+    if not symbol:
+        return False
+
+    if symbol in sent_symbols:
+        return False
+
+    sent_symbols.add(symbol)
+
+    category = categorize_news(title)
+    translated = translate_text(title)
+
     stock_info = ""
 
-    # منع تكرار نفس السهم
-    if symbol:
-        if symbol in sent_symbols:
-            return False
-        sent_symbols.add(symbol)
+    try:
+        data = await get_stock_data(session, symbol)
+        price = data.get("c")
+        change = data.get("dp")
 
-        try:
-            data = await get_stock_data(session, symbol)
-            price = data.get("c")
-            change = data.get("dp")
-
-            stock_info = f"""
+        stock_info = f"""
 
 📊 {symbol}
 💰 Price: {price}$
 📈 Change: {round(change,2)}%
 """
-        except:
-            pass
+    except:
+        pass
 
     message = f"""
 {category}
@@ -255,7 +270,7 @@ async def send_news(bot, session, news, sent_symbols):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot Running v7 (Clean Mode)...")
+    print("🚀 Bot Running v8 (Pro Filter Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
