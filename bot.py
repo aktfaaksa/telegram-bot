@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v3.0 =====
-# Market + Multi News + Company Tracking + Price Link
+# ===== Alpha Market Intelligence v3.1 =====
+# Fixed Version + Stable News Handling
 
 import asyncio
 import aiohttp
@@ -22,7 +22,7 @@ CHAT_IDS = [
     6315087880,
 ]
 
-# ====== شركات قوية ======
+# ====== شركات ======
 WATCHLIST = [
     "NVDA","AAPL","MSFT","GOOGL","AMZN","META","TSLA",
     "AMD","AVGO","TSM","INTC",
@@ -42,10 +42,14 @@ market_close_sent = False
 
 # ====== أدوات ======
 def normalize_title(title):
-    return " ".join(title.lower().split()[:6])
+    return " ".join(str(title).lower().split()[:6])
 
 def news_id(title):
-    return hashlib.md5(normalize_title(title).encode()).hexdigest()
+    try:
+        clean = normalize_title(title)
+        return hashlib.md5(clean.encode()).hexdigest()
+    except:
+        return None
 
 def translate(text):
     try:
@@ -54,7 +58,7 @@ def translate(text):
         return text
 
 def detect_stock(title):
-    t = title.lower()
+    t = str(title).lower()
     for s in WATCHLIST:
         if s.lower() in t:
             return s
@@ -62,7 +66,7 @@ def detect_stock(title):
 
 # ====== تحليل ======
 def analyze(title):
-    t = title.lower()
+    t = str(title).lower()
     score = 0
 
     if any(w in t for w in ["beat","strong","growth","surge","profit"]):
@@ -130,8 +134,7 @@ async def get_price(session, symbol):
         async with session.get(url) as r:
             d = await r.json()
             if d.get("c") and d.get("pc"):
-                change = round(((d["c"] - d["pc"]) / d["pc"]) * 100, 2)
-                return change
+                return round(((d["c"] - d["pc"]) / d["pc"]) * 100, 2)
     except:
         pass
     return None
@@ -140,6 +143,7 @@ async def get_price(session, symbol):
 async def main():
     global last_news_sent, last_index_sent
     global market_open_sent, market_close_sent
+    global sent_news
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -186,7 +190,7 @@ async def main():
 
                     news = []
 
-                    # Finnhub عام
+                    # Finnhub
                     for n in await get_general_news(session):
                         news.append((n.get("headline"), n.get("url")))
 
@@ -199,8 +203,7 @@ async def main():
 
                     # شركات
                     for symbol in WATCHLIST[:10]:
-                        company_news = await get_company_news(session, symbol)
-                        for n in company_news[:2]:
+                        for n in await get_company_news(session, symbol):
                             news.append((n.get("headline"), n.get("url")))
 
                     # معالجة
@@ -209,7 +212,7 @@ async def main():
                             continue
 
                         nid = news_id(title)
-                        if nid in sent_news:
+                        if not nid or nid in sent_news:
                             continue
 
                         label = analyze(title)
@@ -237,8 +240,9 @@ async def main():
 
                         sent_news.add(nid)
 
+                        # تنظيف آمن
                         if len(sent_news) > 500:
-                            sent_news.pop()
+                            sent_news = set(list(sent_news)[-400:])
 
                         await asyncio.sleep(1)
 
