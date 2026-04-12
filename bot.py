@@ -1,24 +1,19 @@
-# ===== Alpha Market Intelligence ULTRA (Working Mode) =====
+# ===== Alpha Market Intelligence (Stable Working Version) =====
 
 import asyncio
 import aiohttp
 import hashlib
 import os
 import time
-import re
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
-# ===== إعدادات =====
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 
 bot = Bot(token=TOKEN)
 
-CHAT_IDS = [
-    int(os.getenv("CHAT_ID")),
-    6315087880,
-]
+CHAT_ID = int(os.getenv("CHAT_ID"))
 
 WATCHLIST = [
     "NVDA","AAPL","MSFT","GOOGL","AMZN","META","TSLA",
@@ -30,24 +25,9 @@ WATCHLIST = [
     "NFLX","CRM","UBER"
 ]
 
-NAME_MAP = {
-    "apple": "AAPL","microsoft": "MSFT","nvidia": "NVDA",
-    "amazon": "AMZN","tesla": "TSLA","google": "GOOGL",
-    "meta": "META","netflix": "NFLX","uber": "UBER",
-    "intel": "INTC","amd": "AMD","exxon": "XOM",
-    "chevron": "CVX","goldman": "GS","nike": "NKE"
-}
-
-BLOCK_WORDS = [
-    "couple","relationship","psychologist",
-    "lifestyle","dating","family","health"
-]
-
 sent_news = set()
 last_run = 0
-last_sent_symbol = {}
 
-# ===== أدوات =====
 def normalize_title(title):
     return " ".join(str(title).lower().split()[:6])
 
@@ -60,33 +40,24 @@ def translate(text):
     except:
         return text
 
-def is_irrelevant(title):
+def analyze(title):
     t = title.lower()
-    return any(w in t for w in BLOCK_WORDS)
 
-def find_symbol(title):
-    title_lower = title.lower()
+    if any(w in t for w in ["beat","strong","growth","surge","profit","record","ai"]):
+        return "🚀 إيجابي"
 
-    for name, sym in NAME_MAP.items():
-        if name in title_lower:
-            return sym
-
-    words = re.findall(r'\b[A-Z]{2,5}\b', title)
-    for w in words:
-        if w in WATCHLIST:
-            return w
+    if any(w in t for w in ["miss","loss","drop","crash","weak"]):
+        return "📉 سلبي"
 
     return None
 
-# ===== API =====
 async def get_news(session):
     try:
         url = f"https://finnhub.io/api/v1/news?category=business&token={API_KEY}"
         async with session.get(url) as r:
             data = await r.json()
             return data if isinstance(data, list) else []
-    except Exception as e:
-        print("❌ News error:", e)
+    except:
         return []
 
 async def get_price(session, symbol):
@@ -100,9 +71,8 @@ async def get_price(session, symbol):
         pass
     return None
 
-# ===== التشغيل =====
 async def main():
-    global last_run, sent_news, last_sent_symbol
+    global last_run, sent_news
 
     print("🚀 BOT STARTED")
 
@@ -115,7 +85,7 @@ async def main():
                     last_run = now
 
                     news = await get_news(session)
-                    print("📰 News count:", len(news))
+                    print("📰 News:", len(news))
 
                     for n in news[:20]:
                         title = n.get("headline")
@@ -124,31 +94,47 @@ async def main():
                         if not title or not url:
                             continue
 
-                        if is_irrelevant(title):
-                            continue
-
                         nid = news_id(title)
                         if nid in sent_news:
                             continue
 
-                        symbol = find_symbol(title)
+                        label = analyze(title)
+                        if not label:
+                            continue
+
+                        title_lower = title.lower()
+                        symbol = None
+
+                        # ===== الطريقة المرنة (مثل v4) =====
+                        for s in WATCHLIST:
+                            if s.lower() in title_lower:
+                                symbol = s
+                                break
+
+                        # fallback
+                        if not symbol:
+                            words = title.split()
+                            for w in words:
+                                if w.isupper() and len(w) <= 5:
+                                    symbol = w
+                                    break
+
                         if not symbol:
                             continue
 
-                        now_time = time.time()
-                        if symbol in last_sent_symbol:
-                            if now_time - last_sent_symbol[symbol] < 300:
-                                continue
-
                         change = await get_price(session, symbol)
 
-                        print(f"🚀 Sending: {symbol} | Change: {change}")
+                        # خففنا الشرط عشان يرسل
+                        if change is None:
+                            continue
 
-                        arrow = "📈" if change and change > 0 else "📉"
+                        arrow = "📈" if change > 0 else "📉"
 
-                        msg = f"""🚨 LIVE Signal
+                        msg = f"""🚨 Signal
 
-💼 {symbol} {arrow} {change if change else 0}%
+💼 {symbol} {arrow} {change}%
+
+🧠 {label}
 
 📰 {title}
 
@@ -156,10 +142,10 @@ async def main():
 
 🔗 {url}"""
 
-                        for c in CHAT_IDS:
-                            await bot.send_message(chat_id=c, text=msg)
+                        print(f"🚀 Sending {symbol}")
 
-                        last_sent_symbol[symbol] = now_time
+                        await bot.send_message(chat_id=CHAT_ID, text=msg)
+
                         sent_news.add(nid)
 
                         await asyncio.sleep(1)
