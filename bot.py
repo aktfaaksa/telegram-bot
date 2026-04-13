@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v11.1 =====
-# FIXED Symbol Detection + Macro + Clean Filtering
+# ===== Alpha Market Intelligence v11.2 =====
+# Clean News Only + Fixed Symbol + Smart Filtering
 
 import asyncio
 import aiohttp
@@ -66,7 +66,15 @@ MACRO_IMPACT = [
     "fed","interest rate","inflation","cpi","ppi",
     "jobs","unemployment","gdp","recession",
     "treasury","bond","yield","powell",
-    "rate cut","rate hike"
+    "rate cut","rate hike",
+    "dow","nasdaq","s&p","sp500","stock market today"
+]
+
+# ❌ حذف الحشو
+IGNORE_WEAK = [
+    "how to","mistakes","millionaire","rules","tax",
+    "mortgage","personal finance","credit card",
+    "saving","retirement","etf","investment tips","vs"
 ]
 
 # ===== TRANSLATION =====
@@ -99,7 +107,7 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT DETECTION =====
+# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
 
@@ -114,28 +122,25 @@ def get_impact(title):
     else:
         return "🟡 GENERAL"
 
-# ===== SYMBOL DETECTION (FIXED 🔥) =====
+# ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
 
-    # 1️⃣ ticker داخل أقواس
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
 
-    # 2️⃣ اسم شركة (أولوية)
     for name, s in COMPANY_MAP.items():
         if name in t:
             return s
 
-    # 3️⃣ ticker دقيق (بدون أخطاء GS)
     for s in WATCHLIST:
         if re.search(rf'\b{s}\b', t):
             return s
 
     return None
 
-# ===== FINNHUB =====
+# ===== API =====
 async def get_stock(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     async with session.get(url) as r:
@@ -146,13 +151,8 @@ async def get_market_news(session):
     async with session.get(url) as r:
         data = await r.json()
 
-    out = []
-    for n in data[:20]:
-        link = n.get("url")
-        if not link or "finnhub" in link:
-            continue
-        out.append({"title": n["headline"], "link": link})
-    return out
+    return [{"title": n["headline"], "link": n["url"]}
+            for n in data[:20] if n.get("url")]
 
 async def get_company_news(session, symbol):
     today = datetime.utcnow().date()
@@ -163,13 +163,8 @@ async def get_company_news(session, symbol):
     async with session.get(url) as r:
         data = await r.json()
 
-    out = []
-    for n in data[:5]:
-        link = n.get("url")
-        if not link or "finnhub" in link:
-            continue
-        out.append({"title": n["headline"], "link": link})
-    return out
+    return [{"title": n["headline"], "link": n["url"]}
+            for n in data[:5] if n.get("url")]
 
 def get_rss():
     out = []
@@ -201,11 +196,21 @@ async def send(bot, session, news):
     if not is_unique(title):
         return False
 
+    title_lower = title.lower()
+
+    # ❌ حذف الحشو
+    if any(x in title_lower for x in IGNORE_WEAK):
+        return False
+
     impact = get_impact(title)
 
     symbol = extract_symbol(title)
     if not symbol:
         symbol = "MARKET"
+
+    # ❌ حذف الأخبار الضعيفة بدون تأثير
+    if symbol == "MARKET" and impact == "🟡 GENERAL":
+        return False
 
     translated = translate_text(title)
 
@@ -247,7 +252,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v11.1 Running (Clean Mode)...")
+    print("🚀 Bot v11.2 Running (Smart Clean Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -260,9 +265,7 @@ async def main():
                     if count >= MAX_NEWS_PER_CYCLE:
                         break
 
-                    sent = await send(bot, session, n)
-
-                    if sent:
+                    if await send(bot, session, n):
                         count += 1
 
                 await asyncio.sleep(300)
