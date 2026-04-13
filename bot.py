@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v11 =====
-# Smart Impact + Macro Detection + Relaxed Filter
+# ===== Alpha Market Intelligence v11.1 =====
+# FIXED Symbol Detection + Macro + Clean Filtering
 
 import asyncio
 import aiohttp
@@ -61,7 +61,7 @@ LOW_IMPACT = [
     "insider buying","insider selling"
 ]
 
-# 🌍 NEW: MACRO IMPACT
+# 🌍 MACRO
 MACRO_IMPACT = [
     "fed","interest rate","inflation","cpi","ppi",
     "jobs","unemployment","gdp","recession",
@@ -87,14 +87,19 @@ def is_new(title, link):
     sent_hashes.add(h)
     return True
 
+def normalize(title):
+    t = title.lower()
+    t = re.sub(r'[^a-z0-9 ]', '', t)
+    return t[:60]
+
 def is_unique(title):
-    short = title.lower()[:80]
+    short = normalize(title)
     if short in seen_titles:
         return False
     seen_titles.add(short)
     return True
 
-# ===== IMPACT DETECTION (UPDATED) =====
+# ===== IMPACT DETECTION =====
 def get_impact(title):
     t = title.lower()
 
@@ -109,20 +114,23 @@ def get_impact(title):
     else:
         return "🟡 GENERAL"
 
-# ===== SYMBOL DETECTION =====
+# ===== SYMBOL DETECTION (FIXED 🔥) =====
 def extract_symbol(title):
     t = title.upper()
 
+    # 1️⃣ ticker داخل أقواس
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
 
-    for s in WATCHLIST:
-        if s in t:
-            return s
-
+    # 2️⃣ اسم شركة (أولوية)
     for name, s in COMPANY_MAP.items():
         if name in t:
+            return s
+
+    # 3️⃣ ticker دقيق (بدون أخطاء GS)
+    for s in WATCHLIST:
+        if re.search(rf'\b{s}\b', t):
             return s
 
     return None
@@ -139,7 +147,7 @@ async def get_market_news(session):
         data = await r.json()
 
     out = []
-    for n in data[:15]:
+    for n in data[:20]:
         link = n.get("url")
         if not link or "finnhub" in link:
             continue
@@ -195,7 +203,6 @@ async def send(bot, session, news):
 
     impact = get_impact(title)
 
-    # 🔥 مهم: ما عاد نحذف الأخبار
     symbol = extract_symbol(title)
     if not symbol:
         symbol = "MARKET"
@@ -240,7 +247,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v11 Running (Macro Mode)...")
+    print("🚀 Bot v11.1 Running (Clean Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
