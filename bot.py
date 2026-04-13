@@ -8,7 +8,6 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENAI_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# 👇 شخصين
 CHAT_IDS = [
     int(os.getenv("CHAT_ID")),
     6315087880
@@ -17,24 +16,42 @@ CHAT_IDS = [
 # ===== AI =====
 client = OpenAI(
     api_key=OPENAI_KEY,
-    base_url="https://openrouter.ai/api/v1"
+    base_url="https://openrouter.ai/api/v1",
+    default_headers={
+        "HTTP-Referer": "https://example.com",
+        "X-Title": "telegram-bot"
+    }
 )
 
 async def ai_analyze(text):
     try:
-        res = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="qwen/qwen3-next-80b-a3b-instruct:free",
-            messages=[{"role": "user", "content": f"""
+            messages=[
+                {"role": "system", "content": "You are a stock trading assistant."},
+                {"role": "user", "content": f"""
 Decision: BUY or SELL or HOLD
-Confidence: 0-100
+Confidence: %
 
-{text}
-"""}]
+Stock: {text}
+"""}
+            ]
         )
-        return res.choices[0].message.content
+        return response.choices[0].message.content
+
     except Exception as e:
-        print("AI error:", e)
-        return "❌ AI error"
+        print("QWEN ERROR:", e)
+
+        # 🔥 fallback
+        try:
+            response = client.chat.completions.create(
+                model="meta-llama/llama-3-8b-instruct:free",
+                messages=[{"role": "user", "content": text}]
+            )
+            return response.choices[0].message.content
+        except Exception as e2:
+            print("LLAMA ERROR:", e2)
+            return "❌ AI غير متوفر حالياً"
 
 # ===== COMPANY MAP =====
 COMPANY_MAP = {
@@ -88,7 +105,6 @@ async def stock_cmd(update, context):
         symbol = get_symbol(context.args[0])
         msg = await get_stock(symbol)
 
-    # 👇 إرسال للجميع
     for c in CHAT_IDS:
         await context.bot.send_message(chat_id=c, text=msg)
 
@@ -113,7 +129,6 @@ async def handle_text(update, context):
     else:
         return
 
-    # 👇 إرسال للجميع
     for c in CHAT_IDS:
         await context.bot.send_message(chat_id=c, text=msg)
 
@@ -126,7 +141,7 @@ def main():
 
     print("Bot started...")
 
-    app.run_polling()  # 👈 الحل النهائي بدون مشاكل
+    app.run_polling()
 
 # ===== RUN =====
 if __name__ == "__main__":
