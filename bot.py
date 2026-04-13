@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v11.2 =====
-# Clean News Only + Fixed Symbol + Smart Filtering
+# ===== Alpha Market Intelligence v12 =====
+# Smart News Engine (Pro Mode)
 
 import asyncio
 import aiohttp
@@ -46,44 +46,43 @@ MAX_NEWS_PER_CYCLE = 15
 
 # ===== IMPACT =====
 HIGH_IMPACT = [
-    "beats","misses","raises guidance","cuts forecast",
+    "beats earnings","misses earnings","raises guidance","cuts forecast",
     "acquisition","merger","buyout","bankruptcy"
 ]
 
 MEDIUM_IMPACT = [
-    "upgrade","downgrade",
-    "fda","approval","clinical",
-    "contract","deal","partnership"
+    "upgrade","downgrade","deal","partnership","contract"
 ]
 
-LOW_IMPACT = [
-    "buyback","dividend",
-    "insider buying","insider selling"
-]
-
-# 🌍 MACRO
 MACRO_IMPACT = [
     "fed","interest rate","inflation","cpi","ppi",
     "jobs","unemployment","gdp","recession",
-    "treasury","bond","yield","powell",
-    "rate cut","rate hike",
-    "dow","nasdaq","s&p","sp500","stock market today"
+    "treasury","yield","powell",
+    "dow","nasdaq","s&p","stock market today",
+    "oil","war","blockade","iran"
+]
+
+TECH_IMPACT = [
+    "ai","artificial intelligence","chip","semiconductor","nvidia"
+]
+
+# ❌ حذف المقالات والتحليلات
+IGNORE_ANALYSIS = [
+    "what","why","how","will","could","should","did",
+    "outlook","forecast","expect","analysis"
 ]
 
 # ❌ حذف الحشو
 IGNORE_WEAK = [
     "how to","mistakes","millionaire","rules","tax",
     "mortgage","personal finance","credit card",
-    "saving","retirement","etf","investment tips","vs"
+    "saving","retirement","etf","vs"
 ]
 
 # ===== TRANSLATION =====
-def clean_text(text):
-    return text.replace("’", "'").replace("“", "").replace("”", "")
-
 def translate_text(text):
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(clean_text(text))
+        return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return text
 
@@ -96,8 +95,7 @@ def is_new(title, link):
     return True
 
 def normalize(title):
-    t = title.lower()
-    t = re.sub(r'[^a-z0-9 ]', '', t)
+    t = re.sub(r'[^a-z0-9 ]', '', title.lower())
     return t[:60]
 
 def is_unique(title):
@@ -115,10 +113,10 @@ def get_impact(title):
         return "🔥 HIGH"
     elif any(x in t for x in MACRO_IMPACT):
         return "🌍 MACRO"
+    elif any(x in t for x in TECH_IMPACT):
+        return "⚡ MEDIUM"
     elif any(x in t for x in MEDIUM_IMPACT):
         return "⚡ MEDIUM"
-    elif any(x in t for x in LOW_IMPACT):
-        return "⚪ LOW"
     else:
         return "🟡 GENERAL"
 
@@ -151,8 +149,13 @@ async def get_market_news(session):
     async with session.get(url) as r:
         data = await r.json()
 
-    return [{"title": n["headline"], "link": n["url"]}
-            for n in data[:20] if n.get("url")]
+    out = []
+    for n in data[:20]:
+        link = n.get("url")
+        if not link or "finnhub" in link:
+            continue
+        out.append({"title": n["headline"], "link": link})
+    return out
 
 async def get_company_news(session, symbol):
     today = datetime.utcnow().date()
@@ -163,8 +166,13 @@ async def get_company_news(session, symbol):
     async with session.get(url) as r:
         data = await r.json()
 
-    return [{"title": n["headline"], "link": n["url"]}
-            for n in data[:5] if n.get("url")]
+    out = []
+    for n in data[:5]:
+        link = n.get("url")
+        if not link or "finnhub" in link:
+            continue
+        out.append({"title": n["headline"], "link": link})
+    return out
 
 def get_rss():
     out = []
@@ -198,6 +206,14 @@ async def send(bot, session, news):
 
     title_lower = title.lower()
 
+    # ❌ حذف Finnhub API
+    if "finnhub" in link:
+        return False
+
+    # ❌ حذف التحليل
+    if any(x in title_lower for x in IGNORE_ANALYSIS):
+        return False
+
     # ❌ حذف الحشو
     if any(x in title_lower for x in IGNORE_WEAK):
         return False
@@ -208,7 +224,7 @@ async def send(bot, session, news):
     if not symbol:
         symbol = "MARKET"
 
-    # ❌ حذف الأخبار الضعيفة بدون تأثير
+    # ❌ حذف الأخبار الضعيفة
     if symbol == "MARKET" and impact == "🟡 GENERAL":
         return False
 
@@ -240,19 +256,15 @@ async def send(bot, session, news):
 
     for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            print("Send error:", e)
+            await bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+        except:
+            pass
 
     return True
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v11.2 Running (Smart Clean Mode)...")
+    print("🚀 Bot v12 Running (Pro Smart Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -260,7 +272,6 @@ async def main():
                 news = await get_all(session)
 
                 count = 0
-
                 for n in news:
                     if count >= MAX_NEWS_PER_CYCLE:
                         break
