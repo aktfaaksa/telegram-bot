@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v12.4 FINAL =====
-# Institutional Grade Trading News Engine
+# ===== Alpha Market Intelligence v12.5 FINAL =====
+# Institutional Trading Signal Engine
 
 import asyncio
 import aiohttp
@@ -102,6 +102,11 @@ IGNORE_LOCAL = [
 IGNORE_MEDIA = [
     "newsletter","video","interview","opinion",
     "we're","unveils","launches","first look"
+]
+
+# 🔥 جديد
+IGNORE_CRYPTO = [
+    "crypto","bitcoin","ethereum"
 ]
 
 # ===== TRANSLATION =====
@@ -263,6 +268,10 @@ async def send(bot, session, news):
     if any(x in title_lower for x in IGNORE_MEDIA):
         return False
 
+    # 🔥 فلتر الكريبتو
+    if any(x in title_lower for x in IGNORE_CRYPTO) and "oil" not in title_lower:
+        return False
+
     # ===== IMPACT =====
     impact = get_impact(title)
 
@@ -309,7 +318,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12.4 FINAL Running...")
+    print("🚀 Bot v12.5 FINAL Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
