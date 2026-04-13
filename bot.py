@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v12 =====
-# Smart News Engine (Pro Mode)
+# ===== Alpha Market Intelligence v12.2 =====
+# Ultra Clean + Trading Grade News Filter
 
 import asyncio
 import aiohttp
@@ -47,29 +47,31 @@ MAX_NEWS_PER_CYCLE = 15
 # ===== IMPACT =====
 HIGH_IMPACT = [
     "beats earnings","misses earnings","raises guidance","cuts forecast",
-    "acquisition","merger","buyout","bankruptcy"
+    "acquisition","merger","buyout","bankruptcy",
+    "contract","wins contract","deal secured"
 ]
 
 MEDIUM_IMPACT = [
-    "upgrade","downgrade","deal","partnership","contract"
+    "upgrade","downgrade","price target","partnership"
 ]
 
 MACRO_IMPACT = [
     "fed","interest rate","inflation","cpi","ppi",
     "jobs","unemployment","gdp","recession",
-    "treasury","yield","powell",
+    "treasury","yield",
     "dow","nasdaq","s&p","stock market today",
-    "oil","war","blockade","iran"
+    "oil","blockade","iran","war","pipeline"
 ]
 
 TECH_IMPACT = [
     "ai","artificial intelligence","chip","semiconductor","nvidia"
 ]
 
-# ❌ حذف المقالات والتحليلات
+# ❌ حذف التحليل
 IGNORE_ANALYSIS = [
     "what","why","how","will","could","should","did",
-    "outlook","forecast","expect","analysis"
+    "outlook","forecast","expect","analysis",
+    "says","warns"
 ]
 
 # ❌ حذف الحشو
@@ -77,6 +79,18 @@ IGNORE_WEAK = [
     "how to","mistakes","millionaire","rules","tax",
     "mortgage","personal finance","credit card",
     "saving","retirement","etf","vs"
+]
+
+# ❌ حذف الرأي والتوصيات
+IGNORE_OPINION = [
+    "best","top stocks","to invest","buy now",
+    "screaming buy","should you","is it time"
+]
+
+# ❌ حذف الأخبار الإدارية
+IGNORE_ADMIN = [
+    "appoint","appoints","names","named",
+    "hire","hiring","executive","board","adviser"
 ]
 
 # ===== TRANSLATION =====
@@ -206,16 +220,20 @@ async def send(bot, session, news):
 
     title_lower = title.lower()
 
-    # ❌ حذف Finnhub API
+    # ❌ فلترة قوية
     if "finnhub" in link:
         return False
 
-    # ❌ حذف التحليل
     if any(x in title_lower for x in IGNORE_ANALYSIS):
         return False
 
-    # ❌ حذف الحشو
     if any(x in title_lower for x in IGNORE_WEAK):
+        return False
+
+    if any(x in title_lower for x in IGNORE_OPINION):
+        return False
+
+    if any(x in title_lower for x in IGNORE_ADMIN):
         return False
 
     impact = get_impact(title)
@@ -224,7 +242,6 @@ async def send(bot, session, news):
     if not symbol:
         symbol = "MARKET"
 
-    # ❌ حذف الأخبار الضعيفة
     if symbol == "MARKET" and impact == "🟡 GENERAL":
         return False
 
@@ -264,7 +281,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12 Running (Pro Smart Mode)...")
+    print("🚀 Bot v12.2 Running (Ultra Clean Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
