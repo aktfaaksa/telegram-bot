@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v10.0 =====
-# Smart Impact + Accurate Symbol Detection
+# ===== Alpha Market Intelligence v11 =====
+# Smart Impact + Macro Detection + Relaxed Filter
 
 import asyncio
 import aiohttp
@@ -42,12 +42,12 @@ sent_hashes = set()
 seen_titles = set()
 
 # ===== SETTINGS =====
-MAX_NEWS_PER_CYCLE = 10
+MAX_NEWS_PER_CYCLE = 15
 
 # ===== IMPACT =====
 HIGH_IMPACT = [
     "beats","misses","raises guidance","cuts forecast",
-    "acquisition","merger","buyout"
+    "acquisition","merger","buyout","bankruptcy"
 ]
 
 MEDIUM_IMPACT = [
@@ -59,6 +59,14 @@ MEDIUM_IMPACT = [
 LOW_IMPACT = [
     "buyback","dividend",
     "insider buying","insider selling"
+]
+
+# 🌍 NEW: MACRO IMPACT
+MACRO_IMPACT = [
+    "fed","interest rate","inflation","cpi","ppi",
+    "jobs","unemployment","gdp","recession",
+    "treasury","bond","yield","powell",
+    "rate cut","rate hike"
 ]
 
 # ===== TRANSLATION =====
@@ -80,40 +88,39 @@ def is_new(title, link):
     return True
 
 def is_unique(title):
-    short = title.lower()[:60]
+    short = title.lower()[:80]
     if short in seen_titles:
         return False
     seen_titles.add(short)
     return True
 
-# ===== IMPACT DETECTION =====
+# ===== IMPACT DETECTION (UPDATED) =====
 def get_impact(title):
     t = title.lower()
 
     if any(x in t for x in HIGH_IMPACT):
         return "🔥 HIGH"
+    elif any(x in t for x in MACRO_IMPACT):
+        return "🌍 MACRO"
     elif any(x in t for x in MEDIUM_IMPACT):
         return "⚡ MEDIUM"
     elif any(x in t for x in LOW_IMPACT):
         return "⚪ LOW"
     else:
-        return None
+        return "🟡 GENERAL"
 
-# ===== SYMBOL DETECTION (FIXED) =====
+# ===== SYMBOL DETECTION =====
 def extract_symbol(title):
     t = title.upper()
 
-    # 1️⃣ ticker داخل أقواس (CRWV)
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
 
-    # 2️⃣ ticker مباشر
     for s in WATCHLIST:
         if s in t:
             return s
 
-    # 3️⃣ اسم شركة
     for name, s in COMPANY_MAP.items():
         if name in t:
             return s
@@ -132,7 +139,7 @@ async def get_market_news(session):
         data = await r.json()
 
     out = []
-    for n in data[:10]:
+    for n in data[:15]:
         link = n.get("url")
         if not link or "finnhub" in link:
             continue
@@ -176,7 +183,7 @@ async def get_all(session):
     return data
 
 # ===== SEND =====
-async def send(bot, session, news, sent_symbols):
+async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
 
@@ -187,38 +194,25 @@ async def send(bot, session, news, sent_symbols):
         return False
 
     impact = get_impact(title)
-    if not impact:
-        return False
 
-    # 🔥 استخراج السهم (مصَحّح)
+    # 🔥 مهم: ما عاد نحذف الأخبار
     symbol = extract_symbol(title)
-
     if not symbol:
-        return False
-
-    # منع تكرار نفس السهم
-    if symbol in sent_symbols:
-        return False
-
-    sent_symbols.add(symbol)
-
-    # تجاهل LOW
-    if impact == "⚪ LOW":
-        return False
+        symbol = "MARKET"
 
     translated = translate_text(title)
 
     stock_info = ""
-    try:
-        d = await get_stock(session, symbol)
-        stock_info = f"""
-
+    if symbol != "MARKET":
+        try:
+            d = await get_stock(session, symbol)
+            stock_info = f"""
 📊 {symbol}
 💰 Price: {d.get('c')}$
 📈 Change: {round(d.get('dp',0),2)}%
 """
-    except:
-        pass
+        except:
+            pass
 
     message = f"""
 {impact}
@@ -246,21 +240,20 @@ async def send(bot, session, news, sent_symbols):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v10 Running (Accurate Mode)...")
+    print("🚀 Bot v11 Running (Macro Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
                 news = await get_all(session)
 
-                sent_symbols = set()
                 count = 0
 
                 for n in news:
                     if count >= MAX_NEWS_PER_CYCLE:
                         break
 
-                    sent = await send(bot, session, n, sent_symbols)
+                    sent = await send(bot, session, n)
 
                     if sent:
                         count += 1
