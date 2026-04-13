@@ -1,5 +1,4 @@
-# ===== Alpha Market Intelligence v12.6 FINAL =====
-# Institutional Trading News Engine (Ultra Clean)
+# ===== Alpha Market Intelligence v13.0 (AI Enhanced) =====
 
 import asyncio
 import aiohttp
@@ -10,20 +9,53 @@ import re
 from datetime import datetime, timedelta
 from telegram import Bot
 from deep_translator import GoogleTranslator
+from openai import OpenAI   # 🔥 NEW
 
 # ===== ENV =====
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
-CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
+OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
+CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
+# ===== AI CLIENT =====
+client = OpenAI(
+    api_key=OPENROUTER_KEY,
+    base_url="https://openrouter.ai/api/v1",
+    default_headers={
+        "HTTP-Referer": "https://example.com",
+        "X-Title": "alpha-bot"
+    }
+)
+
+async def ai_analyze(title):
+    try:
+        response = client.chat.completions.create(
+            model="google/gemma-3-27b-it:free",
+            messages=[{
+                "role": "user",
+                "content": f"""
+Analyze this news and give:
+
+Decision: BUY or SELL or HOLD
+Confidence: %
+
+News: {title}
+"""
+            }],
+            timeout=12
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print("AI error:", e)
+        return None
+
 # ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 
-# ===== COMPANY MAP =====
 COMPANY_MAP = {
     "TESLA":"TSLA","APPLE":"AAPL","NVIDIA":"NVDA","AMD":"AMD",
     "META":"META","MICROSOFT":"MSFT","AMAZON":"AMZN",
@@ -31,102 +63,40 @@ COMPANY_MAP = {
     "GOOGLE":"GOOGL","ALPHABET":"GOOGL","GOLDMAN SACHS":"GS"
 }
 
-# ===== RSS =====
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
-# ===== MEMORY =====
 sent_hashes = set()
 seen_titles = set()
 
-# ===== SETTINGS =====
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== IMPACT =====
-HIGH_IMPACT = [
-    "beats earnings",
-    "misses earnings",
-    "raises guidance",
-    "cuts forecast",
-    "acquisition",
-    "merger",
-    "buyout",
-    "bankruptcy",
-    "wins contract"
-]
+HIGH_IMPACT = ["beats earnings","misses earnings","raises guidance","cuts forecast","acquisition","merger","buyout","bankruptcy","wins contract"]
 
-MEDIUM_IMPACT = [
-    "upgrade","downgrade","price target","partnership"
-]
+MEDIUM_IMPACT = ["upgrade","downgrade","price target","partnership"]
 
-MACRO_IMPACT = [
-    "fed","interest rate","inflation","cpi","ppi",
-    "jobs","unemployment","gdp","recession",
-    "treasury","yield",
-    "dow","nasdaq","s&p","stock market today",
-    "oil","blockade","iran","pipeline","gold","hormuz"
-]
+MACRO_IMPACT = ["fed","interest rate","inflation","cpi","ppi","jobs","unemployment","gdp","recession","treasury","yield","dow","nasdaq","s&p","oil","iran","gold"]
 
-TECH_IMPACT = [
-    "ai","artificial intelligence","chip","semiconductor","nvidia"
-]
+TECH_IMPACT = ["ai","chip","semiconductor","nvidia"]
 
-# ===== FILTERS =====
-IGNORE_ANALYSIS = [
-    "what","why","how","will","could","should","did",
-    "outlook","forecast","expect","analysis",
-    "says","warns"
-]
+IGNORE_ANALYSIS = ["what","why","how","will","could","should"]
+IGNORE_WEAK = ["how to","rules","tax","mortgage"]
+IGNORE_OPINION = ["best","top stocks","buy now"]
+IGNORE_ADMIN = ["appoint","hire","executive"]
+IGNORE_USELESS = ["optimistic","steady"]
+IGNORE_LOCAL = ["airport","city"]
+IGNORE_MEDIA = ["newsletter","video","interview"]
+IGNORE_FEATURE = ["startup","profile"]
+IGNORE_CRYPTO = ["crypto","bitcoin"]
 
-IGNORE_WEAK = [
-    "how to","mistakes","millionaire","rules","tax",
-    "mortgage","personal finance","credit card",
-    "saving","retirement","etf","vs"
-]
-
-IGNORE_OPINION = [
-    "best","top stocks","to invest","buy now",
-    "screaming buy","should you","is it time"
-]
-
-IGNORE_ADMIN = [
-    "appoint","appoints","names","named",
-    "hire","hiring","executive","board","adviser"
-]
-
-IGNORE_USELESS = [
-    "optimistic","steady","roadblocks",
-    "good life","growth initiatives","analysts say"
-]
-
-IGNORE_LOCAL = [
-    "airport","city","municipal","munis","expansion plan"
-]
-
-IGNORE_MEDIA = [
-    "newsletter","video","interview","opinion",
-    "we're","unveils","launches","first look",
-    "open interest"
-]
-
-IGNORE_FEATURE = [
-    "startup","wants to","seeks to","profile","story"
-]
-
-IGNORE_CRYPTO = [
-    "crypto","bitcoin","ethereum"
-]
-
-# ===== TRANSLATION =====
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return text
 
-# ===== ANTI SPAM =====
 def is_new(title, link):
     h = hashlib.md5((title+link).encode()).hexdigest()
     if h in sent_hashes:
@@ -145,47 +115,32 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT LOGIC =====
 def get_impact(title):
     t = title.lower()
-
     if any(x in t for x in HIGH_IMPACT):
         return "🔥 HIGH"
-
     elif any(x in t for x in MACRO_IMPACT):
-        if any(x in t for x in ["oil","iran","gold","treasury","blockade","hormuz"]):
-            return "🌍 MACRO"
-        else:
-            return "⚡ MEDIUM"
-
+        return "🌍 MACRO"
     elif any(x in t for x in TECH_IMPACT):
         return "⚡ MEDIUM"
-
     elif any(x in t for x in MEDIUM_IMPACT):
         return "⚡ MEDIUM"
-
     else:
         return "🟡 GENERAL"
 
-# ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
-
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
-
     for name, s in COMPANY_MAP.items():
         if name in t:
             return s
-
     for s in WATCHLIST:
         if re.search(rf'\b{s}\b', t):
             return s
-
     return None
 
-# ===== API =====
 async def get_stock(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     async with session.get(url) as r:
@@ -196,30 +151,7 @@ async def get_market_news(session):
     async with session.get(url) as r:
         data = await r.json()
 
-    out = []
-    for n in data[:20]:
-        link = n.get("url")
-        if not link or "finnhub" in link:
-            continue
-        out.append({"title": n["headline"], "link": link})
-    return out
-
-async def get_company_news(session, symbol):
-    today = datetime.utcnow().date()
-    past = today - timedelta(days=2)
-
-    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={past}&to={today}&token={API_KEY}"
-
-    async with session.get(url) as r:
-        data = await r.json()
-
-    out = []
-    for n in data[:5]:
-        link = n.get("url")
-        if not link or "finnhub" in link:
-            continue
-        out.append({"title": n["headline"], "link": link})
-    return out
+    return [{"title": n["headline"], "link": n["url"]} for n in data[:20] if n.get("url")]
 
 def get_rss():
     out = []
@@ -229,15 +161,10 @@ def get_rss():
             out.append({"title": e.title, "link": e.link})
     return out
 
-# ===== COLLECT =====
 async def get_all(session):
     data = []
     data.extend(get_rss())
     data.extend(await get_market_news(session))
-
-    for s in WATCHLIST:
-        data.extend(await get_company_news(session, s))
-
     return data
 
 # ===== SEND =====
@@ -253,46 +180,11 @@ async def send(bot, session, news):
 
     title_lower = title.lower()
 
-    # ===== FILTERS =====
-    if "finnhub" in link:
+    if any(x in title_lower for x in IGNORE_ANALYSIS + IGNORE_WEAK + IGNORE_OPINION):
         return False
 
-    if any(x in title_lower for x in IGNORE_ANALYSIS):
-        return False
-
-    if any(x in title_lower for x in IGNORE_WEAK):
-        return False
-
-    if any(x in title_lower for x in IGNORE_OPINION):
-        return False
-
-    if any(x in title_lower for x in IGNORE_ADMIN):
-        return False
-
-    if any(x in title_lower for x in IGNORE_USELESS):
-        return False
-
-    if any(x in title_lower for x in IGNORE_LOCAL):
-        return False
-
-    if any(x in title_lower for x in IGNORE_MEDIA):
-        return False
-
-    if any(x in title_lower for x in IGNORE_FEATURE):
-        return False
-
-    if any(x in title_lower for x in IGNORE_CRYPTO) and "oil" not in title_lower:
-        return False
-
-    # ===== IMPACT =====
     impact = get_impact(title)
-
-    symbol = extract_symbol(title)
-    if not symbol:
-        symbol = "MARKET"
-
-    if symbol == "MARKET" and impact == "🟡 GENERAL":
-        return False
+    symbol = extract_symbol(title) or "MARKET"
 
     translated = translate_text(title)
 
@@ -300,13 +192,16 @@ async def send(bot, session, news):
     if symbol != "MARKET":
         try:
             d = await get_stock(session, symbol)
-            stock_info = f"""
-📊 {symbol}
-💰 Price: {d.get('c')}$
-📈 Change: {round(d.get('dp',0),2)}%
-"""
+            stock_info = f"\n📊 {symbol} | {d.get('c')}$ ({round(d.get('dp',0),2)}%)\n"
         except:
             pass
+
+    # 🔥 AI تحليل فقط للأخبار القوية
+    ai_text = ""
+    if impact in ["🔥 HIGH", "🌍 MACRO"]:
+        ai = await ai_analyze(title)
+        if ai:
+            ai_text = f"\n🤖 {ai}\n"
 
     message = f"""
 {impact}
@@ -314,23 +209,19 @@ async def send(bot, session, news):
 📰 *{title}*
 
 🇸🇦 _{translated}_
-
 {stock_info}
-
+{ai_text}
 🔗 {link}
 """
 
     for chat_id in CHAT_IDS:
-        try:
-            await bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
-        except:
-            pass
+        await bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
 
     return True
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12.6 FINAL Running...")
+    print("🚀 Bot v13 AI Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -351,6 +242,5 @@ async def main():
                 print("Error:", e)
                 await asyncio.sleep(60)
 
-# ===== RUN =====
 if __name__ == "__main__":
     asyncio.run(main())
