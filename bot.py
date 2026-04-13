@@ -1,4 +1,3 @@
-import asyncio
 import aiohttp
 import os
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
@@ -8,6 +7,12 @@ from openai import OpenAI
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENAI_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# 👇 شخصين
+CHAT_IDS = [
+    int(os.getenv("CHAT_ID")),
+    6315087880
+]
 
 # ===== AI =====
 client = OpenAI(
@@ -78,13 +83,14 @@ async def get_stock(symbol):
 # ===== COMMAND =====
 async def stock_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("اكتب:\n/stock TSLA")
-        return
+        msg = "اكتب:\n/stock TSLA"
+    else:
+        symbol = get_symbol(context.args[0])
+        msg = await get_stock(symbol)
 
-    symbol = get_symbol(context.args[0])
-    data = await get_stock(symbol)
-
-    await update.message.reply_text(data)
+    # 👇 إرسال للجميع
+    for c in CHAT_IDS:
+        await context.bot.send_message(chat_id=c, text=msg)
 
 # ===== TEXT (عربي) =====
 async def handle_text(update, context):
@@ -93,34 +99,35 @@ async def handle_text(update, context):
     if text.startswith("سهم"):
         try:
             symbol = get_symbol(text.split(" ")[1])
-            data = await get_stock(symbol)
-            await update.message.reply_text(data)
+            msg = await get_stock(symbol)
         except:
-            await update.message.reply_text("اكتب: سهم TSLA")
+            msg = "اكتب: سهم TSLA"
 
     elif text.startswith("تحليل"):
         try:
             symbol = get_symbol(text.split(" ")[1])
-            result = await ai_analyze(symbol)
-            await update.message.reply_text(result)
+            msg = await ai_analyze(symbol)
         except:
-            await update.message.reply_text("اكتب: تحليل TSLA")
+            msg = "اكتب: تحليل TSLA"
+
+    else:
+        return
+
+    # 👇 إرسال للجميع
+    for c in CHAT_IDS:
+        await context.bot.send_message(chat_id=c, text=msg)
 
 # ===== MAIN =====
-async def main():
+def main():
     app = Application.builder().token(TOKEN).build()
 
-    # أوامر
     app.add_handler(CommandHandler("stock", stock_cmd))
-
-    # عربي
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
 
     print("Bot started...")
 
-    # 👇 أهم سطر (يشغل الاستقبال)
-    await app.run_polling()
+    app.run_polling()  # 👈 الحل النهائي بدون مشاكل
 
 # ===== RUN =====
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
