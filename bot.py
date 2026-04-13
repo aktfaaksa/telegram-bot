@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v13.0 (AI Enhanced) =====
+# ===== Alpha Market Intelligence v14.0 (Llama + Gemma AI) =====
 
 import asyncio
 import aiohttp
@@ -6,10 +6,9 @@ import feedparser
 import hashlib
 import os
 import re
-from datetime import datetime, timedelta
 from telegram import Bot
 from deep_translator import GoogleTranslator
-from openai import OpenAI   # 🔥 NEW
+from openai import OpenAI
 
 # ===== ENV =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -31,27 +30,39 @@ client = OpenAI(
     }
 )
 
+# ===== AI (🔥 Llama + Gemma fallback) =====
 async def ai_analyze(title):
-    try:
-        response = client.chat.completions.create(
-            model="google/gemma-3-27b-it:free",
-            messages=[{
-                "role": "user",
-                "content": f"""
-Analyze this news and give:
+    models = [
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "google/gemma-3-27b-it:free"
+    ]
 
+    for model in models:
+        try:
+            print("Trying:", model)
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": f"""
 Decision: BUY or SELL or HOLD
 Confidence: %
 
 News: {title}
 """
-            }],
-            timeout=12
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        print("AI error:", e)
-        return None
+                }],
+                timeout=12
+            )
+
+            result = response.choices[0].message.content
+            if result:
+                return result
+
+        except Exception as e:
+            print("AI error:", model, e)
+
+    return ""
 
 # ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
@@ -70,15 +81,11 @@ RSS_FEEDS = [
 
 sent_hashes = set()
 seen_titles = set()
-
 MAX_NEWS_PER_CYCLE = 15
 
 HIGH_IMPACT = ["beats earnings","misses earnings","raises guidance","cuts forecast","acquisition","merger","buyout","bankruptcy","wins contract"]
-
 MEDIUM_IMPACT = ["upgrade","downgrade","price target","partnership"]
-
 MACRO_IMPACT = ["fed","interest rate","inflation","cpi","ppi","jobs","unemployment","gdp","recession","treasury","yield","dow","nasdaq","s&p","oil","iran","gold"]
-
 TECH_IMPACT = ["ai","chip","semiconductor","nvidia"]
 
 IGNORE_ANALYSIS = ["what","why","how","will","could","should"]
@@ -150,7 +157,6 @@ async def get_market_news(session):
     url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
     async with session.get(url) as r:
         data = await r.json()
-
     return [{"title": n["headline"], "link": n["url"]} for n in data[:20] if n.get("url")]
 
 def get_rss():
@@ -196,7 +202,7 @@ async def send(bot, session, news):
         except:
             pass
 
-    # 🔥 AI تحليل فقط للأخبار القوية
+    # 🔥 AI فقط للأخبار المهمة
     ai_text = ""
     if impact in ["🔥 HIGH", "🌍 MACRO"]:
         ai = await ai_analyze(title)
@@ -206,22 +212,22 @@ async def send(bot, session, news):
     message = f"""
 {impact}
 
-📰 *{title}*
+📰 {title}
 
-🇸🇦 _{translated}_
+🇸🇦 {translated}
 {stock_info}
 {ai_text}
 🔗 {link}
 """
 
     for chat_id in CHAT_IDS:
-        await bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+        await bot.send_message(chat_id=chat_id, text=message)
 
     return True
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v13 AI Running...")
+    print("🚀 Bot v14 AI Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
