@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v12.2 =====
-# Ultra Clean + Trading Grade News Filter
+# ===== Alpha Market Intelligence v12.3 =====
+# Ultra Pro Trading News Engine
 
 import asyncio
 import aiohttp
@@ -60,37 +60,39 @@ MACRO_IMPACT = [
     "jobs","unemployment","gdp","recession",
     "treasury","yield",
     "dow","nasdaq","s&p","stock market today",
-    "oil","blockade","iran","war","pipeline"
+    "oil","blockade","iran","pipeline","gold"
 ]
 
 TECH_IMPACT = [
     "ai","artificial intelligence","chip","semiconductor","nvidia"
 ]
 
-# ❌ حذف التحليل
+# ===== FILTERS =====
 IGNORE_ANALYSIS = [
     "what","why","how","will","could","should","did",
     "outlook","forecast","expect","analysis",
     "says","warns"
 ]
 
-# ❌ حذف الحشو
 IGNORE_WEAK = [
     "how to","mistakes","millionaire","rules","tax",
     "mortgage","personal finance","credit card",
     "saving","retirement","etf","vs"
 ]
 
-# ❌ حذف الرأي والتوصيات
 IGNORE_OPINION = [
     "best","top stocks","to invest","buy now",
     "screaming buy","should you","is it time"
 ]
 
-# ❌ حذف الأخبار الإدارية
 IGNORE_ADMIN = [
     "appoint","appoints","names","named",
     "hire","hiring","executive","board","adviser"
+]
+
+IGNORE_USELESS = [
+    "optimistic","steady","roadblocks",
+    "good life","growth initiatives","analysts say"
 ]
 
 # ===== TRANSLATION =====
@@ -119,18 +121,26 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT =====
+# ===== IMPACT LOGIC =====
 def get_impact(title):
     t = title.lower()
 
     if any(x in t for x in HIGH_IMPACT):
         return "🔥 HIGH"
+
     elif any(x in t for x in MACRO_IMPACT):
-        return "🌍 MACRO"
+        # فقط القوي يعتبر MACRO
+        if any(x in t for x in ["oil","iran","treasury","gold","blockade"]):
+            return "🌍 MACRO"
+        else:
+            return "⚡ MEDIUM"
+
     elif any(x in t for x in TECH_IMPACT):
         return "⚡ MEDIUM"
+
     elif any(x in t for x in MEDIUM_IMPACT):
         return "⚡ MEDIUM"
+
     else:
         return "🟡 GENERAL"
 
@@ -220,7 +230,7 @@ async def send(bot, session, news):
 
     title_lower = title.lower()
 
-    # ❌ فلترة قوية
+    # ===== FILTERS =====
     if "finnhub" in link:
         return False
 
@@ -236,6 +246,10 @@ async def send(bot, session, news):
     if any(x in title_lower for x in IGNORE_ADMIN):
         return False
 
+    if any(x in title_lower for x in IGNORE_USELESS):
+        return False
+
+    # ===== IMPACT =====
     impact = get_impact(title)
 
     symbol = extract_symbol(title)
@@ -281,7 +295,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12.2 Running (Ultra Clean Mode)...")
+    print("🚀 Bot v12.3 Running (Ultra Pro Mode)...")
 
     async with aiohttp.ClientSession() as session:
         while True:
