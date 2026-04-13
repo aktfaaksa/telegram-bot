@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v12.3 =====
-# Ultra Pro Trading News Engine
+# ===== Alpha Market Intelligence v12.4 FINAL =====
+# Institutional Grade Trading News Engine
 
 import asyncio
 import aiohttp
@@ -60,7 +60,7 @@ MACRO_IMPACT = [
     "jobs","unemployment","gdp","recession",
     "treasury","yield",
     "dow","nasdaq","s&p","stock market today",
-    "oil","blockade","iran","pipeline","gold"
+    "oil","blockade","iran","pipeline","gold","hormuz"
 ]
 
 TECH_IMPACT = [
@@ -93,6 +93,15 @@ IGNORE_ADMIN = [
 IGNORE_USELESS = [
     "optimistic","steady","roadblocks",
     "good life","growth initiatives","analysts say"
+]
+
+IGNORE_LOCAL = [
+    "airport","city","municipal","munis","expansion plan"
+]
+
+IGNORE_MEDIA = [
+    "newsletter","video","interview","opinion",
+    "we're","unveils","launches","first look"
 ]
 
 # ===== TRANSLATION =====
@@ -129,8 +138,7 @@ def get_impact(title):
         return "🔥 HIGH"
 
     elif any(x in t for x in MACRO_IMPACT):
-        # فقط القوي يعتبر MACRO
-        if any(x in t for x in ["oil","iran","treasury","gold","blockade"]):
+        if any(x in t for x in ["oil","iran","gold","treasury","blockade","hormuz"]):
             return "🌍 MACRO"
         else:
             return "⚡ MEDIUM"
@@ -249,6 +257,12 @@ async def send(bot, session, news):
     if any(x in title_lower for x in IGNORE_USELESS):
         return False
 
+    if any(x in title_lower for x in IGNORE_LOCAL):
+        return False
+
+    if any(x in title_lower for x in IGNORE_MEDIA):
+        return False
+
     # ===== IMPACT =====
     impact = get_impact(title)
 
@@ -295,7 +309,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12.3 Running (Ultra Pro Mode)...")
+    print("🚀 Bot v12.4 FINAL Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
