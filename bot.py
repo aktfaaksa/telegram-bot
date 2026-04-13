@@ -1,7 +1,6 @@
 import asyncio
 import aiohttp
 import os
-from telegram import Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from openai import OpenAI
 
@@ -9,10 +8,6 @@ from openai import OpenAI
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENAI_KEY = os.getenv("OPENROUTER_API_KEY")
-
-CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
-
-bot = Bot(token=TOKEN)
 
 # ===== AI =====
 client = OpenAI(
@@ -32,8 +27,9 @@ Confidence: 0-100
 """}]
         )
         return res.choices[0].message.content
-    except:
-        return ""
+    except Exception as e:
+        print("AI error:", e)
+        return "❌ AI error"
 
 # ===== COMPANY MAP =====
 COMPANY_MAP = {
@@ -51,31 +47,35 @@ def get_symbol(text):
             return s
     return t
 
-# ===== STOCK INFO =====
+# ===== STOCK =====
 async def get_stock(symbol):
+    print("Fetching:", symbol)
+
     async with aiohttp.ClientSession() as session:
         q = await (await session.get(
             f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
         )).json()
 
+        print("DATA:", q)
+
         if not q or q.get("c") is None:
-            return "❌ السهم غير موجود"
+            return "❌ السهم غير موجود أو API فيه مشكلة"
 
         price = q.get("c")
         change = round(q.get("dp", 0), 2)
         arrow = "📈" if change >= 0 else "📉"
 
-        ai = await ai_analyze(symbol)
+        ai_text = await ai_analyze(symbol)
 
         return f"""
 📊 {symbol}
 
 💰 {price}$ {arrow} {change}%
 
-🤖 {ai}
+🤖 {ai_text}
 """
 
-# ===== COMMANDS =====
+# ===== COMMAND =====
 async def stock_cmd(update, context):
     if not context.args:
         await update.message.reply_text("اكتب:\n/stock TSLA")
@@ -83,13 +83,13 @@ async def stock_cmd(update, context):
 
     symbol = get_symbol(context.args[0])
     data = await get_stock(symbol)
+
     await update.message.reply_text(data)
 
-# ===== ARABIC TEXT HANDLER =====
+# ===== TEXT (عربي) =====
 async def handle_text(update, context):
     text = update.message.text.lower()
 
-    # سهم TSLA
     if text.startswith("سهم"):
         try:
             symbol = get_symbol(text.split(" ")[1])
@@ -98,7 +98,6 @@ async def handle_text(update, context):
         except:
             await update.message.reply_text("اكتب: سهم TSLA")
 
-    # تحليل TSLA
     elif text.startswith("تحليل"):
         try:
             symbol = get_symbol(text.split(" ")[1])
@@ -107,13 +106,8 @@ async def handle_text(update, context):
         except:
             await update.message.reply_text("اكتب: تحليل TSLA")
 
-# ===== NEWS (اختياري بسيط) =====
-async def news_loop():
-    while True:
-        await asyncio.sleep(300)
-
-# ===== RUN =====
-async def run():
+# ===== MAIN =====
+async def main():
     app = Application.builder().token(TOKEN).build()
 
     # أوامر
@@ -122,10 +116,11 @@ async def run():
     # عربي
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
 
-    await app.initialize()
-    await app.start()
+    print("Bot started...")
 
-    await news_loop()
+    # 👇 أهم سطر (يشغل الاستقبال)
+    await app.run_polling()
 
+# ===== RUN =====
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(main())
