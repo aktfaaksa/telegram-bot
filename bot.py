@@ -1,5 +1,5 @@
-# ===== Alpha Market Intelligence v12.5 FINAL =====
-# Institutional Trading Signal Engine
+# ===== Alpha Market Intelligence v12.6 FINAL =====
+# Institutional Trading News Engine (Ultra Clean)
 
 import asyncio
 import aiohttp
@@ -46,9 +46,15 @@ MAX_NEWS_PER_CYCLE = 15
 
 # ===== IMPACT =====
 HIGH_IMPACT = [
-    "beats earnings","misses earnings","raises guidance","cuts forecast",
-    "acquisition","merger","buyout","bankruptcy",
-    "contract","wins contract","deal secured"
+    "beats earnings",
+    "misses earnings",
+    "raises guidance",
+    "cuts forecast",
+    "acquisition",
+    "merger",
+    "buyout",
+    "bankruptcy",
+    "wins contract"
 ]
 
 MEDIUM_IMPACT = [
@@ -101,10 +107,14 @@ IGNORE_LOCAL = [
 
 IGNORE_MEDIA = [
     "newsletter","video","interview","opinion",
-    "we're","unveils","launches","first look"
+    "we're","unveils","launches","first look",
+    "open interest"
 ]
 
-# 🔥 جديد
+IGNORE_FEATURE = [
+    "startup","wants to","seeks to","profile","story"
+]
+
 IGNORE_CRYPTO = [
     "crypto","bitcoin","ethereum"
 ]
@@ -268,7 +278,9 @@ async def send(bot, session, news):
     if any(x in title_lower for x in IGNORE_MEDIA):
         return False
 
-    # 🔥 فلتر الكريبتو
+    if any(x in title_lower for x in IGNORE_FEATURE):
+        return False
+
     if any(x in title_lower for x in IGNORE_CRYPTO) and "oil" not in title_lower:
         return False
 
@@ -318,7 +330,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12.5 FINAL Running...")
+    print("🚀 Bot v12.6 FINAL Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
