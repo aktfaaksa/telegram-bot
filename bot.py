@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v13 FINAL =====
+# ===== Alpha Market Intelligence v14 COMPACT =====
 
 import asyncio
 import aiohttp
@@ -6,7 +6,6 @@ import feedparser
 import hashlib
 import os
 import re
-from datetime import datetime, timedelta
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -104,9 +103,8 @@ def extract_symbol(title):
 # ===== AI =====
 async def analyze_news(title, impact):
     if not OPENROUTER_API_KEY:
-        return "❌ No API Key"
+        return "❌ لا يوجد API"
 
-    # ✅ موديلات مصححة
     if impact == "🔥 HIGH":
         model = "anthropic/claude-3.7-sonnet"
     else:
@@ -115,19 +113,20 @@ async def analyze_news(title, impact):
     url = "https://openrouter.ai/api/v1/chat/completions"
 
     prompt = f"""
-You are a hedge fund analyst.
-
-Analyze this news:
+حلل الخبر التالي:
 
 {title}
 
-Return in Arabic:
+أجب بالعربي فقط وبشكل مختصر جداً:
 
-الاتجاه: Bullish/Bearish/Neutral
-القوة: 1-10
-الثقة: %
-الإشارة: Buy/Sell/Hold
-السبب: سطر واحد فقط
+الاتجاه: صعودي / هبوطي / محايد
+القوة: رقم من 1 إلى 10
+الثقة: نسبة مئوية
+الإشارة: شراء / بيع / احتفاظ
+السبب: 5 كلمات فقط
+
+ممنوع أي كلمة إنجليزية.
+ممنوع أي شرح إضافي.
 """
 
     headers = {
@@ -148,11 +147,11 @@ Return in Arabic:
                 if "choices" in data:
                     return data["choices"][0]["message"]["content"]
                 else:
-                    return f"❌ API Error: {data}"
+                    return "❌ خطأ في التحليل"
 
     except Exception as e:
         print("AI ERROR:", e)
-        return "❌ AI Failed"
+        return "❌ فشل التحليل"
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
@@ -185,7 +184,6 @@ async def send(bot, session, news):
 
     impact = get_impact(title)
 
-    # 💰 توفير
     if impact == "🟡 GENERAL":
         return False
 
@@ -201,8 +199,8 @@ async def send(bot, session, news):
             d = await get_stock(session, symbol)
             stock_info = f"""
 📊 {symbol}
-💰 Price: {d.get('c')}$
-📈 Change: {round(d.get('dp',0),2)}%
+💰 {d.get('c')}$
+📈 {round(d.get('dp',0),2)}%
 """
         except:
             pass
@@ -232,7 +230,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 AI Bot FINAL Running...")
+    print("🚀 v14 COMPACT RUNNING")
 
     async with aiohttp.ClientSession() as session:
         while True:
