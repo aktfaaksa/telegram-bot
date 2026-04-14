@@ -3,4 +3,3 @@ aiohttp
 requests
 deep-translator
 feedparser
-openai>=1.0.0

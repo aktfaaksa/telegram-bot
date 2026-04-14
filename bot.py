@@ -1,5 +1,4 @@
-# ===== Alpha Market Intelligence v12.6 FINAL =====
-# Institutional Trading News Engine (Ultra Clean)
+# ===== Alpha Market Intelligence v13 AI SAFE =====
 
 import asyncio
 import aiohttp
@@ -14,8 +13,10 @@ from deep_translator import GoogleTranslator
 # ===== ENV =====
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
+# ✅ تم الحفاظ عليه
 CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
@@ -45,79 +46,13 @@ seen_titles = set()
 MAX_NEWS_PER_CYCLE = 15
 
 # ===== IMPACT =====
-HIGH_IMPACT = [
-    "beats earnings",
-    "misses earnings",
-    "raises guidance",
-    "cuts forecast",
-    "acquisition",
-    "merger",
-    "buyout",
-    "bankruptcy",
-    "wins contract"
-]
+HIGH_IMPACT = ["beats earnings","misses earnings","raises guidance","cuts forecast","acquisition","merger","buyout","bankruptcy","wins contract"]
 
-MEDIUM_IMPACT = [
-    "upgrade","downgrade","price target","partnership"
-]
+MEDIUM_IMPACT = ["upgrade","downgrade","price target","partnership"]
 
-MACRO_IMPACT = [
-    "fed","interest rate","inflation","cpi","ppi",
-    "jobs","unemployment","gdp","recession",
-    "treasury","yield",
-    "dow","nasdaq","s&p","stock market today",
-    "oil","blockade","iran","pipeline","gold","hormuz"
-]
+MACRO_IMPACT = ["fed","interest rate","inflation","cpi","ppi","jobs","unemployment","gdp","recession","treasury","yield","dow","nasdaq","s&p","oil","iran","gold","hormuz"]
 
-TECH_IMPACT = [
-    "ai","artificial intelligence","chip","semiconductor","nvidia"
-]
-
-# ===== FILTERS =====
-IGNORE_ANALYSIS = [
-    "what","why","how","will","could","should","did",
-    "outlook","forecast","expect","analysis",
-    "says","warns"
-]
-
-IGNORE_WEAK = [
-    "how to","mistakes","millionaire","rules","tax",
-    "mortgage","personal finance","credit card",
-    "saving","retirement","etf","vs"
-]
-
-IGNORE_OPINION = [
-    "best","top stocks","to invest","buy now",
-    "screaming buy","should you","is it time"
-]
-
-IGNORE_ADMIN = [
-    "appoint","appoints","names","named",
-    "hire","hiring","executive","board","adviser"
-]
-
-IGNORE_USELESS = [
-    "optimistic","steady","roadblocks",
-    "good life","growth initiatives","analysts say"
-]
-
-IGNORE_LOCAL = [
-    "airport","city","municipal","munis","expansion plan"
-]
-
-IGNORE_MEDIA = [
-    "newsletter","video","interview","opinion",
-    "we're","unveils","launches","first look",
-    "open interest"
-]
-
-IGNORE_FEATURE = [
-    "startup","wants to","seeks to","profile","story"
-]
-
-IGNORE_CRYPTO = [
-    "crypto","bitcoin","ethereum"
-]
+TECH_IMPACT = ["ai","chip","semiconductor","nvidia"]
 
 # ===== TRANSLATION =====
 def translate_text(text):
@@ -126,7 +61,7 @@ def translate_text(text):
     except:
         return text
 
-# ===== ANTI SPAM =====
+# ===== HELPERS =====
 def is_new(title, link):
     h = hashlib.md5((title+link).encode()).hexdigest()
     if h in sent_hashes:
@@ -135,8 +70,7 @@ def is_new(title, link):
     return True
 
 def normalize(title):
-    t = re.sub(r'[^a-z0-9 ]', '', title.lower())
-    return t[:60]
+    return re.sub(r'[^a-z0-9 ]', '', title.lower())[:60]
 
 def is_unique(title):
     short = normalize(title)
@@ -151,19 +85,10 @@ def get_impact(title):
 
     if any(x in t for x in HIGH_IMPACT):
         return "🔥 HIGH"
-
     elif any(x in t for x in MACRO_IMPACT):
-        if any(x in t for x in ["oil","iran","gold","treasury","blockade","hormuz"]):
-            return "🌍 MACRO"
-        else:
-            return "⚡ MEDIUM"
-
-    elif any(x in t for x in TECH_IMPACT):
+        return "🌍 MACRO"
+    elif any(x in t for x in TECH_IMPACT + MEDIUM_IMPACT):
         return "⚡ MEDIUM"
-
-    elif any(x in t for x in MEDIUM_IMPACT):
-        return "⚡ MEDIUM"
-
     else:
         return "🟡 GENERAL"
 
@@ -183,44 +108,64 @@ def extract_symbol(title):
         if re.search(rf'\b{s}\b', t):
             return s
 
-    return None
+    return "MARKET"
 
-# ===== API =====
+# ===== AI ANALYSIS =====
+async def analyze_news(title, impact):
+    if not OPENROUTER_API_KEY:
+        return ""
+
+    # توزيع ذكي
+    if impact == "🔥 HIGH":
+        model = "anthropic/claude-3.7-sonnet"
+    else:
+        model = "google/gemini-3.1-flash-lite"
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+
+    prompt = f"""
+You are a hedge fund analyst.
+
+Analyze this news:
+
+{title}
+
+Return in Arabic:
+
+الاتجاه: Bullish/Bearish/Neutral
+القوة: 1-10
+الثقة: %
+الإشارة: Buy/Sell/Hold
+السبب: سطر واحد فقط
+
+مختصر جدا.
+"""
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as r:
+                data = await r.json()
+                return data["choices"][0]["message"]["content"]
+    except:
+        return ""
+
+# ===== STOCK =====
 async def get_stock(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     async with session.get(url) as r:
         return await r.json()
 
-async def get_market_news(session):
-    url = f"https://finnhub.io/api/v1/news?category=general&token={API_KEY}"
-    async with session.get(url) as r:
-        data = await r.json()
-
-    out = []
-    for n in data[:20]:
-        link = n.get("url")
-        if not link or "finnhub" in link:
-            continue
-        out.append({"title": n["headline"], "link": link})
-    return out
-
-async def get_company_news(session, symbol):
-    today = datetime.utcnow().date()
-    past = today - timedelta(days=2)
-
-    url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={past}&to={today}&token={API_KEY}"
-
-    async with session.get(url) as r:
-        data = await r.json()
-
-    out = []
-    for n in data[:5]:
-        link = n.get("url")
-        if not link or "finnhub" in link:
-            continue
-        out.append({"title": n["headline"], "link": link})
-    return out
-
+# ===== NEWS =====
 def get_rss():
     out = []
     for url in RSS_FEEDS:
@@ -229,15 +174,9 @@ def get_rss():
             out.append({"title": e.title, "link": e.link})
     return out
 
-# ===== COLLECT =====
 async def get_all(session):
     data = []
     data.extend(get_rss())
-    data.extend(await get_market_news(session))
-
-    for s in WATCHLIST:
-        data.extend(await get_company_news(session, s))
-
     return data
 
 # ===== SEND =====
@@ -251,50 +190,18 @@ async def send(bot, session, news):
     if not is_unique(title):
         return False
 
-    title_lower = title.lower()
-
-    # ===== FILTERS =====
-    if "finnhub" in link:
-        return False
-
-    if any(x in title_lower for x in IGNORE_ANALYSIS):
-        return False
-
-    if any(x in title_lower for x in IGNORE_WEAK):
-        return False
-
-    if any(x in title_lower for x in IGNORE_OPINION):
-        return False
-
-    if any(x in title_lower for x in IGNORE_ADMIN):
-        return False
-
-    if any(x in title_lower for x in IGNORE_USELESS):
-        return False
-
-    if any(x in title_lower for x in IGNORE_LOCAL):
-        return False
-
-    if any(x in title_lower for x in IGNORE_MEDIA):
-        return False
-
-    if any(x in title_lower for x in IGNORE_FEATURE):
-        return False
-
-    if any(x in title_lower for x in IGNORE_CRYPTO) and "oil" not in title_lower:
-        return False
-
-    # ===== IMPACT =====
     impact = get_impact(title)
 
-    symbol = extract_symbol(title)
-    if not symbol:
-        symbol = "MARKET"
-
-    if symbol == "MARKET" and impact == "🟡 GENERAL":
+    # 💰 توفير مهم
+    if impact == "🟡 GENERAL":
         return False
 
+    symbol = extract_symbol(title)
+
     translated = translate_text(title)
+
+    # ===== AI =====
+    ai = await analyze_news(title, impact)
 
     stock_info = ""
     if symbol != "MARKET":
@@ -317,6 +224,9 @@ async def send(bot, session, news):
 
 {stock_info}
 
+🧠 التحليل:
+{ai}
+
 🔗 {link}
 """
 
@@ -330,7 +240,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 Bot v12.6 FINAL Running...")
+    print("🚀 AI Bot Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
