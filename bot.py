@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v13 AI FIXED =====
+# ===== Alpha Market Intelligence v13 FINAL =====
 
 import asyncio
 import aiohttp
@@ -106,10 +106,11 @@ async def analyze_news(title, impact):
     if not OPENROUTER_API_KEY:
         return "❌ No API Key"
 
+    # ✅ موديلات مصححة
     if impact == "🔥 HIGH":
         model = "anthropic/claude-3.7-sonnet"
     else:
-        model = "google/gemini-3.1-flash-lite"
+        model = "google/gemini-2.5-flash-lite"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -143,8 +144,6 @@ Return in Arabic:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers) as r:
                 data = await r.json()
-
-                print("AI RESPONSE:", data)
 
                 if "choices" in data:
                     return data["choices"][0]["message"]["content"]
@@ -186,6 +185,7 @@ async def send(bot, session, news):
 
     impact = get_impact(title)
 
+    # 💰 توفير
     if impact == "🟡 GENERAL":
         return False
 
@@ -232,7 +232,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 AI Bot Running FIXED...")
+    print("🚀 AI Bot FINAL Running...")
 
     async with aiohttp.ClientSession() as session:
         while True:
