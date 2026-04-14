@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v13 AI SAFE =====
+# ===== Alpha Market Intelligence v13 AI FIXED =====
 
 import asyncio
 import aiohttp
@@ -16,7 +16,6 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-# ✅ تم الحفاظ عليه
 CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
@@ -24,7 +23,6 @@ bot = Bot(token=TOKEN)
 # ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 
-# ===== COMPANY MAP =====
 COMPANY_MAP = {
     "TESLA":"TSLA","APPLE":"AAPL","NVIDIA":"NVDA","AMD":"AMD",
     "META":"META","MICROSOFT":"MSFT","AMAZON":"AMZN",
@@ -32,26 +30,19 @@ COMPANY_MAP = {
     "GOOGLE":"GOOGL","ALPHABET":"GOOGL","GOLDMAN SACHS":"GS"
 }
 
-# ===== RSS =====
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
-# ===== MEMORY =====
 sent_hashes = set()
 seen_titles = set()
 
-# ===== SETTINGS =====
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== IMPACT =====
 HIGH_IMPACT = ["beats earnings","misses earnings","raises guidance","cuts forecast","acquisition","merger","buyout","bankruptcy","wins contract"]
-
 MEDIUM_IMPACT = ["upgrade","downgrade","price target","partnership"]
-
 MACRO_IMPACT = ["fed","interest rate","inflation","cpi","ppi","jobs","unemployment","gdp","recession","treasury","yield","dow","nasdaq","s&p","oil","iran","gold","hormuz"]
-
 TECH_IMPACT = ["ai","chip","semiconductor","nvidia"]
 
 # ===== TRANSLATION =====
@@ -79,7 +70,7 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT LOGIC =====
+# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
 
@@ -110,12 +101,11 @@ def extract_symbol(title):
 
     return "MARKET"
 
-# ===== AI ANALYSIS =====
+# ===== AI =====
 async def analyze_news(title, impact):
     if not OPENROUTER_API_KEY:
-        return ""
+        return "❌ No API Key"
 
-    # توزيع ذكي
     if impact == "🔥 HIGH":
         model = "anthropic/claude-3.7-sonnet"
     else:
@@ -137,8 +127,6 @@ Return in Arabic:
 الثقة: %
 الإشارة: Buy/Sell/Hold
 السبب: سطر واحد فقط
-
-مختصر جدا.
 """
 
     headers = {
@@ -155,9 +143,17 @@ Return in Arabic:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers) as r:
                 data = await r.json()
-                return data["choices"][0]["message"]["content"]
-    except:
-        return ""
+
+                print("AI RESPONSE:", data)
+
+                if "choices" in data:
+                    return data["choices"][0]["message"]["content"]
+                else:
+                    return f"❌ API Error: {data}"
+
+    except Exception as e:
+        print("AI ERROR:", e)
+        return "❌ AI Failed"
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
@@ -175,9 +171,7 @@ def get_rss():
     return out
 
 async def get_all(session):
-    data = []
-    data.extend(get_rss())
-    return data
+    return get_rss()
 
 # ===== SEND =====
 async def send(bot, session, news):
@@ -192,7 +186,6 @@ async def send(bot, session, news):
 
     impact = get_impact(title)
 
-    # 💰 توفير مهم
     if impact == "🟡 GENERAL":
         return False
 
@@ -200,7 +193,6 @@ async def send(bot, session, news):
 
     translated = translate_text(title)
 
-    # ===== AI =====
     ai = await analyze_news(title, impact)
 
     stock_info = ""
@@ -240,7 +232,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 AI Bot Running...")
+    print("🚀 AI Bot Running FIXED...")
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -258,7 +250,7 @@ async def main():
                 await asyncio.sleep(300)
 
             except Exception as e:
-                print("Error:", e)
+                print("MAIN ERROR:", e)
                 await asyncio.sleep(60)
 
 # ===== RUN =====
