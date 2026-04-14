@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v14 COMPACT =====
+# ===== Alpha Market Intelligence v15 SMART AR =====
 
 import asyncio
 import aiohttp
@@ -69,18 +69,23 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT =====
+# ===== IMPACT (تعريب + دمج) =====
 def get_impact(title):
     t = title.lower()
 
     if any(x in t for x in HIGH_IMPACT):
-        return "🔥 HIGH"
+        return "🔥 عالي"
+
     elif any(x in t for x in MACRO_IMPACT):
-        return "🌍 MACRO"
+        if any(k in t for k in ["war","conflict","crisis","inflation","rate"]):
+            return "🌍 اقتصادي عالي"
+        return "🌍 اقتصادي"
+
     elif any(x in t for x in TECH_IMPACT + MEDIUM_IMPACT):
-        return "⚡ MEDIUM"
+        return "⚡ متوسط"
+
     else:
-        return "🟡 GENERAL"
+        return "🟡 عادي"
 
 # ===== SYMBOL =====
 def extract_symbol(title):
@@ -105,7 +110,7 @@ async def analyze_news(title, impact):
     if not OPENROUTER_API_KEY:
         return "❌ لا يوجد API"
 
-    if impact == "🔥 HIGH":
+    if "🔥" in impact:
         model = "anthropic/claude-3.7-sonnet"
     else:
         model = "google/gemini-2.5-flash-lite"
@@ -120,7 +125,7 @@ async def analyze_news(title, impact):
 أجب بالعربي فقط وبشكل مختصر جداً:
 
 الاتجاه: صعودي / هبوطي / محايد
-القوة: رقم من 1 إلى 10
+القوة: رقم من 1 إلى 10 (مثل 7/10)
 الثقة: نسبة مئوية
 الإشارة: شراء / بيع / احتفاظ
 السبب: 5 كلمات فقط
@@ -184,7 +189,7 @@ async def send(bot, session, news):
 
     impact = get_impact(title)
 
-    if impact == "🟡 GENERAL":
+    if impact == "🟡 عادي":
         return False
 
     symbol = extract_symbol(title)
@@ -230,7 +235,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v14 COMPACT RUNNING")
+    print("🚀 v15 SMART AR RUNNING")
 
     async with aiohttp.ClientSession() as session:
         while True:
