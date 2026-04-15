@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v17 PRO =====
+# ===== Alpha Market Intelligence v17 PRO (FIXED) =====
 
 import asyncio
 import aiohttp
@@ -38,13 +38,6 @@ RSS_FEEDS = [
 
 sent_hashes = set()
 seen_titles = set()
-sent_symbols_cycle = set()
-
-# ===== فلترة الأخبار التافهة =====
-JUNK_KEYWORDS = [
-    "mortgage","woman","man","family","ramsey","personal",
-    "lifestyle","story","real question"
-]
 
 # ===== HELPERS =====
 def is_new(title, link):
@@ -53,10 +46,6 @@ def is_new(title, link):
         return False
     sent_hashes.add(h)
     return True
-
-def is_junk(title):
-    t = title.lower()
-    return any(k in t for k in JUNK_KEYWORDS)
 
 def normalize(title):
     return re.sub(r'[^a-z0-9 ]', '', title.lower())[:60]
@@ -98,10 +87,17 @@ def extract_symbol(title):
 
     return "MARKET"
 
+# ===== TRANSLATION =====
+def translate_text(text):
+    try:
+        return GoogleTranslator(source='auto', target='ar').translate(text)
+    except:
+        return text
+
 # ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "❌"
+        return "القوة: 6/10"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -116,12 +112,18 @@ async def analyze_news(title):
 """
 
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
-    payload = {"model": "google/gemini-2.5-flash-lite","messages":[{"role":"user","content":prompt}]}
+    payload = {
+        "model": "google/gemini-2.5-flash-lite",
+        "messages": [{"role":"user","content":prompt}]
+    }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as r:
-            data = await r.json()
-            return data.get("choices",[{}])[0].get("message",{}).get("content","❌")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as r:
+                data = await r.json()
+                return data.get("choices",[{}])[0].get("message",{}).get("content","القوة: 6/10")
+    except:
+        return "القوة: 6/10"
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
@@ -129,7 +131,7 @@ async def get_stock(session, symbol):
     async with session.get(url) as r:
         return await r.json()
 
-# ===== RSI FIX =====
+# ===== TECHNICAL =====
 async def get_candles(session, symbol):
     now = int(time.time())
     past = now - (60*60*24*200)
@@ -145,8 +147,7 @@ async def get_candles(session, symbol):
 def rsi(prices):
     if len(prices) < 15:
         return None
-    gains = []
-    losses = []
+    gains, losses = [], []
     for i in range(1,15):
         diff = prices[-i] - prices[-i-1]
         if diff > 0:
@@ -170,32 +171,30 @@ async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
 
+    print("NEWS:", title)  # DEBUG
+
     if not is_new(title, link): return False
     if not is_unique(title): return False
-    if is_junk(title): return False
-
-    symbol = extract_symbol(title)
-
-    # منع التكرار لنفس السهم
-    if symbol in sent_symbols_cycle:
-        return False
 
     impact = get_impact(title)
     if impact == "🟡 عادي": return False
 
+    symbol = extract_symbol(title)
     translated = translate_text(title)
     ai = await analyze_news(title)
 
-    # فلترة القوة
+    # ===== فلترة القوة (مرنة) =====
     match = re.search(r"(\d+)/10", ai)
-    if not match: return False
-    strength = int(match.group(1))
-    if strength <= 5: return False
 
-    if symbol != "MARKET":
-        sent_symbols_cycle.add(symbol)
+    if match:
+        strength = int(match.group(1))
+    else:
+        strength = 6  # fallback
 
-    # السعر
+    if strength < 5:
+        return False
+
+    # ===== السعر =====
     stock_info = ""
     if symbol != "MARKET":
         try:
@@ -204,7 +203,7 @@ async def send(bot, session, news):
         except:
             pass
 
-    # التحليل الفني
+    # ===== التحليل الفني =====
     tech = ""
     if symbol != "MARKET":
         try:
@@ -215,7 +214,7 @@ async def send(bot, session, news):
                 m200 = ma(prices,200)
 
                 trend = "📈 صاعد" if m50 and m200 and m50>m200 else "📉 هابط"
-                signal = "🟢" if r and r<30 else "🔴" if r and r>70 else ""
+                signal = "🟢 تشبع بيع" if r and r<30 else "🔴 تشبع شراء" if r and r>70 else ""
 
                 tech = f"\n📊 RSI:{r} | MA50:{m50} | MA200:{m200}\n{trend} {signal}\n"
         except:
@@ -246,13 +245,11 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v17 PRO RUNNING")
+    print("🚀 v17 PRO FIXED RUNNING")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                sent_symbols_cycle.clear()
-
                 feed = []
                 for url in RSS_FEEDS:
                     f = feedparser.parse(url)
@@ -268,7 +265,8 @@ async def main():
 
                 await asyncio.sleep(300)
 
-            except:
+            except Exception as e:
+                print("ERROR:", e)
                 await asyncio.sleep(60)
 
 if __name__ == "__main__":
