@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v16 ELITE (TECH EDITION) =====
+# ===== Alpha Market Intelligence v17 PRO =====
 
 import asyncio
 import aiohttp
@@ -6,6 +6,7 @@ import feedparser
 import hashlib
 import os
 import re
+import time
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -15,14 +16,12 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-CHAT_IDS = [CHAT_ID_MAIN, 6315087880]  # ✅ موجود مثل ما طلبت
+CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
-# ===== CONFIG =====
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 
 COMPANY_MAP = {
@@ -39,18 +38,13 @@ RSS_FEEDS = [
 
 sent_hashes = set()
 seen_titles = set()
+sent_symbols_cycle = set()
 
-HIGH_IMPACT = ["beats earnings","misses earnings","raises guidance","cuts forecast","acquisition","merger","buyout","bankruptcy","wins contract"]
-MEDIUM_IMPACT = ["upgrade","downgrade","price target","partnership"]
-MACRO_IMPACT = ["fed","interest rate","inflation","cpi","ppi","jobs","unemployment","gdp","recession","treasury","yield","dow","nasdaq","s&p","oil","iran","gold","hormuz"]
-TECH_IMPACT = ["ai","chip","semiconductor","nvidia"]
-
-# ===== TRANSLATION =====
-def translate_text(text):
-    try:
-        return GoogleTranslator(source='auto', target='ar').translate(text)
-    except:
-        return text
+# ===== فلترة الأخبار التافهة =====
+JUNK_KEYWORDS = [
+    "mortgage","woman","man","family","ramsey","personal",
+    "lifestyle","story","real question"
+]
 
 # ===== HELPERS =====
 def is_new(title, link):
@@ -59,6 +53,10 @@ def is_new(title, link):
         return False
     sent_hashes.add(h)
     return True
+
+def is_junk(title):
+    t = title.lower()
+    return any(k in t for k in JUNK_KEYWORDS)
 
 def normalize(title):
     return re.sub(r'[^a-z0-9 ]', '', title.lower())[:60]
@@ -74,24 +72,18 @@ def is_unique(title):
 def get_impact(title):
     t = title.lower()
 
-    if any(x in t for x in HIGH_IMPACT):
+    if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
         return "🔥 عالي"
-
-    elif any(x in t for x in MACRO_IMPACT):
-        if any(k in t for k in ["war","conflict","crisis","inflation","rate"]):
-            return "🌍 اقتصادي عالي"
+    elif any(x in t for x in ["fed","inflation","rate","war","oil","gold"]):
         return "🌍 اقتصادي"
-
-    elif any(x in t for x in TECH_IMPACT + MEDIUM_IMPACT):
+    elif any(x in t for x in ["ai","chip","upgrade"]):
         return "⚡ متوسط"
-
     else:
         return "🟡 عادي"
 
 # ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
-
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
@@ -107,14 +99,9 @@ def extract_symbol(title):
     return "MARKET"
 
 # ===== AI =====
-async def analyze_news(title, impact):
+async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "❌ لا يوجد API"
-
-    if "🔥" in impact or "اقتصادي عالي" in impact:
-        model = "anthropic/claude-3.7-sonnet"
-    else:
-        model = "google/gemini-2.5-flash-lite"
+        return "❌"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -123,40 +110,18 @@ async def analyze_news(title, impact):
 
 {title}
 
-أجب بالعربي فقط وبشكل مختصر جداً:
+الاتجاه / القوة (1-10) / الثقة / الإشارة
 
-الاتجاه: صعودي / هبوطي / محايد
-القوة: رقم من 1 إلى 10 (مثل 7/10)
-الثقة: نسبة مئوية
-الإشارة: شراء / بيع / احتفاظ
-السبب: سبب مالي واضح (3 إلى 6 كلمات)
-
-إذا القوة أقل من 7 اجعل الإشارة احتفاظ.
-
-ممنوع أي كلمة إنجليزية.
-ممنوع أي شرح إضافي.
+مختصر جداً بالعربي فقط
 """
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+    payload = {"model": "google/gemini-2.5-flash-lite","messages":[{"role":"user","content":prompt}]}
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as r:
-                data = await r.json()
-                if "choices" in data:
-                    return data["choices"][0]["message"]["content"]
-                else:
-                    return "❌ خطأ في التحليل"
-    except:
-        return "❌ فشل التحليل"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers) as r:
+            data = await r.json()
+            return data.get("choices",[{}])[0].get("message",{}).get("content","❌")
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
@@ -164,128 +129,116 @@ async def get_stock(session, symbol):
     async with session.get(url) as r:
         return await r.json()
 
-# ===== TECHNICAL INDICATORS =====
+# ===== RSI FIX =====
 async def get_candles(session, symbol):
-    url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&count=200&token={API_KEY}"
+    now = int(time.time())
+    past = now - (60*60*24*200)
+
+    url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&from={past}&to={now}&token={API_KEY}"
+
     async with session.get(url) as r:
         data = await r.json()
+        if data.get("s") != "ok":
+            return []
         return data.get("c", [])
 
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1:
+def rsi(prices):
+    if len(prices) < 15:
         return None
-
-    gains, losses = [], []
-
-    for i in range(1, period + 1):
+    gains = []
+    losses = []
+    for i in range(1,15):
         diff = prices[-i] - prices[-i-1]
-        if diff >= 0:
+        if diff > 0:
             gains.append(diff)
         else:
             losses.append(abs(diff))
-
-    avg_gain = sum(gains)/period if gains else 0
-    avg_loss = sum(losses)/period if losses else 0
-
+    avg_gain = sum(gains)/14 if gains else 0
+    avg_loss = sum(losses)/14 if losses else 0
     if avg_loss == 0:
         return 100
+    rs = avg_gain/avg_loss
+    return round(100-(100/(1+rs)),2)
 
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
-
-def moving_average(prices, period):
-    if len(prices) < period:
+def ma(prices, n):
+    if len(prices) < n:
         return None
-    return round(sum(prices[-period:]) / period, 2)
-
-# ===== NEWS =====
-def get_rss():
-    out = []
-    for url in RSS_FEEDS:
-        feed = feedparser.parse(url)
-        for e in feed.entries:
-            out.append({"title": e.title, "link": e.link})
-    return out
-
-async def get_all(session):
-    return get_rss()
+    return round(sum(prices[-n:])/n,2)
 
 # ===== SEND =====
 async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
 
-    if not is_new(title, link):
-        return False
+    if not is_new(title, link): return False
+    if not is_unique(title): return False
+    if is_junk(title): return False
 
-    if not is_unique(title):
+    symbol = extract_symbol(title)
+
+    # منع التكرار لنفس السهم
+    if symbol in sent_symbols_cycle:
         return False
 
     impact = get_impact(title)
-    if impact == "🟡 عادي":
-        return False
+    if impact == "🟡 عادي": return False
 
-    symbol = extract_symbol(title)
     translated = translate_text(title)
-    ai = await analyze_news(title, impact)
+    ai = await analyze_news(title)
 
-    # ===== فلترة القوة =====
-    match = re.search(r"القوة:\s*(\d+)", ai)
-    if not match:
-        return False
-
+    # فلترة القوة
+    match = re.search(r"(\d+)/10", ai)
+    if not match: return False
     strength = int(match.group(1))
-    if strength <= 5:
-        return False
+    if strength <= 5: return False
 
-    # ===== تنبيه =====
-    alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
+    if symbol != "MARKET":
+        sent_symbols_cycle.add(symbol)
 
-    # ===== السعر =====
+    # السعر
     stock_info = ""
     if symbol != "MARKET":
         try:
             d = await get_stock(session, symbol)
-            stock_info = f"\n📊 {symbol}\n💰 {d.get('c')}$\n📈 {round(d.get('dp',0),2)}%\n"
+            stock_info = f"\n📊 {symbol} | {d.get('c')}$ | {round(d.get('dp',0),2)}%\n"
         except:
             pass
 
-    # ===== التحليل الفني =====
-    tech_info = ""
+    # التحليل الفني
+    tech = ""
     if symbol != "MARKET":
         try:
             prices = await get_candles(session, symbol)
             if prices:
-                rsi = calculate_rsi(prices)
-                ma50 = moving_average(prices, 50)
-                ma200 = moving_average(prices, 200)
+                r = rsi(prices)
+                m50 = ma(prices,50)
+                m200 = ma(prices,200)
 
-                trend = "📈 صاعد" if ma50 and ma200 and ma50 > ma200 else "📉 هابط"
-                rsi_signal = "🟢 تشبع بيع" if rsi and rsi < 30 else "🔴 تشبع شراء" if rsi and rsi > 70 else ""
+                trend = "📈 صاعد" if m50 and m200 and m50>m200 else "📉 هابط"
+                signal = "🟢" if r and r<30 else "🔴" if r and r>70 else ""
 
-                tech_info = f"\n📊 التحليل الفني:\nRSI: {rsi}\nMA50: {ma50}\nMA200: {ma200}\n{trend} {rsi_signal}\n"
+                tech = f"\n📊 RSI:{r} | MA50:{m50} | MA200:{m200}\n{trend} {signal}\n"
         except:
             pass
 
-    message = f"""
-{alert}{impact}
+    alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
 
-📰 *{title}*
+    message = f"""{alert}{impact}
 
-🇸🇦 _{translated}_
+📰 {title}
+🇸🇦 {translated}
 
 {stock_info}
-{tech_info}
+{tech}
 
-🧠 التحليل:
-{ai}
+🧠 {ai}
 
 🔗 {link}
 """
 
     for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+            await bot.send_message(chat_id=chat_id, text=message)
         except:
             pass
 
@@ -293,15 +246,21 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v16 TECH RUNNING")
+    print("🚀 v17 PRO RUNNING")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                news = await get_all(session)
-                count = 0
+                sent_symbols_cycle.clear()
 
-                for n in news:
+                feed = []
+                for url in RSS_FEEDS:
+                    f = feedparser.parse(url)
+                    for e in f.entries:
+                        feed.append({"title":e.title,"link":e.link})
+
+                count = 0
+                for n in feed:
                     if count >= MAX_NEWS_PER_CYCLE:
                         break
                     if await send(bot, session, n):
@@ -309,10 +268,8 @@ async def main():
 
                 await asyncio.sleep(300)
 
-            except Exception as e:
-                print("MAIN ERROR:", e)
+            except:
                 await asyncio.sleep(60)
 
-# ===== RUN =====
 if __name__ == "__main__":
     asyncio.run(main())
