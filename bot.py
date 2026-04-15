@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v15 SMART AR =====
+# ===== Alpha Market Intelligence v16 ELITE (IMPROVED) =====
 
 import asyncio
 import aiohttp
@@ -19,6 +19,9 @@ CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
+# ===== CONFIG =====
+MAX_NEWS_PER_CYCLE = 15  # 🔥 تم رفعه
+
 # ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 
@@ -36,8 +39,6 @@ RSS_FEEDS = [
 
 sent_hashes = set()
 seen_titles = set()
-
-MAX_NEWS_PER_CYCLE = 15
 
 HIGH_IMPACT = ["beats earnings","misses earnings","raises guidance","cuts forecast","acquisition","merger","buyout","bankruptcy","wins contract"]
 MEDIUM_IMPACT = ["upgrade","downgrade","price target","partnership"]
@@ -69,7 +70,7 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
-# ===== IMPACT (تعريب + دمج) =====
+# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
 
@@ -110,7 +111,7 @@ async def analyze_news(title, impact):
     if not OPENROUTER_API_KEY:
         return "❌ لا يوجد API"
 
-    if "🔥" in impact:
+    if "🔥" in impact or "اقتصادي عالي" in impact:
         model = "anthropic/claude-3.7-sonnet"
     else:
         model = "google/gemini-2.5-flash-lite"
@@ -128,7 +129,9 @@ async def analyze_news(title, impact):
 القوة: رقم من 1 إلى 10 (مثل 7/10)
 الثقة: نسبة مئوية
 الإشارة: شراء / بيع / احتفاظ
-السبب: 5 كلمات فقط
+السبب: سبب مالي واضح (3 إلى 6 كلمات)
+
+إذا القوة أقل من 7 اجعل الإشارة احتفاظ.
 
 ممنوع أي كلمة إنجليزية.
 ممنوع أي شرح إضافي.
@@ -198,6 +201,22 @@ async def send(bot, session, news):
 
     ai = await analyze_news(title, impact)
 
+    # ===== 🔥 فلترة ذكية باستخدام Regex =====
+    match = re.search(r"القوة:\s*(\d+)", ai)
+
+    if match:
+        strength = int(match.group(1))
+
+        if strength <= 5:
+            return False
+    else:
+        return False
+
+    # ===== 🚨 تنبيه الفرص القوية =====
+    alert = ""
+    if match and strength >= 8:
+        alert = "🚨 فرصة قوية\n"
+
     stock_info = ""
     if symbol != "MARKET":
         try:
@@ -211,7 +230,7 @@ async def send(bot, session, news):
             pass
 
     message = f"""
-{impact}
+{alert}{impact}
 
 📰 *{title}*
 
@@ -235,7 +254,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v15 SMART AR RUNNING")
+    print("🚀 v16 ELITE IMPROVED RUNNING")
 
     async with aiohttp.ClientSession() as session:
         while True:
