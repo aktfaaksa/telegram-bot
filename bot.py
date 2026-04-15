@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v17 PRO (FIXED) =====
+# ===== Alpha Market Intelligence v18 SMART =====
 
 import asyncio
 import aiohttp
@@ -16,7 +16,7 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
+CHAT_IDS = [CHAT_ID_MAIN, 6315087880]  # ✅ محفوظ
 
 bot = Bot(token=TOKEN)
 
@@ -39,6 +39,9 @@ RSS_FEEDS = [
 sent_hashes = set()
 seen_titles = set()
 
+# ===== فلترة خفيفة =====
+JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
+
 # ===== HELPERS =====
 def is_new(title, link):
     h = hashlib.md5((title+link).encode()).hexdigest()
@@ -57,22 +60,25 @@ def is_unique(title):
     seen_titles.add(short)
     return True
 
+def is_junk(title):
+    t = title.lower()
+    return any(k in t for k in JUNK)
+
 # ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
-
     if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
         return "🔥 عالي"
-    elif any(x in t for x in ["fed","inflation","rate","war","oil","gold"]):
+    elif any(x in t for x in ["fed","inflation","rate","war","gold","oil"]):
         return "🌍 اقتصادي"
     elif any(x in t for x in ["ai","chip","upgrade"]):
         return "⚡ متوسط"
-    else:
-        return "🟡 عادي"
+    return "🟡 عادي"
 
 # ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
+
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
@@ -94,10 +100,10 @@ def translate_text(text):
     except:
         return text
 
-# ===== AI =====
+# ===== AI (FIXED STRUCTURED) =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "القوة: 6/10"
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: تحليل افتراضي"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -106,12 +112,19 @@ async def analyze_news(title):
 
 {title}
 
-الاتجاه / القوة (1-10) / الثقة / الإشارة
+أجب فقط بهذا الشكل:
 
-مختصر جداً بالعربي فقط
+الاتجاه: صعودي / هبوطي / محايد
+القوة: رقم/10
+الثقة: %
+الإشارة: شراء / بيع / احتفاظ
+السبب: 3 كلمات فقط
+
+ممنوع أي شرح إضافي
 """
 
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+
     payload = {
         "model": "google/gemini-2.5-flash-lite",
         "messages": [{"role":"user","content":prompt}]
@@ -121,9 +134,13 @@ async def analyze_news(title):
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers) as r:
                 data = await r.json()
-                return data.get("choices",[{}])[0].get("message",{}).get("content","القوة: 6/10")
+                ai = data.get("choices",[{}])[0].get("message",{}).get("content","")
+
+                # قص أي كلام زائد
+                ai = "\n".join(ai.split("\n")[:5])
+                return ai
     except:
-        return "القوة: 6/10"
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: خطأ تحليل"
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
@@ -131,7 +148,7 @@ async def get_stock(session, symbol):
     async with session.get(url) as r:
         return await r.json()
 
-# ===== TECHNICAL =====
+# ===== TECH =====
 async def get_candles(session, symbol):
     now = int(time.time())
     past = now - (60*60*24*200)
@@ -171,10 +188,9 @@ async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
 
-    print("NEWS:", title)  # DEBUG
-
     if not is_new(title, link): return False
     if not is_unique(title): return False
+    if is_junk(title): return False
 
     impact = get_impact(title)
     if impact == "🟡 عادي": return False
@@ -183,13 +199,8 @@ async def send(bot, session, news):
     translated = translate_text(title)
     ai = await analyze_news(title)
 
-    # ===== فلترة القوة (مرنة) =====
     match = re.search(r"(\d+)/10", ai)
-
-    if match:
-        strength = int(match.group(1))
-    else:
-        strength = 6  # fallback
+    strength = int(match.group(1)) if match else 6
 
     if strength < 5:
         return False
@@ -203,7 +214,7 @@ async def send(bot, session, news):
         except:
             pass
 
-    # ===== التحليل الفني =====
+    # ===== RSI =====
     tech = ""
     if symbol != "MARKET":
         try:
@@ -214,7 +225,7 @@ async def send(bot, session, news):
                 m200 = ma(prices,200)
 
                 trend = "📈 صاعد" if m50 and m200 and m50>m200 else "📉 هابط"
-                signal = "🟢 تشبع بيع" if r and r<30 else "🔴 تشبع شراء" if r and r>70 else ""
+                signal = "🟢" if r and r<30 else "🔴" if r and r>70 else ""
 
                 tech = f"\n📊 RSI:{r} | MA50:{m50} | MA200:{m200}\n{trend} {signal}\n"
         except:
@@ -230,7 +241,8 @@ async def send(bot, session, news):
 {stock_info}
 {tech}
 
-🧠 {ai}
+🧠
+{ai}
 
 🔗 {link}
 """
@@ -245,7 +257,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v17 PRO FIXED RUNNING")
+    print("🚀 v18 SMART RUNNING")
 
     async with aiohttp.ClientSession() as session:
         while True:
