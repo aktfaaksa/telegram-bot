@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v20 PRO CLEAN (SEC FIXED) =====
+# ===== Alpha Market Intelligence v21 FINAL FIXED =====
 
 import asyncio
 import aiohttp
@@ -33,9 +33,9 @@ sent_hashes = set()
 seen_titles = set()
 seen_companies = set()
 
-JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
+JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
 
-# ===== SEC HEADERS (🔥 تم إضافة الإيميل هنا) =====
+# ===== SEC HEADERS =====
 SEC_HEADERS = {
     "User-Agent": "market-bot aktfaaksa@gmail.com"
 }
@@ -47,24 +47,26 @@ sent_sec = set()
 EVENT_MAP = {
     "acquisition": "استحواذ",
     "merger": "اندماج",
-    "agreement": "اتفاقية",
-    "partnership": "شراكة",
-    "collaboration": "تعاون",
-    "contract": "عقد",
-
     "offering": "طرح أسهم",
     "warrant": "Warrants",
     "convertible": "سندات",
-    "dilution": "تخفيف",
-
     "bankruptcy": "إفلاس",
     "default": "تعثر",
     "restructuring": "إعادة هيكلة",
-
+    "partnership": "شراكة",
+    "collaboration": "تعاون",
+    "contract": "عقد",
+    "agreement": "اتفاقية",
     "ceo": "تغيير إداري",
     "resign": "استقالة",
     "director": "إدارة"
 }
+
+PRIORITY = [
+    "استحواذ","اندماج","إفلاس",
+    "طرح أسهم","Warrants","سندات",
+    "شراكة","تعاون","اتفاقية"
+]
 
 # ===== TOP 50 =====
 async def get_top50(session):
@@ -127,22 +129,30 @@ def translate_text(text):
     except:
         return text
 
-# ===== AI =====
+# ===== AI (FIXED SHORT) =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "الاتجاه: محايد | القوة: 6/10 | إشارة: احتفاظ"
+        return "محايد | 6/10 | احتفاظ | عادي"
 
-    prompt = f"{title} \n اختصر اتجاه + قوة + إشارة"
+    prompt = f"""
+{title}
+
+اكتب فقط:
+(صعودي/هبوطي/محايد) | رقم/10 | (شراء/بيع/احتفاظ) | سبب كلمتين
+"""
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                json={"model":"google/gemini-2.5-flash-lite","messages":[{"role":"user","content":prompt}]}
+                json={
+                    "model":"google/gemini-2.5-flash-lite",
+                    "messages":[{"role":"user","content":prompt}]
+                }
             ) as r:
                 data = await r.json()
-                return data["choices"][0]["message"]["content"][:120]
+                return data["choices"][0]["message"]["content"].strip()
     except:
         return "تحليل غير متوفر"
 
@@ -167,10 +177,11 @@ async def send_sec(bot, session, symbol, cik_map):
     if not cik:
         return
 
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-
     try:
-        async with session.get(url, headers=SEC_HEADERS) as r:
+        async with session.get(
+            f"https://data.sec.gov/submissions/CIK{cik}.json",
+            headers=SEC_HEADERS
+        ) as r:
             data = await r.json()
     except:
         return
@@ -179,8 +190,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
     for i in range(len(filings.get("form",[]))):
 
-        form = filings["form"][i]
-        if form != "8-K":
+        if filings["form"][i] != "8-K":
             continue
 
         date = filings["filingDate"][i]
@@ -198,15 +208,23 @@ async def send_sec(bot, session, symbol, cik_map):
             async with session.get(link, headers=SEC_HEADERS) as r2:
                 text = (await r2.text()).lower()
 
+            events = []
             for k,v in EVENT_MAP.items():
                 if k in text:
-                    event = v
+                    events.append(v)
+
+            for p in PRIORITY:
+                if p in events:
+                    event = p
                     break
+
+            if event == "حدث مهم" and events:
+                event = events[0]
 
         except:
             pass
 
-        msg = f"""🔥 {form} ({event}) | {symbol}
+        msg = f"""🔥 8-K ({event}) | {symbol}
 
 📄 إشعار رسمي
 
@@ -266,7 +284,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 PRO CLEAN + SEC FIXED")
+    print("🚀 FINAL FIXED RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
