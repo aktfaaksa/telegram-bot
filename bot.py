@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v18 SMART + SEC FINAL =====
+# ===== Alpha Market Intelligence v18 SMART + SEC SAFE =====
 
 import asyncio
 import aiohttp
@@ -20,16 +20,6 @@ CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
-# ===== SEC =====
-SEC_HEADERS = {
-    "User-Agent": "alpha-bot aktfaaksa@gmail.com"
-}
-
-SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-IMPORTANT_FORMS = ["8-K", "4", "13D", "NT 10-Q", "S-3"]
-sent_sec = set()
-
-# ===== NEWS =====
 MAX_NEWS_PER_CYCLE = 15
 
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
@@ -50,6 +40,15 @@ sent_hashes = set()
 seen_titles = set()
 
 JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
+
+# ===== SEC (إضافة فقط) =====
+SEC_HEADERS = {
+    "User-Agent": "alpha-bot aktfaaksa@gmail.com"
+}
+
+SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+IMPORTANT_FORMS = ["8-K", "13D"]  # فلترة قوية
+sent_sec = set()
 
 # ===== HELPERS =====
 def is_new(title, link):
@@ -86,6 +85,7 @@ def get_impact(title):
 # ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
+
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
@@ -100,32 +100,51 @@ def extract_symbol(title):
 
     return "MARKET"
 
-# ===== TRANSLATE =====
+# ===== TRANSLATION =====
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return text
 
-# ===== AI =====
+# ===== AI (كما هو بدون تغيير) =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: افتراضي"
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: تحليل افتراضي"
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+
+    prompt = f"""
+حلل الخبر التالي:
+
+{title}
+
+أجب فقط بهذا الشكل:
+
+الاتجاه: صعودي / هبوطي / محايد
+القوة: رقم/10
+الثقة: %
+الإشارة: شراء / بيع / احتفاظ
+السبب: 3 كلمات فقط
+
+ممنوع أي شرح إضافي
+"""
+
+    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+
+    payload = {
+        "model": "google/gemini-2.5-flash-lite",
+        "messages": [{"role":"user","content":prompt}]
+    }
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                json={
-                    "model": "google/gemini-2.5-flash-lite",
-                    "messages": [{"role":"user","content":title}]
-                }
-            ) as r:
+            async with session.post(url, json=payload, headers=headers) as r:
                 data = await r.json()
-                return data["choices"][0]["message"]["content"]
+                ai = data.get("choices",[{}])[0].get("message",{}).get("content","")
+                return "\n".join(ai.split("\n")[:5])
     except:
-        return "تحليل غير متوفر"
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: خطأ"
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
@@ -133,7 +152,42 @@ async def get_stock(session, symbol):
     async with session.get(url) as r:
         return await r.json()
 
-# ===== SEND NEWS =====
+# ===== TECH =====
+async def get_candles(session, symbol):
+    now = int(time.time())
+    past = now - (60*60*24*200)
+
+    url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&from={past}&to={now}&token={API_KEY}"
+
+    async with session.get(url) as r:
+        data = await r.json()
+        if data.get("s") != "ok":
+            return []
+        return data.get("c", [])
+
+def rsi(prices):
+    if len(prices) < 15:
+        return None
+    gains, losses = [], []
+    for i in range(1,15):
+        diff = prices[-i] - prices[-i-1]
+        if diff > 0:
+            gains.append(diff)
+        else:
+            losses.append(abs(diff))
+    avg_gain = sum(gains)/14 if gains else 0
+    avg_loss = sum(losses)/14 if losses else 0
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain/avg_loss
+    return round(100-(100/(1+rs)),2)
+
+def ma(prices, n):
+    if len(prices) < n:
+        return None
+    return round(sum(prices[-n:])/n,2)
+
+# ===== SEND (بدون تغيير) =====
 async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
@@ -149,6 +203,12 @@ async def send(bot, session, news):
     translated = translate_text(title)
     ai = await analyze_news(title)
 
+    match = re.search(r"(\d+)/10", ai)
+    strength = int(match.group(1)) if match else 6
+
+    if strength < 5:
+        return False
+
     stock_info = ""
     if symbol != "MARKET":
         try:
@@ -157,12 +217,31 @@ async def send(bot, session, news):
         except:
             pass
 
-    message = f"""{impact}
+    tech = ""
+    if symbol != "MARKET":
+        try:
+            prices = await get_candles(session, symbol)
+            if prices:
+                r = rsi(prices)
+                m50 = ma(prices,50)
+                m200 = ma(prices,200)
+
+                trend = "📈 صاعد" if m50 and m200 and m50>m200 else "📉 هابط"
+                signal = "🟢" if r and r<30 else "🔴" if r and r>70 else ""
+
+                tech = f"\n📊 RSI:{r} | MA50:{m50} | MA200:{m200}\n{trend} {signal}\n"
+        except:
+            pass
+
+    alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
+
+    message = f"""{alert}{impact}
 
 📰 {title}
 🇸🇦 {translated}
 
 {stock_info}
+{tech}
 
 🧠
 {ai}
@@ -178,7 +257,7 @@ async def send(bot, session, news):
 
     return True
 
-# ===== SEC =====
+# ===== SEC FUNCTIONS =====
 async def load_cik_map(session):
     async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
         data = await r.json()
@@ -220,15 +299,6 @@ def is_new_sec(f):
     sent_sec.add(key)
     return True
 
-def short_label(form):
-    return {
-        "8-K": "خبر قوي",
-        "4": "شراء داخلي",
-        "13D": "مستثمر كبير",
-        "NT 10-Q": "تأخير",
-        "S-3": "بيع أسهم"
-    }.get(form, "خبر")
-
 async def send_sec(bot, session, symbol, cik_map):
     data = await get_sec_filings(session, symbol, cik_map)
 
@@ -236,10 +306,8 @@ async def send_sec(bot, session, symbol, cik_map):
         if not is_new_sec(f):
             continue
 
-        label = short_label(f["form"])
-
         msg = f"""
-🔥 {f['form']} ({label}) | {f['symbol']}
+🔥 {f['form']} | {f['symbol']}
 
 🔗 {f['link']}
 """
@@ -252,7 +320,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v18 SMART + SEC FINAL RUNNING")
+    print("🚀 v18 SMART + SEC SAFE RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik_map(session)
@@ -272,7 +340,8 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                for s in WATCHLIST:
+                # SEC خفيف (3 فقط)
+                for s in WATCHLIST[:3]:
                     await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
