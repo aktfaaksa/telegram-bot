@@ -208,12 +208,14 @@ async def send_sec(bot, session, symbol, cik_map):
 async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
+    print("TITLE:", title)
 
     if not is_new(title, link): return False
     if not is_unique(title): return False
     if is_junk(title): return False
 
     symbol = extract_symbol(title)
+    print("SYMBOL:", symbol)
     if symbol == "MARKET": return False
 
     if symbol in seen_symbols_cycle: return False
@@ -227,6 +229,7 @@ async def send(bot, session, news):
     # ===== فلترة Finnhub (متوسطة) =====
     price = stock.get("c", 0)
     change = stock.get("dp", 0)
+    print("PRICE:", price, "CHANGE:", change)
 
     if price == 0: return False
     if abs(change) < 0.5: return False
