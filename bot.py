@@ -50,7 +50,9 @@ seen_symbols_cycle = set()
 
 # ===== SEC =====
 SEC_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    "User-Agent": "AlphaMarketBot aktfaaksa@gmail.com",
+    "Accept-Encoding": "gzip, deflate",
+    "Host": "www.sec.gov"
 }
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
