@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence FINAL AUTO + SEC =====
+# ===== Alpha Market Intelligence FINAL PRO =====
 
 import asyncio
 import aiohttp
@@ -20,7 +20,7 @@ CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
-# ===== WATCHLIST (ثابتة) =====
+# ===== WATCHLIST =====
 WATCHLIST = [
     "AAPL","TSLA","NVDA","MSFT","AMZN","GOOGL","META",
     "PLTR","SMCI","COIN","UBER","SHOP",
@@ -41,7 +41,10 @@ RSS_FEEDS = [
 sent_hashes = set()
 seen_titles = set()
 
-JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
+JUNK = [
+    "mortgage","lifestyle","ramsey","personal","story",
+    "jim cramer","opinion","analyst says"
+]
 
 # ===== SEC =====
 SEC_HEADERS = {
@@ -176,7 +179,7 @@ async def send(bot, session, news):
     match = re.search(r"(\d+)/10", ai)
     strength = int(match.group(1)) if match else 6
 
-    if strength < 5:
+    if strength < 6:
         return False
 
     stock_info = ""
@@ -187,7 +190,7 @@ async def send(bot, session, news):
         except:
             pass
 
-    alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
+    alert = "🚨 فرصة قوية\n" if strength >= 8 and impact != "🟡 عادي" else ""
 
     message = f"""{alert}{impact}
 
@@ -259,9 +262,15 @@ async def send_sec(bot, session, symbol, cik_map):
         if not is_new_sec(f):
             continue
 
-        msg = f"""🔥 {f['form']} | {f['symbol']}
+        label = {
+            "8-K": "حدث مهم",
+            "13D": "مستثمر كبير"
+        }.get(f["form"], "تحديث")
 
-📄 تحديث رسمي من SEC
+        msg = f"""🔥 {f['form']} ({label}) | {f['symbol']}
+
+📄 إشعار رسمي
+📈 تأثير محتمل
 
 🔗 {f['link']}
 """
@@ -274,7 +283,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 BOT RUNNING FINAL AUTO")
+    print("🚀 BOT RUNNING PRO")
 
     async with aiohttp.ClientSession() as session:
 
@@ -285,7 +294,6 @@ async def main():
 
         while True:
             try:
-                # تحديث كل ساعة
                 if int(time.time()) % 3600 < 5:
                     AUTO_WATCHLIST = await get_top_movers(session)
 
