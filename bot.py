@@ -7,14 +7,13 @@ import hashlib
 import os
 import re
 import time
-import pandas as pd  # ✅ جديد
+import pandas as pd
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
 # ===== LOAD EXCEL =====
 def load_excel():
     df = pd.read_excel("stocks.xlsx")
-
     symbols = (
         df["الرمز"]
         .dropna()
@@ -24,7 +23,6 @@ def load_excel():
         .unique()
         .tolist()
     )
-
     return symbols
 
 # ===== ENV =====
@@ -33,12 +31,12 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-CHAT_IDS = [CHAT_ID_MAIN, 6315087880]  # نفسك + الشخص الثاني
+CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 bot = Bot(token=TOKEN)
 
 MAX_NEWS_PER_CYCLE = 15
 
-WATCHLIST = load_excel()  # ✅ بدل الثابت
+WATCHLIST = load_excel()
 AUTO_WATCHLIST = []
 
 RSS_FEEDS = [
@@ -50,12 +48,11 @@ sent_hashes = set()
 seen_titles = set()
 seen_symbols_cycle = set()
 
-# ✅ منع السبام للشخص الثاني
 sent_to_secondary = set()
 
 # ===== SEC =====
 SEC_HEADERS = {
-    "User-Agent": "market-bot aktfaaksa@gmail.com"
+    "User-Agent": "market-bot"
 }
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -63,7 +60,7 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 sent_sec_ids = set()
 sent_sec_symbols_cycle = set()
 
-# ===== الأحداث القوية فقط =====
+# ===== EVENTS =====
 STRONG_EVENTS = {
     "acquisition": "استحواذ",
     "merger": "اندماج",
@@ -113,15 +110,19 @@ def is_junk(title):
     t = title.lower()
     return any(k in t for k in JUNK) or any(b in t for b in BAD_WORDS)
 
+# 🔥 FIXED SYMBOL EXTRACTION
 def extract_symbol(title):
     t = title.upper()
+
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
 
-    for s in WATCHLIST + AUTO_WATCHLIST:
-        if s in t:
-            return s
+    words = re.findall(r'\b[A-Z]{2,5}\b', t)
+
+    for w in words:
+        if w in WATCHLIST or w in AUTO_WATCHLIST:
+            return w
 
     return "MARKET"
 
@@ -144,12 +145,7 @@ async def analyze_news(title):
     if not OPENROUTER_API_KEY:
         return "محايد | 6/10 | احتفاظ | عادي"
 
-    prompt = f"""
-{title}
-
-اكتب فقط:
-صعودي أو هبوطي أو محايد | رقم/10 | شراء أو بيع أو احتفاظ | سبب كلمتين
-"""
+    prompt = f"{title}\n\nتحليل مختصر"
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -162,8 +158,7 @@ async def analyze_news(title):
                 }
             ) as r:
                 data = await r.json()
-                result = data["choices"][0]["message"]["content"].strip()
-                return result.replace("(", "").replace(")", "")
+                return data["choices"][0]["message"]["content"].strip()
     except:
         return "تحليل غير متوفر"
 
@@ -183,6 +178,7 @@ async def load_cik_map(session):
         data = await r.json()
     return {v["ticker"]:str(v["cik_str"]).zfill(10) for v in data.values()}
 
+# 🔥 SMART SEC
 async def send_sec(bot, session, symbol, cik_map):
 
     if symbol in sent_sec_symbols_cycle:
@@ -233,25 +229,38 @@ async def send_sec(bot, session, symbol, cik_map):
         except:
             continue
 
+        # ===== SMART FILTER =====
+        if event == "Warrants":
+            continue
+
+        category = "🚨"
+        note = "حدث مؤثر"
+
+        if event in ["استحواذ","اندماج"]:
+            category = "🟢"
+            note = "توسع ونمو"
+
+        elif event == "أرباح":
+            category = "🟢"
+            note = "نتائج مالية"
+
+        elif event in ["تغيير إداري","استقالة"]:
+            category = "🔴"
+            note = "تغيير إداري مهم"
+
         sent_sec_ids.add(key)
         sent_sec_symbols_cycle.add(symbol)
 
-        msg = f"""🚨 SEC قوي
+        msg = f"""{category} SEC Alert
 
 🔥 8-K ({event}) | {symbol}
 
-📄 حدث مؤثر
+📄 {note}
 
 🔗 {link}
 """
 
-        # ✅ إرسال بدون سبام
         for chat_id in CHAT_IDS:
-            if chat_id == CHAT_IDS[1]:  # الشخص الثاني
-                if key in sent_to_secondary:
-                    continue
-                sent_to_secondary.add(key)
-
             await bot.send_message(chat_id=chat_id, text=msg)
 
         break
@@ -280,7 +289,6 @@ async def send(bot, session, news):
 
     translated = translate_text(title)
     ai = await analyze_news(title)
-
     stock = await get_stock(session, symbol)
 
     msg = f"""{impact}
@@ -295,14 +303,7 @@ async def send(bot, session, news):
 🔗 {link}
 """
 
-    # ✅ إرسال بدون سبام للشخص الثاني
     for chat_id in CHAT_IDS:
-        if chat_id == CHAT_IDS[1]:
-            key = f"{title}_{symbol}"
-            if key in sent_to_secondary:
-                continue
-            sent_to_secondary.add(key)
-
         await bot.send_message(chat_id=chat_id, text=msg)
 
     return True
@@ -341,9 +342,10 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                # ✅ SEC لكل شركاتك
+                # 🔥 SEC LOOP
                 for s in WATCHLIST:
                     await send_sec(bot, session, s, cik_map)
+                    await asyncio.sleep(1)
 
                 await asyncio.sleep(300)
 
