@@ -229,7 +229,7 @@ async def send(bot, session, news):
     change = stock.get("dp", 0)
 
     if price == 0: return False
-    if abs(change) < 1.5: return False
+    if abs(change) < 0.5: return False
     if price < 2: return False
 
     translated = translate_text(title)[:150]
