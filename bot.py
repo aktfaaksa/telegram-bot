@@ -211,6 +211,7 @@ async def main():
     print("🚀 v26 PRO FIXED RUNNING")
 
     async with aiohttp.ClientSession() as session:
+        print("WATCHLIST:", WATCHLIST)
         while True:
             try:
                 seen_symbols_cycle.clear()
