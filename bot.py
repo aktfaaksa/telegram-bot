@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v22 ELITE CLEAN =====
+# ===== Alpha Market Intelligence v23 ELITE FINAL =====
 
 import asyncio
 import aiohttp
@@ -39,7 +39,9 @@ SEC_HEADERS = {
 }
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-sent_sec = set()
+
+sent_sec_ids = set()
+sent_sec_symbols_cycle = set()
 
 # ===== EVENT MAP =====
 EVENT_MAP = {
@@ -62,13 +64,9 @@ PRIORITY = [
     "شراكة","تعاون","اتفاقية"
 ]
 
-# ===== FILTERS =====
+# ===== FILTER =====
 JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
-
-BAD_WORDS = [
-    "best stocks","should you buy","top stocks",
-    "is this stock","one of the best"
-]
+BAD_WORDS = ["best stocks","should you buy","top stocks","is this stock","one of the best"]
 
 # ===== TOP 50 =====
 async def get_top50(session):
@@ -174,6 +172,11 @@ async def load_cik_map(session):
     return {v["ticker"]:str(v["cik_str"]).zfill(10) for v in data.values()}
 
 async def send_sec(bot, session, symbol, cik_map):
+
+    # منع تكرار نفس السهم
+    if symbol in sent_sec_symbols_cycle:
+        return
+
     cik = cik_map.get(symbol)
     if not cik:
         return
@@ -194,14 +197,18 @@ async def send_sec(bot, session, symbol, cik_map):
         if filings["form"][i] != "8-K":
             continue
 
-        date = filings["filingDate"][i]
-        key = f"{symbol}_{date}"
+        accession_id = filings["accessionNumber"][i]
 
-        if key in sent_sec:
+        # منع التكرار الحقيقي
+        key = f"{symbol}_{accession_id}"
+
+        if key in sent_sec_ids:
             continue
-        sent_sec.add(key)
 
-        accession = filings["accessionNumber"][i].replace("-","")
+        sent_sec_ids.add(key)
+        sent_sec_symbols_cycle.add(symbol)
+
+        accession = accession_id.replace("-","")
         link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
 
         event = "حدث مهم"
@@ -210,7 +217,16 @@ async def send_sec(bot, session, symbol, cik_map):
             async with session.get(link, headers=SEC_HEADERS) as r2:
                 text = (await r2.text()).lower()
 
-            found = [v for k,v in EVENT_MAP.items() if k in text]
+            found = []
+
+            for k,v in EVENT_MAP.items():
+                if k in text:
+                    if k == "contract":
+                        continue
+                    found.append(v)
+
+            if not found and "contract" in text:
+                found.append("عقد")
 
             for p in PRIORITY:
                 if p in found:
@@ -249,7 +265,6 @@ async def send(bot, session, news):
     if symbol == "MARKET":
         return False
 
-    # 🔥 منع تكرار نفس السهم في نفس الدورة
     if symbol in seen_symbols_cycle:
         return False
     seen_symbols_cycle.add(symbol)
@@ -282,7 +297,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 ELITE CLEAN RUNNING")
+    print("🚀 ELITE FINAL RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
@@ -299,6 +314,7 @@ async def main():
                     last_update = time.time()
 
                 seen_symbols_cycle.clear()
+                sent_sec_symbols_cycle.clear()
 
                 feed = []
                 for url in RSS_FEEDS:
@@ -313,7 +329,7 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                for s in (WATCHLIST + AUTO_WATCHLIST)[:3]:
+                for s in (WATCHLIST + AUTO_WATCHLIST)[:5]:
                     await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
