@@ -7,8 +7,25 @@ import hashlib
 import os
 import re
 import time
+import pandas as pd  # ✅ جديد
 from telegram import Bot
 from deep_translator import GoogleTranslator
+
+# ===== LOAD EXCEL =====
+def load_excel():
+    df = pd.read_excel("stocks.xlsx")
+
+    symbols = (
+        df["الرمز"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+        .tolist()
+    )
+
+    return symbols
 
 # ===== ENV =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -16,12 +33,12 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
+CHAT_IDS = [CHAT_ID_MAIN, 6315087880]  # نفسك + الشخص الثاني
 bot = Bot(token=TOKEN)
 
 MAX_NEWS_PER_CYCLE = 15
 
-WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
+WATCHLIST = load_excel()  # ✅ بدل الثابت
 AUTO_WATCHLIST = []
 
 RSS_FEEDS = [
@@ -32,6 +49,9 @@ RSS_FEEDS = [
 sent_hashes = set()
 seen_titles = set()
 seen_symbols_cycle = set()
+
+# ✅ منع السبام للشخص الثاني
+sent_to_secondary = set()
 
 # ===== SEC =====
 SEC_HEADERS = {
@@ -157,7 +177,7 @@ async def get_stock(session, symbol):
     except:
         return {}
 
-# ===== SEC (فلتر احترافي) =====
+# ===== SEC =====
 async def load_cik_map(session):
     async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
         data = await r.json()
@@ -202,13 +222,11 @@ async def send_sec(bot, session, symbol, cik_map):
                 text = (await r2.text()).lower()
 
             event = None
-
             for k,v in STRONG_EVENTS.items():
                 if k in text:
                     event = v
                     break
 
-            # ❌ تجاهل إذا ما هو خبر قوي
             if not event:
                 continue
 
@@ -227,7 +245,13 @@ async def send_sec(bot, session, symbol, cik_map):
 🔗 {link}
 """
 
+        # ✅ إرسال بدون سبام
         for chat_id in CHAT_IDS:
+            if chat_id == CHAT_IDS[1]:  # الشخص الثاني
+                if key in sent_to_secondary:
+                    continue
+                sent_to_secondary.add(key)
+
             await bot.send_message(chat_id=chat_id, text=msg)
 
         break
@@ -271,7 +295,14 @@ async def send(bot, session, news):
 🔗 {link}
 """
 
+    # ✅ إرسال بدون سبام للشخص الثاني
     for chat_id in CHAT_IDS:
+        if chat_id == CHAT_IDS[1]:
+            key = f"{title}_{symbol}"
+            if key in sent_to_secondary:
+                continue
+            sent_to_secondary.add(key)
+
         await bot.send_message(chat_id=chat_id, text=msg)
 
     return True
@@ -290,7 +321,7 @@ async def main():
 
         while True:
             try:
-                if time.time() - last_update > 86400:
+                if time.time() - last_update > 1800:
                     AUTO_WATCHLIST = await get_top50(session)
                     last_update = time.time()
 
@@ -310,8 +341,8 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                # SEC (فقط القوي)
-                for s in (WATCHLIST + AUTO_WATCHLIST)[:10]:
+                # ✅ SEC لكل شركاتك
+                for s in WATCHLIST:
                     await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
