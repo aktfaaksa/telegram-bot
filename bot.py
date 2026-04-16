@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v19 PRO (SMART SEC + TOP50) =====
+# ===== Alpha Market Intelligence v20 PRO CLEAN (SEC FIXED) =====
 
 import asyncio
 import aiohttp
@@ -17,21 +17,12 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
 CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
-
 bot = Bot(token=TOKEN)
 
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 AUTO_WATCHLIST = []
-
-COMPANY_MAP = {
-    "TESLA":"TSLA","APPLE":"AAPL","NVIDIA":"NVDA","AMD":"AMD",
-    "META":"META","MICROSOFT":"MSFT","AMAZON":"AMZN",
-    "NETFLIX":"NFLX","INTEL":"INTC","BANK OF AMERICA":"BAC",
-    "GOOGLE":"GOOGL","ALPHABET":"GOOGL","GOLDMAN SACHS":"GS"
-}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -40,44 +31,47 @@ RSS_FEEDS = [
 
 sent_hashes = set()
 seen_titles = set()
+seen_companies = set()
 
 JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
 
-# ===== SEC =====
-SEC_HEADERS = {"User-Agent": "alpha-bot aktfaaksa@gmail.com"}
+# ===== SEC HEADERS (🔥 تم إضافة الإيميل هنا) =====
+SEC_HEADERS = {
+    "User-Agent": "market-bot aktfaaksa@gmail.com"
+}
+
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-IMPORTANT_FORMS = ["8-K","13D"]
 sent_sec = set()
 
-# ===== EVENT MAP (🔥 أهم جزء) =====
+# ===== EVENT MAP =====
 EVENT_MAP = {
     "acquisition": "استحواذ",
     "merger": "اندماج",
     "agreement": "اتفاقية",
     "partnership": "شراكة",
     "collaboration": "تعاون",
-    "contract": "عقد كبير",
+    "contract": "عقد",
 
     "offering": "طرح أسهم",
-    "warrant": "إصدار Warrants",
-    "convertible": "سندات قابلة للتحويل",
-    "dilution": "تخفيف الأسهم",
+    "warrant": "Warrants",
+    "convertible": "سندات",
+    "dilution": "تخفيف",
 
     "bankruptcy": "إفلاس",
     "default": "تعثر",
     "restructuring": "إعادة هيكلة",
-    "layoff": "تسريح موظفين",
 
     "ceo": "تغيير إداري",
     "resign": "استقالة",
-    "director": "تغيير إداري"
+    "director": "إدارة"
 }
 
 # ===== TOP 50 =====
 async def get_top50(session):
-    url = f"https://finnhub.io/api/v1/stock/market/list/gainers?token={API_KEY}"
     try:
-        async with session.get(url) as r:
+        async with session.get(
+            f"https://finnhub.io/api/v1/stock/market/list/gainers?token={API_KEY}"
+        ) as r:
             data = await r.json()
         return [x["symbol"] for x in data][:50]
     except:
@@ -92,7 +86,7 @@ def is_new(title, link):
     return True
 
 def normalize(title):
-    return re.sub(r'[^a-z0-9 ]', '', title.lower())[:60]
+    return re.sub(r'[^a-z0-9 ]', '', title.lower())[:50]
 
 def is_unique(title):
     short = normalize(title)
@@ -104,35 +98,29 @@ def is_unique(title):
 def is_junk(title):
     return any(k in title.lower() for k in JUNK)
 
-def get_impact(title):
-    t = title.lower()
-    if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
-        return "🔥 عالي"
-    elif any(x in t for x in ["fed","inflation","rate","war","gold","oil"]):
-        return "🌍 اقتصادي"
-    elif any(x in t for x in ["ai","chip","upgrade"]):
-        return "⚡ متوسط"
-    return "🟡 عادي"
-
 # ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
-
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
 
-    for name, s in COMPANY_MAP.items():
-        if name in t:
-            return s
-
     for s in WATCHLIST + AUTO_WATCHLIST:
-        if re.search(rf'\b{s}\b', t):
+        if s in t:
             return s
 
     return "MARKET"
 
-# ===== TRANSLATION =====
+# ===== IMPACT =====
+def get_impact(title):
+    t = title.lower()
+    if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
+        return "🔥 عالي"
+    elif any(x in t for x in ["ai","chip","upgrade"]):
+        return "⚡ متوسط"
+    return "🟡 عادي"
+
+# ===== TRANSLATE =====
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
@@ -142,16 +130,9 @@ def translate_text(text):
 # ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: افتراضي"
+        return "الاتجاه: محايد | القوة: 6/10 | إشارة: احتفاظ"
 
-    prompt = f"""
-حلل الخبر التالي:
-
-{title}
-
-أجب فقط:
-الاتجاه / القوة / الثقة / الإشارة / السبب
-"""
+    prompt = f"{title} \n اختصر اتجاه + قوة + إشارة"
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -161,15 +142,19 @@ async def analyze_news(title):
                 json={"model":"google/gemini-2.5-flash-lite","messages":[{"role":"user","content":prompt}]}
             ) as r:
                 data = await r.json()
-                return data["choices"][0]["message"]["content"]
+                return data["choices"][0]["message"]["content"][:120]
     except:
         return "تحليل غير متوفر"
 
 # ===== STOCK =====
 async def get_stock(session, symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-    async with session.get(url) as r:
-        return await r.json()
+    try:
+        async with session.get(
+            f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
+        ) as r:
+            return await r.json()
+    except:
+        return {}
 
 # ===== SEC =====
 async def load_cik_map(session):
@@ -179,22 +164,27 @@ async def load_cik_map(session):
 
 async def send_sec(bot, session, symbol, cik_map):
     cik = cik_map.get(symbol)
-    if not cik: return
+    if not cik:
+        return
 
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    async with session.get(url, headers=SEC_HEADERS) as r:
-        data = await r.json()
+
+    try:
+        async with session.get(url, headers=SEC_HEADERS) as r:
+            data = await r.json()
+    except:
+        return
 
     filings = data.get("filings",{}).get("recent",{})
 
     for i in range(len(filings.get("form",[]))):
 
         form = filings["form"][i]
-        if form not in IMPORTANT_FORMS:
+        if form != "8-K":
             continue
 
         date = filings["filingDate"][i]
-        key = f"{symbol}_{form}_{date}"
+        key = f"{symbol}_{date}"
         if key in sent_sec:
             continue
         sent_sec.add(key)
@@ -212,6 +202,7 @@ async def send_sec(bot, session, symbol, cik_map):
                 if k in text:
                     event = v
                     break
+
         except:
             pass
 
@@ -236,52 +227,46 @@ async def send(bot, session, news):
     if not is_unique(title): return False
     if is_junk(title): return False
 
-    impact = get_impact(title)
-    if impact == "🟡 عادي": return False
-
     symbol = extract_symbol(title)
 
-    ALL_STOCKS = WATCHLIST + AUTO_WATCHLIST
-    if symbol not in ALL_STOCKS:
+    if symbol == "MARKET":
+        return False
+
+    if symbol in seen_companies:
+        return False
+    seen_companies.add(symbol)
+
+    impact = get_impact(title)
+    if impact == "🟡 عادي":
         return False
 
     translated = translate_text(title)
     ai = await analyze_news(title)
 
-    match = re.search(r"(\d+)/10", ai)
-    strength = int(match.group(1)) if match else 6
-    if strength < 5: return False
+    stock = await get_stock(session, symbol)
+    price = stock.get("c", "")
+    change = stock.get("dp", "")
 
-    stock_info = ""
-    try:
-        d = await get_stock(session, symbol)
-        stock_info = f"\n📊 {symbol} | {d.get('c')}$ | {round(d.get('dp',0),2)}%\n"
-    except:
-        pass
-
-    alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
-
-    message = f"""{alert}{impact}
+    msg = f"""{impact}
 
 📰 {title}
 🇸🇦 {translated}
 
-{stock_info}
+📊 {symbol} | {price}$ | {round(change,2)}%
 
-🧠
-{ai}
+🧠 {ai}
 
 🔗 {link}
 """
 
     for chat_id in CHAT_IDS:
-        await bot.send_message(chat_id=chat_id, text=message)
+        await bot.send_message(chat_id=chat_id, text=msg)
 
     return True
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v19 PRO RUNNING")
+    print("🚀 PRO CLEAN + SEC FIXED")
 
     async with aiohttp.ClientSession() as session:
 
@@ -297,6 +282,8 @@ async def main():
                     AUTO_WATCHLIST = await get_top50(session)
                     last_update = time.time()
 
+                seen_companies.clear()
+
                 feed = []
                 for url in RSS_FEEDS:
                     f = feedparser.parse(url)
@@ -305,10 +292,12 @@ async def main():
 
                 count = 0
                 for n in feed:
-                    if count >= MAX_NEWS_PER_CYCLE: break
-                    if await send(bot, session, n): count += 1
+                    if count >= MAX_NEWS_PER_CYCLE:
+                        break
+                    if await send(bot, session, n):
+                        count += 1
 
-                for s in (WATCHLIST + AUTO_WATCHLIST)[:5]:
+                for s in (WATCHLIST + AUTO_WATCHLIST)[:3]:
                     await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
