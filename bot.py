@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v25 PRO ELITE =====
+# ===== Alpha Market Intelligence v26 PRO =====
 
 import asyncio
 import aiohttp
@@ -14,7 +14,7 @@ from deep_translator import GoogleTranslator
 # ===== LOAD EXCEL =====
 def load_excel():
     df = pd.read_excel("stocks.xlsx")
-    symbols = (
+    return (
         df["الرمز"]
         .dropna()
         .astype(str)
@@ -23,7 +23,6 @@ def load_excel():
         .unique()
         .tolist()
     )
-    return symbols
 
 # ===== ENV =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -31,13 +30,13 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
+# 👇 الشخص الثاني مضاف هنا
 CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
+
 bot = Bot(token=TOKEN)
 
 MAX_NEWS_PER_CYCLE = 15
-
 WATCHLIST = load_excel()
-AUTO_WATCHLIST = []
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -60,13 +59,9 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 sent_sec_ids = set()
 sent_sec_symbols_cycle = set()
 
-# ===== EVENTS =====
 STRONG_EVENTS = {
     "acquisition": "استحواذ",
     "merger": "اندماج",
-    "offering": "طرح أسهم",
-    "warrant": "Warrants",
-    "convertible": "سندات",
     "bankruptcy": "إفلاس",
     "ceo": "تغيير إداري",
     "resign": "استقالة",
@@ -75,7 +70,7 @@ STRONG_EVENTS = {
 
 # ===== FILTER =====
 JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
-BAD_WORDS = ["best stocks","should you buy","top stocks","is this stock","one of the best"]
+BAD_WORDS = ["best stocks","should you buy","top stocks"]
 
 # ===== HELPERS =====
 def is_new(title, link):
@@ -86,7 +81,7 @@ def is_new(title, link):
     return True
 
 def normalize(title):
-    return re.sub(r'[^a-z0-9 ]', '', title.lower())[:50]
+    return re.sub(r'[^a-z0-9 ]', '', title.lower())
 
 def is_unique(title):
     short = normalize(title)
@@ -107,8 +102,7 @@ def extract_symbol(title):
     if match:
         return match[0]
 
-    words = re.findall(r'\b[A-Z]{2,5}\b', t)
-    for w in words:
+    for w in re.findall(r'\b[A-Z]{2,5}\b', t):
         if w in WATCHLIST:
             return w
 
@@ -133,8 +127,6 @@ async def analyze_news(title):
     if not OPENROUTER_API_KEY:
         return "محايد | 6/10 | احتفاظ"
 
-    prompt = f"{title}\n\nتحليل مختصر"
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -142,11 +134,11 @@ async def analyze_news(title):
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
                 json={
                     "model":"google/gemini-2.5-flash-lite",
-                    "messages":[{"role":"user","content":prompt}]
+                    "messages":[{"role":"user","content":title}]
                 }
             ) as r:
                 data = await r.json()
-                return data["choices"][0]["message"]["content"].strip()
+                return data["choices"][0]["message"]["content"].strip()[:120]
     except:
         return "تحليل غير متوفر"
 
@@ -160,33 +152,17 @@ async def get_stock(session, symbol):
     except:
         return {}
 
-# ===== FIX CIK LOAD =====
+# ===== SEC LOAD =====
 async def load_cik_map(session):
     try:
         async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
-
-            if r.status != 200:
-                print("SEC blocked:", r.status)
-                return {}
-
-            if "application/json" not in r.headers.get("Content-Type",""):
-                print("SEC not json")
-                return {}
-
             data = await r.json()
-
-        return {
-            v["ticker"]: str(v["cik_str"]).zfill(10)
-            for v in data.values()
-        }
-
-    except Exception as e:
-        print("CIK error:", e)
+        return {v["ticker"]: str(v["cik_str"]).zfill(10) for v in data.values()}
+    except:
         return {}
 
 # ===== SEC =====
 async def send_sec(bot, session, symbol, cik_map):
-
     if symbol in sent_sec_symbols_cycle:
         return
 
@@ -206,59 +182,22 @@ async def send_sec(bot, session, symbol, cik_map):
     filings = data.get("filings",{}).get("recent",{})
 
     for i in range(len(filings.get("form",[]))):
-
         if filings["form"][i] != "8-K":
             continue
 
-        accession_id = filings["accessionNumber"][i]
-
-        # 🔥 فلترة التاريخ
-        filing_date = filings["filingDate"][i]
-        today = time.strftime("%Y-%m-%d")
-
-        if filing_date != today:
+        if filings["filingDate"][i] != time.strftime("%Y-%m-%d"):
             continue
 
+        accession_id = filings["accessionNumber"][i]
         key = f"{symbol}_{accession_id}"
 
         if key in sent_sec_ids:
             continue
 
-        accession = accession_id.replace("-","")
-        link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
-
-        try:
-            async with session.get(link, headers=SEC_HEADERS) as r2:
-                text = (await r2.text()).lower()
-
-            event = None
-            for k,v in STRONG_EVENTS.items():
-                if k in text:
-                    event = v
-                    break
-
-            if not event:
-                continue
-
-        except:
-            continue
-
-        # 🔥 فلترة قوية
-        if "warrant" in text:
-            continue
-
-        if "offering" in text:
-            continue
-
         sent_sec_ids.add(key)
         sent_sec_symbols_cycle.add(symbol)
 
-        msg = f"""🚨 SEC
-
-🔥 8-K ({event}) | {symbol}
-
-🔗 {link}
-"""
+        msg = f"🚨 SEC | {symbol}\n🔗 https://www.sec.gov"
 
         for chat_id in CHAT_IDS:
             await bot.send_message(chat_id=chat_id, text=msg)
@@ -275,30 +214,33 @@ async def send(bot, session, news):
     if is_junk(title): return False
 
     symbol = extract_symbol(title)
+    if symbol == "MARKET": return False
 
-    if symbol == "MARKET":
-        return False
-
-    if symbol in seen_symbols_cycle:
-        return False
+    if symbol in seen_symbols_cycle: return False
     seen_symbols_cycle.add(symbol)
 
     impact = get_impact(title)
-    if impact == "🟡 عادي":
-        return False
-
-    translated = translate_text(title)[:150]  # 🔥 قص الترجمة
-    ai = await analyze_news(title)
-    ai = ai.split("\n")[0][:120]  # 🔥 قص التحليل
+    if impact == "🟡 عادي": return False
 
     stock = await get_stock(session, symbol)
+
+    # ===== فلترة Finnhub (متوسطة) =====
+    price = stock.get("c", 0)
+    change = stock.get("dp", 0)
+
+    if price == 0: return False
+    if abs(change) < 1.5: return False
+    if price < 2: return False
+
+    translated = translate_text(title)[:150]
+    ai = await analyze_news(title)
 
     msg = f"""{impact}
 
 📰 {title}
 🇸🇦 {translated}
 
-📊 {symbol} | {stock.get('c')}$ | {round(stock.get('dp',0),2)}%
+📊 {symbol} | {price}$ | {round(change,2)}%
 
 🧠 {ai}
 
@@ -312,10 +254,9 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 PRO ELITE RUNNING")
+    print("🚀 v26 PRO RUNNING")
 
     async with aiohttp.ClientSession() as session:
-
         cik_map = await load_cik_map(session)
 
         while True:
@@ -338,7 +279,7 @@ async def main():
 
                 for s in WATCHLIST:
                     await send_sec(bot, session, s, cik_map)
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
 
                 await asyncio.sleep(300)
 
