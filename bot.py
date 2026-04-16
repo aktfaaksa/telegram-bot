@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence FINAL (SEC SMART ONLY) =====
+# ===== Alpha Market Intelligence FINAL (SEC EVENT TYPE) =====
 
 import asyncio
 import aiohttp
@@ -76,7 +76,6 @@ def is_unique(title):
 def is_junk(title):
     return any(k in title.lower() for k in JUNK)
 
-# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
     if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
@@ -87,10 +86,8 @@ def get_impact(title):
         return "⚡ متوسط"
     return "🟡 عادي"
 
-# ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
-
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
@@ -101,7 +98,6 @@ def extract_symbol(title):
 
     return "MARKET"
 
-# ===== TRANSLATION =====
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
@@ -218,71 +214,79 @@ async def send(bot, session, news):
 
     return True
 
-# ===== SEC (تم تطويره فقط 🔥) =====
+# ===== SEC (نوع الحدث واضح 🔥) =====
+async def load_cik_map(session):
+    async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
+        data = await r.json()
+    return {item["ticker"]: str(item["cik_str"]).zfill(10) for item in data.values()}
+
 async def send_sec(bot, session, symbol, cik_map):
 
-    data = await get_sec_filings(session, symbol, cik_map)
+    cik = cik_map.get(symbol)
+    if not cik:
+        return
 
-    for f in data:
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
 
-        if not is_new_sec(f):
+    async with session.get(url, headers=SEC_HEADERS) as r:
+        data = await r.json()
+
+    filings = data.get("filings", {}).get("recent", {})
+
+    for i in range(len(filings.get("form", []))):
+
+        form = filings["form"][i]
+
+        if form not in IMPORTANT_FORMS:
             continue
 
-        title = "تحديث مهم"
-        summary = "لم يتم العثور على تفاصيل واضحة"
+        date = filings["filingDate"][i]
+        accession = filings["accessionNumber"][i].replace("-", "")
+
+        key = f"{symbol}_{form}_{date}"
+        if key in sent_sec:
+            continue
+
+        sent_sec.add(key)
+
+        link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
+
+        # ===== تحديد نوع الحدث 🔥 =====
+        event = "حدث مهم"
         direction = "📊 محايد"
 
         try:
-            async with session.get(f["link"], headers=SEC_HEADERS) as r:
-                html = await r.text()
+            async with session.get(link, headers=SEC_HEADERS) as r2:
+                text = (await r2.text()).lower()
 
-            doc_match = re.search(r'href="(/Archives/edgar/data/.*?\.htm)"', html)
-
-            if doc_match:
-                doc_url = "https://www.sec.gov" + doc_match.group(1)
-
-                async with session.get(doc_url, headers=SEC_HEADERS) as r2:
-                    doc_text = await r2.text()
-
-                text = re.sub(r'<.*?>', '', doc_text).lower()
-
-                if "acquisition" in text:
-                    title = "استحواذ"
-                    direction = "📈 صعودي"
-                elif "merger" in text:
-                    title = "اندماج"
-                    direction = "📈 صعودي"
-                elif "agreement" in text:
-                    title = "اتفاقية"
-                    direction = "📈 صعودي"
-                elif "ceo" in text or "resign" in text:
-                    title = "تغيير إداري"
-                    direction = "📉 سلبي"
-                elif "bankruptcy" in text:
-                    title = "إفلاس"
-                    direction = "📉 هبوط قوي"
-                elif "offering" in text:
-                    title = "طرح أسهم"
-                    direction = "📉 سلبي"
-
-                lines = doc_text.split("\n")
-
-                for line in lines:
-                    line = re.sub(r'<.*?>', '', line).strip()
-                    if 50 < len(line) < 200:
-                        summary = line
-                        break
+            if "acquisition" in text:
+                event = "استحواذ"
+                direction = "📈 صعودي"
+            elif "merger" in text:
+                event = "اندماج"
+                direction = "📈 صعودي"
+            elif "agreement" in text:
+                event = "اتفاقية"
+                direction = "📈 صعودي"
+            elif "ceo" in text or "resign" in text:
+                event = "تغيير إداري"
+                direction = "📉 سلبي"
+            elif "bankruptcy" in text:
+                event = "إفلاس"
+                direction = "📉 هبوط قوي"
+            elif "offering" in text:
+                event = "طرح أسهم"
+                direction = "📉 سلبي"
 
         except:
             pass
 
-        msg = f"""🔥 {f['form']} ({title}) | {f['symbol']}
+        msg = f"""🔥 {form} ({event}) | {symbol}
 
-📄 {summary[:120]}
-
+📄 إشعار رسمي
 {direction}
 
-🔗 {f['link']}
+🔗 {link}
 """
 
         for chat_id in CHAT_IDS:
@@ -290,3 +294,27 @@ async def send_sec(bot, session, symbol, cik_map):
                 await bot.send_message(chat_id=chat_id, text=msg)
             except:
                 pass
+
+        break
+
+# ===== MAIN =====
+async def main():
+    print("🚀 BOT RUNNING FINAL")
+
+    async with aiohttp.ClientSession() as session:
+
+        cik_map = await load_cik_map(session)
+
+        while True:
+            try:
+                for s in WATCHLIST[:5]:
+                    await send_sec(bot, session, s, cik_map)
+
+                await asyncio.sleep(300)
+
+            except Exception as e:
+                print("ERROR:", e)
+                await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    asyncio.run(main())
