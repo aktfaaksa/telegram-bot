@@ -48,8 +48,6 @@ sent_hashes = set()
 seen_titles = set()
 seen_symbols_cycle = set()
 
-sent_to_secondary = set()
-
 # ===== SEC =====
 SEC_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -76,17 +74,6 @@ STRONG_EVENTS = {
 # ===== FILTER =====
 JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
 BAD_WORDS = ["best stocks","should you buy","top stocks","is this stock","one of the best"]
-
-# ===== TOP 50 =====
-async def get_top50(session):
-    try:
-        async with session.get(
-            f"https://finnhub.io/api/v1/stock/market/list/gainers?token={API_KEY}"
-        ) as r:
-            data = await r.json()
-        return [x["symbol"] for x in data][:50]
-    except:
-        return []
 
 # ===== HELPERS =====
 def is_new(title, link):
@@ -120,7 +107,7 @@ def extract_symbol(title):
 
     words = re.findall(r'\b[A-Z]{2,5}\b', t)
     for w in words:
-        if w in WATCHLIST or w in AUTO_WATCHLIST:
+        if w in WATCHLIST:
             return w
 
     return "MARKET"
@@ -142,7 +129,7 @@ def translate_text(text):
 # ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "محايد | 6/10 | احتفاظ | عادي"
+        return "محايد | 6/10 | احتفاظ"
 
     prompt = f"{title}\n\nتحليل مختصر"
 
@@ -171,7 +158,7 @@ async def get_stock(session, symbol):
     except:
         return {}
 
-# ===== FIX CIK LOAD (NO CRASH) =====
+# ===== FIX CIK LOAD =====
 async def load_cik_map(session):
     try:
         async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
@@ -223,7 +210,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
         accession_id = filings["accessionNumber"][i]
 
-        # ===== FILTER DATE =====
+        # 🔥 فلترة التاريخ
         filing_date = filings["filingDate"][i]
         today = time.strftime("%Y-%m-%d")
 
@@ -254,36 +241,19 @@ async def send_sec(bot, session, symbol, cik_map):
         except:
             continue
 
-        # ===== STRONG FILTER =====
+        # 🔥 فلترة قوية
         if "warrant" in text:
             continue
 
         if "offering" in text:
             continue
 
-        category = "🚨"
-        note = "حدث مؤثر"
-
-        if event in ["استحواذ","اندماج"]:
-            category = "🟢"
-            note = "توسع ونمو"
-
-        elif event == "أرباح":
-            category = "🟢"
-            note = "نتائج مالية"
-
-        elif event in ["تغيير إداري","استقالة"]:
-            category = "🔴"
-            note = "تغيير إداري مهم"
-
         sent_sec_ids.add(key)
         sent_sec_symbols_cycle.add(symbol)
 
-        msg = f"""{category} SEC Alert
+        msg = f"""🚨 SEC
 
 🔥 8-K ({event}) | {symbol}
-
-📄 {note}
 
 🔗 {link}
 """
@@ -315,8 +285,10 @@ async def send(bot, session, news):
     if impact == "🟡 عادي":
         return False
 
-    translated = translate_text(title)
+    translated = translate_text(title)[:150]  # 🔥 قص الترجمة
     ai = await analyze_news(title)
+    ai = ai.split("\n")[0][:120]  # 🔥 قص التحليل
+
     stock = await get_stock(session, symbol)
 
     msg = f"""{impact}
@@ -342,18 +314,10 @@ async def main():
 
     async with aiohttp.ClientSession() as session:
 
-        global AUTO_WATCHLIST
-        AUTO_WATCHLIST = await get_top50(session)
-        last_update = time.time()
-
         cik_map = await load_cik_map(session)
 
         while True:
             try:
-                if time.time() - last_update > 1800:
-                    AUTO_WATCHLIST = await get_top50(session)
-                    last_update = time.time()
-
                 seen_symbols_cycle.clear()
                 sent_sec_symbols_cycle.clear()
 
