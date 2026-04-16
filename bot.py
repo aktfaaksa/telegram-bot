@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v18 SMART =====
+# ===== Alpha Market Intelligence v18 SMART + SEC =====
 
 import asyncio
 import aiohttp
@@ -16,10 +16,20 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-CHAT_IDS = [CHAT_ID_MAIN, 6315087880]  # ✅ محفوظ
+CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
 
+# ===== SEC =====
+SEC_HEADERS = {
+    "User-Agent": "alpha-bot aktfaaksa@gmail.com"
+}
+
+SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+IMPORTANT_FORMS = ["8-K", "4", "13D", "NT 10-Q", "S-3"]
+sent_sec = set()
+
+# ===== NEWS =====
 MAX_NEWS_PER_CYCLE = 15
 
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
@@ -39,7 +49,6 @@ RSS_FEEDS = [
 sent_hashes = set()
 seen_titles = set()
 
-# ===== فلترة خفيفة =====
 JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
 
 # ===== HELPERS =====
@@ -100,7 +109,7 @@ def translate_text(text):
     except:
         return text
 
-# ===== AI (FIXED STRUCTURED) =====
+# ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
         return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: تحليل افتراضي"
@@ -119,8 +128,6 @@ async def analyze_news(title):
 الثقة: %
 الإشارة: شراء / بيع / احتفاظ
 السبب: 3 كلمات فقط
-
-ممنوع أي شرح إضافي
 """
 
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
@@ -135,131 +142,94 @@ async def analyze_news(title):
             async with session.post(url, json=payload, headers=headers) as r:
                 data = await r.json()
                 ai = data.get("choices",[{}])[0].get("message",{}).get("content","")
-
-                # قص أي كلام زائد
-                ai = "\n".join(ai.split("\n")[:5])
-                return ai
+                return "\n".join(ai.split("\n")[:5])
     except:
-        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: خطأ تحليل"
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: خطأ"
 
-# ===== STOCK =====
-async def get_stock(session, symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-    async with session.get(url) as r:
-        return await r.json()
-
-# ===== TECH =====
-async def get_candles(session, symbol):
-    now = int(time.time())
-    past = now - (60*60*24*200)
-
-    url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&from={past}&to={now}&token={API_KEY}"
-
-    async with session.get(url) as r:
+# ===== SEC FUNCTIONS =====
+async def load_cik_map(session):
+    async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
         data = await r.json()
-        if data.get("s") != "ok":
-            return []
-        return data.get("c", [])
 
-def rsi(prices):
-    if len(prices) < 15:
-        return None
-    gains, losses = [], []
-    for i in range(1,15):
-        diff = prices[-i] - prices[-i-1]
-        if diff > 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
-    avg_gain = sum(gains)/14 if gains else 0
-    avg_loss = sum(losses)/14 if losses else 0
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain/avg_loss
-    return round(100-(100/(1+rs)),2)
+    cik_map = {}
+    for item in data.values():
+        cik_map[item["ticker"]] = str(item["cik_str"]).zfill(10)
 
-def ma(prices, n):
-    if len(prices) < n:
-        return None
-    return round(sum(prices[-n:])/n,2)
+    return cik_map
 
-# ===== SEND =====
-async def send(bot, session, news):
-    title = news["title"]
-    link = news["link"]
+async def get_sec_filings(session, symbol, cik_map):
+    cik = cik_map.get(symbol)
+    if not cik:
+        return []
 
-    if not is_new(title, link): return False
-    if not is_unique(title): return False
-    if is_junk(title): return False
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
 
-    impact = get_impact(title)
-    if impact == "🟡 عادي": return False
+    async with session.get(url, headers=SEC_HEADERS) as r:
+        data = await r.json()
 
-    symbol = extract_symbol(title)
-    translated = translate_text(title)
-    ai = await analyze_news(title)
+    filings = data.get("filings", {}).get("recent", {})
 
-    match = re.search(r"(\d+)/10", ai)
-    strength = int(match.group(1)) if match else 6
+    results = []
+    for i in range(len(filings.get("form", []))):
+        form = filings["form"][i]
 
-    if strength < 5:
+        if form in IMPORTANT_FORMS:
+            accession = filings["accessionNumber"][i].replace("-", "")
+            link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
+
+            results.append({
+                "symbol": symbol,
+                "form": form,
+                "date": filings["filingDate"][i],
+                "link": link
+            })
+
+    return results[:1]
+
+def is_new_sec(f):
+    key = f"{f['symbol']}_{f['form']}_{f['date']}"
+    if key in sent_sec:
         return False
+    sent_sec.add(key)
+    return True
 
-    # ===== السعر =====
-    stock_info = ""
-    if symbol != "MARKET":
-        try:
-            d = await get_stock(session, symbol)
-            stock_info = f"\n📊 {symbol} | {d.get('c')}$ | {round(d.get('dp',0),2)}%\n"
-        except:
-            pass
+def short_label(form):
+    return {
+        "8-K": "خبر قوي",
+        "4": "شراء داخلي",
+        "13D": "مستثمر كبير",
+        "NT 10-Q": "تأخير",
+        "S-3": "بيع أسهم"
+    }.get(form, "خبر")
 
-    # ===== RSI =====
-    tech = ""
-    if symbol != "MARKET":
-        try:
-            prices = await get_candles(session, symbol)
-            if prices:
-                r = rsi(prices)
-                m50 = ma(prices,50)
-                m200 = ma(prices,200)
+async def send_sec(bot, session, symbol, cik_map):
+    data = await get_sec_filings(session, symbol, cik_map)
 
-                trend = "📈 صاعد" if m50 and m200 and m50>m200 else "📉 هابط"
-                signal = "🟢" if r and r<30 else "🔴" if r and r>70 else ""
+    for f in data:
+        if not is_new_sec(f):
+            continue
 
-                tech = f"\n📊 RSI:{r} | MA50:{m50} | MA200:{m200}\n{trend} {signal}\n"
-        except:
-            pass
+        label = short_label(f["form"])
 
-    alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
+        msg = f"""
+🔥 {f['form']} ({label}) | {f['symbol']}
 
-    message = f"""{alert}{impact}
-
-📰 {title}
-🇸🇦 {translated}
-
-{stock_info}
-{tech}
-
-🧠
-{ai}
-
-🔗 {link}
+🔗 {f['link']}
 """
 
-    for chat_id in CHAT_IDS:
-        try:
-            await bot.send_message(chat_id=chat_id, text=message)
-        except:
-            pass
-
-    return True
+        for chat_id in CHAT_IDS:
+            try:
+                await bot.send_message(chat_id=chat_id, text=msg)
+            except:
+                pass
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v18 SMART RUNNING")
+    print("🚀 v18 SMART + SEC RUNNING")
 
     async with aiohttp.ClientSession() as session:
+        cik_map = await load_cik_map(session)
+
         while True:
             try:
                 feed = []
@@ -274,6 +244,10 @@ async def main():
                         break
                     if await send(bot, session, n):
                         count += 1
+
+                # ===== SEC =====
+                for s in WATCHLIST:
+                    await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
 
