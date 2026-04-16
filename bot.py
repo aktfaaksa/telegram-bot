@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v26 PRO =====
+# ===== Alpha Market Intelligence v26 PRO FIXED =====
 
 import asyncio
 import aiohttp
@@ -30,7 +30,6 @@ API_KEY = os.getenv("FINNHUB_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
 
-# 👇 الشخص الثاني مضاف هنا
 CHAT_IDS = [CHAT_ID_MAIN, 6315087880]
 
 bot = Bot(token=TOKEN)
@@ -58,15 +57,6 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 sent_sec_ids = set()
 sent_sec_symbols_cycle = set()
-
-STRONG_EVENTS = {
-    "acquisition": "استحواذ",
-    "merger": "اندماج",
-    "bankruptcy": "إفلاس",
-    "ceo": "تغيير إداري",
-    "resign": "استقالة",
-    "earnings": "أرباح"
-}
 
 # ===== FILTER =====
 JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
@@ -161,61 +151,16 @@ async def load_cik_map(session):
     except:
         return {}
 
-# ===== SEC =====
-async def send_sec(bot, session, symbol, cik_map):
-    if symbol in sent_sec_symbols_cycle:
-        return
-
-    cik = cik_map.get(symbol)
-    if not cik:
-        return
-
-    try:
-        async with session.get(
-            f"https://data.sec.gov/submissions/CIK{cik}.json",
-            headers=SEC_HEADERS
-        ) as r:
-            data = await r.json()
-    except:
-        return
-
-    filings = data.get("filings",{}).get("recent",{})
-
-    for i in range(len(filings.get("form",[]))):
-        if filings["form"][i] != "8-K":
-            continue
-
-        if filings["filingDate"][i] != time.strftime("%Y-%m-%d"):
-            continue
-
-        accession_id = filings["accessionNumber"][i]
-        key = f"{symbol}_{accession_id}"
-
-        if key in sent_sec_ids:
-            continue
-
-        sent_sec_ids.add(key)
-        sent_sec_symbols_cycle.add(symbol)
-
-        msg = f"🚨 SEC | {symbol}\n🔗 https://www.sec.gov"
-
-        for chat_id in CHAT_IDS:
-            await bot.send_message(chat_id=chat_id, text=msg)
-
-        break
-
 # ===== NEWS =====
 async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
-    print("TITLE:", title)
 
     if not is_new(title, link): return False
     if not is_unique(title): return False
     if is_junk(title): return False
 
     symbol = extract_symbol(title)
-    print("SYMBOL:", symbol)
     if symbol == "MARKET": return False
 
     if symbol in seen_symbols_cycle: return False
@@ -224,17 +169,23 @@ async def send(bot, session, news):
     impact = get_impact(title)
     if impact == "🟡 عادي": return False
 
+    # ===== Finnhub =====
     stock = await get_stock(session, symbol)
 
-    # ===== فلترة Finnhub (متوسطة) =====
     price = stock.get("c", 0)
     change = stock.get("dp", 0)
-    print("PRICE:", price, "CHANGE:", change)
 
-    if price == 0: return False
-    if abs(change) < 0.5: return False
-    if price < 2: return False
+    # 🔥 الفلترة الصحيحة (قبل الرسالة)
+    if price == 0:
+        return False
 
+    if abs(change) < 1.5:
+        return False
+
+    if price < 2:
+        return False
+
+    # ===== بعد الفلترة فقط =====
     translated = translate_text(title)[:150]
     ai = await analyze_news(title)
 
@@ -257,15 +208,12 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v26 PRO RUNNING")
+    print("🚀 v26 PRO FIXED RUNNING")
 
     async with aiohttp.ClientSession() as session:
-        cik_map = await load_cik_map(session)
-
         while True:
             try:
                 seen_symbols_cycle.clear()
-                sent_sec_symbols_cycle.clear()
 
                 feed = []
                 for url in RSS_FEEDS:
@@ -279,10 +227,6 @@ async def main():
                         break
                     if await send(bot, session, n):
                         count += 1
-
-                for s in WATCHLIST:
-                    await send_sec(bot, session, s, cik_map)
-                    await asyncio.sleep(2)
 
                 await asyncio.sleep(300)
 
