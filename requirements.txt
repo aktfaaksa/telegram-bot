@@ -3,3 +3,5 @@ aiohttp
 requests
 deep-translator
 feedparser
+pandas
+openpyxl
