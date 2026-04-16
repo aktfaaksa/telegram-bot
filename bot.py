@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v18 FINAL PRO =====
+# ===== Alpha Market Intelligence v19 PRO (SMART SEC + TOP50) =====
 
 import asyncio
 import aiohttp
@@ -22,9 +22,8 @@ bot = Bot(token=TOKEN)
 
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== WATCHLIST الأساسية =====
+# ===== WATCHLIST =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
-
 AUTO_WATCHLIST = []
 
 COMPANY_MAP = {
@@ -49,6 +48,30 @@ SEC_HEADERS = {"User-Agent": "alpha-bot aktfaaksa@gmail.com"}
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 IMPORTANT_FORMS = ["8-K","13D"]
 sent_sec = set()
+
+# ===== EVENT MAP (🔥 أهم جزء) =====
+EVENT_MAP = {
+    "acquisition": "استحواذ",
+    "merger": "اندماج",
+    "agreement": "اتفاقية",
+    "partnership": "شراكة",
+    "collaboration": "تعاون",
+    "contract": "عقد كبير",
+
+    "offering": "طرح أسهم",
+    "warrant": "إصدار Warrants",
+    "convertible": "سندات قابلة للتحويل",
+    "dilution": "تخفيف الأسهم",
+
+    "bankruptcy": "إفلاس",
+    "default": "تعثر",
+    "restructuring": "إعادة هيكلة",
+    "layoff": "تسريح موظفين",
+
+    "ceo": "تغيير إداري",
+    "resign": "استقالة",
+    "director": "تغيير إداري"
+}
 
 # ===== TOP 50 =====
 async def get_top50(session):
@@ -81,7 +104,6 @@ def is_unique(title):
 def is_junk(title):
     return any(k in title.lower() for k in JUNK)
 
-# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
     if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
@@ -127,12 +149,8 @@ async def analyze_news(title):
 
 {title}
 
-أجب فقط بهذا الشكل:
-الاتجاه: صعودي / هبوطي / محايد
-القوة: رقم/10
-الثقة: %
-الإشارة: شراء / بيع / احتفاظ
-السبب: 3 كلمات فقط
+أجب فقط:
+الاتجاه / القوة / الثقة / الإشارة / السبب
 """
 
     try:
@@ -143,7 +161,7 @@ async def analyze_news(title):
                 json={"model":"google/gemini-2.5-flash-lite","messages":[{"role":"user","content":prompt}]}
             ) as r:
                 data = await r.json()
-                return "\n".join(data["choices"][0]["message"]["content"].split("\n")[:5])
+                return data["choices"][0]["message"]["content"]
     except:
         return "تحليل غير متوفر"
 
@@ -152,28 +170,6 @@ async def get_stock(session, symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     async with session.get(url) as r:
         return await r.json()
-
-# ===== TECH =====
-async def get_candles(session, symbol):
-    now = int(time.time())
-    past = now - (60*60*24*200)
-    url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&from={past}&to={now}&token={API_KEY}"
-    async with session.get(url) as r:
-        data = await r.json()
-        return data.get("c", []) if data.get("s")=="ok" else []
-
-def rsi(prices):
-    if len(prices)<15: return None
-    gains, losses = [], []
-    for i in range(1,15):
-        diff = prices[-i]-prices[-i-1]
-        (gains if diff>0 else losses).append(abs(diff))
-    avg_gain = sum(gains)/14 if gains else 0
-    avg_loss = sum(losses)/14 if losses else 0
-    return 100 if avg_loss==0 else round(100-(100/(1+(avg_gain/avg_loss))),2)
-
-def ma(prices,n):
-    return round(sum(prices[-n:])/n,2) if len(prices)>=n else None
 
 # ===== SEC =====
 async def load_cik_map(session):
@@ -206,20 +202,16 @@ async def send_sec(bot, session, symbol, cik_map):
         accession = filings["accessionNumber"][i].replace("-","")
         link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
 
-        # نوع الحدث
         event = "حدث مهم"
 
         try:
             async with session.get(link, headers=SEC_HEADERS) as r2:
                 text = (await r2.text()).lower()
 
-            if "acquisition" in text: event="استحواذ"
-            elif "merger" in text: event="اندماج"
-            elif "agreement" in text: event="اتفاقية"
-            elif "ceo" in text or "resign" in text: event="تغيير إداري"
-            elif "bankruptcy" in text: event="إفلاس"
-            elif "offering" in text: event="طرح أسهم"
-
+            for k,v in EVENT_MAP.items():
+                if k in text:
+                    event = v
+                    break
         except:
             pass
 
@@ -260,18 +252,12 @@ async def send(bot, session, news):
     strength = int(match.group(1)) if match else 6
     if strength < 5: return False
 
-    stock_info, tech = "", ""
-
-    if symbol != "MARKET":
-        try:
-            d = await get_stock(session, symbol)
-            stock_info = f"\n📊 {symbol} | {d.get('c')}$ | {round(d.get('dp',0),2)}%\n"
-
-            prices = await get_candles(session, symbol)
-            if prices:
-                tech = f"\n📊 RSI:{rsi(prices)} | MA50:{ma(prices,50)} | MA200:{ma(prices,200)}\n"
-        except:
-            pass
+    stock_info = ""
+    try:
+        d = await get_stock(session, symbol)
+        stock_info = f"\n📊 {symbol} | {d.get('c')}$ | {round(d.get('dp',0),2)}%\n"
+    except:
+        pass
 
     alert = "🚨 فرصة قوية\n" if strength >= 8 else ""
 
@@ -281,7 +267,6 @@ async def send(bot, session, news):
 🇸🇦 {translated}
 
 {stock_info}
-{tech}
 
 🧠
 {ai}
@@ -296,7 +281,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 FINAL PRO RUNNING")
+    print("🚀 v19 PRO RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
@@ -308,12 +293,10 @@ async def main():
 
         while True:
             try:
-                # تحديث يومي
                 if time.time() - last_update > 86400:
                     AUTO_WATCHLIST = await get_top50(session)
                     last_update = time.time()
 
-                # أخبار
                 feed = []
                 for url in RSS_FEEDS:
                     f = feedparser.parse(url)
@@ -325,7 +308,6 @@ async def main():
                     if count >= MAX_NEWS_PER_CYCLE: break
                     if await send(bot, session, n): count += 1
 
-                # SEC
                 for s in (WATCHLIST + AUTO_WATCHLIST)[:5]:
                     await send_sec(bot, session, s, cik_map)
 
