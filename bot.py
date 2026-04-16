@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v24 REAL SEC =====
+# ===== Alpha Market Intelligence v25 PRO ELITE =====
 
 import asyncio
 import aiohttp
@@ -43,16 +43,17 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 sent_sec_ids = set()
 sent_sec_symbols_cycle = set()
 
-# ===== ITEM MAP (🔥 الحقيقي) =====
-ITEM_MAP = {
-    "1.01": "اتفاقية",
-    "1.02": "إنهاء اتفاقية",
-    "2.02": "أرباح",
-    "2.03": "تمويل",
-    "3.02": "طرح أسهم",
-    "5.02": "تغيير إداري",
-    "7.01": "إفصاح",
-    "8.01": "حدث مهم"
+# ===== الأحداث القوية فقط =====
+STRONG_EVENTS = {
+    "acquisition": "استحواذ",
+    "merger": "اندماج",
+    "offering": "طرح أسهم",
+    "warrant": "Warrants",
+    "convertible": "سندات",
+    "bankruptcy": "إفلاس",
+    "ceo": "تغيير إداري",
+    "resign": "استقالة",
+    "earnings": "أرباح"
 }
 
 # ===== FILTER =====
@@ -106,7 +107,7 @@ def extract_symbol(title):
 
 def get_impact(title):
     t = title.lower()
-    if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
+    if any(x in t for x in ["earnings","merger","acquisition"]):
         return "🔥 عالي"
     elif any(x in t for x in ["ai","chip","upgrade"]):
         return "⚡ متوسط"
@@ -156,17 +157,11 @@ async def get_stock(session, symbol):
     except:
         return {}
 
-# ===== SEC =====
+# ===== SEC (فلتر احترافي) =====
 async def load_cik_map(session):
     async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
         data = await r.json()
     return {v["ticker"]:str(v["cik_str"]).zfill(10) for v in data.values()}
-
-def extract_item(text):
-    match = re.search(r'item\s+(\d\.\d+)', text)
-    if match:
-        return match.group(1)
-    return None
 
 async def send_sec(bot, session, symbol, cik_map):
 
@@ -199,29 +194,35 @@ async def send_sec(bot, session, symbol, cik_map):
         if key in sent_sec_ids:
             continue
 
-        sent_sec_ids.add(key)
-        sent_sec_symbols_cycle.add(symbol)
-
         accession = accession_id.replace("-","")
         link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
-
-        event = "إفصاح عام"
 
         try:
             async with session.get(link, headers=SEC_HEADERS) as r2:
                 text = (await r2.text()).lower()
 
-            item = extract_item(text)
+            event = None
 
-            if item and item in ITEM_MAP:
-                event = ITEM_MAP[item]
+            for k,v in STRONG_EVENTS.items():
+                if k in text:
+                    event = v
+                    break
+
+            # ❌ تجاهل إذا ما هو خبر قوي
+            if not event:
+                continue
 
         except:
-            pass
+            continue
 
-        msg = f"""🔥 8-K ({event}) | {symbol}
+        sent_sec_ids.add(key)
+        sent_sec_symbols_cycle.add(symbol)
 
-📄 إشعار رسمي
+        msg = f"""🚨 SEC قوي
+
+🔥 8-K ({event}) | {symbol}
+
+📄 حدث مؤثر
 
 🔗 {link}
 """
@@ -277,7 +278,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 REAL SEC RUNNING")
+    print("🚀 PRO ELITE RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
@@ -309,7 +310,8 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                for s in (WATCHLIST + AUTO_WATCHLIST)[:5]:
+                # SEC (فقط القوي)
+                for s in (WATCHLIST + AUTO_WATCHLIST)[:10]:
                     await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
