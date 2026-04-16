@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v18 SMART + SEC =====
+# ===== Alpha Market Intelligence v18 SMART + SEC FINAL =====
 
 import asyncio
 import aiohttp
@@ -70,15 +70,14 @@ def is_unique(title):
     return True
 
 def is_junk(title):
-    t = title.lower()
-    return any(k in t for k in JUNK)
+    return any(k in title.lower() for k in JUNK)
 
 # ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
     if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
         return "🔥 عالي"
-    elif any(x in t for x in ["fed","inflation","rate","war","gold","oil"]):
+    elif any(x in t for x in ["fed","inflation","rate","war","oil"]):
         return "🌍 اقتصادي"
     elif any(x in t for x in ["ai","chip","upgrade"]):
         return "⚡ متوسط"
@@ -87,7 +86,6 @@ def get_impact(title):
 # ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
-
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
     if match:
         return match[0]
@@ -102,7 +100,7 @@ def extract_symbol(title):
 
     return "MARKET"
 
-# ===== TRANSLATION =====
+# ===== TRANSLATE =====
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
@@ -112,50 +110,79 @@ def translate_text(text):
 # ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: تحليل افتراضي"
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-
-    prompt = f"""
-حلل الخبر التالي:
-
-{title}
-
-أجب فقط بهذا الشكل:
-
-الاتجاه: صعودي / هبوطي / محايد
-القوة: رقم/10
-الثقة: %
-الإشارة: شراء / بيع / احتفاظ
-السبب: 3 كلمات فقط
-"""
-
-    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
-
-    payload = {
-        "model": "google/gemini-2.5-flash-lite",
-        "messages": [{"role":"user","content":prompt}]
-    }
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: افتراضي"
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as r:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                json={
+                    "model": "google/gemini-2.5-flash-lite",
+                    "messages": [{"role":"user","content":title}]
+                }
+            ) as r:
                 data = await r.json()
-                ai = data.get("choices",[{}])[0].get("message",{}).get("content","")
-                return "\n".join(ai.split("\n")[:5])
+                return data["choices"][0]["message"]["content"]
     except:
-        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: خطأ"
+        return "تحليل غير متوفر"
 
-# ===== SEC FUNCTIONS =====
+# ===== STOCK =====
+async def get_stock(session, symbol):
+    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
+    async with session.get(url) as r:
+        return await r.json()
+
+# ===== SEND NEWS =====
+async def send(bot, session, news):
+    title = news["title"]
+    link = news["link"]
+
+    if not is_new(title, link): return False
+    if not is_unique(title): return False
+    if is_junk(title): return False
+
+    impact = get_impact(title)
+    if impact == "🟡 عادي": return False
+
+    symbol = extract_symbol(title)
+    translated = translate_text(title)
+    ai = await analyze_news(title)
+
+    stock_info = ""
+    if symbol != "MARKET":
+        try:
+            d = await get_stock(session, symbol)
+            stock_info = f"\n📊 {symbol} | {d.get('c')}$ | {round(d.get('dp',0),2)}%\n"
+        except:
+            pass
+
+    message = f"""{impact}
+
+📰 {title}
+🇸🇦 {translated}
+
+{stock_info}
+
+🧠
+{ai}
+
+🔗 {link}
+"""
+
+    for chat_id in CHAT_IDS:
+        try:
+            await bot.send_message(chat_id=chat_id, text=message)
+        except:
+            pass
+
+    return True
+
+# ===== SEC =====
 async def load_cik_map(session):
     async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
         data = await r.json()
-
-    cik_map = {}
-    for item in data.values():
-        cik_map[item["ticker"]] = str(item["cik_str"]).zfill(10)
-
-    return cik_map
+    return {item["ticker"]: str(item["cik_str"]).zfill(10) for item in data.values()}
 
 async def get_sec_filings(session, symbol, cik_map):
     cik = cik_map.get(symbol)
@@ -168,8 +195,8 @@ async def get_sec_filings(session, symbol, cik_map):
         data = await r.json()
 
     filings = data.get("filings", {}).get("recent", {})
-
     results = []
+
     for i in range(len(filings.get("form", []))):
         form = filings["form"][i]
 
@@ -225,7 +252,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v18 SMART + SEC RUNNING")
+    print("🚀 v18 SMART + SEC FINAL RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik_map(session)
@@ -245,7 +272,6 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                # ===== SEC =====
                 for s in WATCHLIST:
                     await send_sec(bot, session, s, cik_map)
 
