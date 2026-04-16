@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v18 SMART + TOP50 DAILY =====
+# ===== Alpha Market Intelligence v18 FINAL PRO =====
 
 import asyncio
 import aiohttp
@@ -22,10 +22,9 @@ bot = Bot(token=TOKEN)
 
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== WATCHLIST ثابتة =====
+# ===== WATCHLIST الأساسية =====
 WATCHLIST = ["AAPL","TSLA","NVDA","AMD","META","MSFT","AMZN","NFLX","INTC","BAC","GOOGL","GS"]
 
-# ===== AUTO TOP 50 =====
 AUTO_WATCHLIST = []
 
 COMPANY_MAP = {
@@ -45,22 +44,19 @@ seen_titles = set()
 
 JUNK = ["mortgage","lifestyle","ramsey","personal","story"]
 
-# ===== TOP 50 DAILY =====
+# ===== SEC =====
+SEC_HEADERS = {"User-Agent": "alpha-bot aktfaaksa@gmail.com"}
+SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+IMPORTANT_FORMS = ["8-K","13D"]
+sent_sec = set()
+
+# ===== TOP 50 =====
 async def get_top50(session):
     url = f"https://finnhub.io/api/v1/stock/market/list/gainers?token={API_KEY}"
-
     try:
         async with session.get(url) as r:
             data = await r.json()
-
-        symbols = []
-        for x in data:
-            s = x.get("symbol")
-            if s:
-                symbols.append(s)
-
-        return symbols[:50]
-
+        return [x["symbol"] for x in data][:50]
     except:
         return []
 
@@ -124,9 +120,7 @@ def translate_text(text):
 # ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
-        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: تحليل افتراضي"
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
+        return "الاتجاه: محايد\nالقوة: 6/10\nالثقة: 70%\nالإشارة: احتفاظ\nالسبب: افتراضي"
 
     prompt = f"""
 حلل الخبر التالي:
@@ -134,7 +128,6 @@ async def analyze_news(title):
 {title}
 
 أجب فقط بهذا الشكل:
-
 الاتجاه: صعودي / هبوطي / محايد
 القوة: رقم/10
 الثقة: %
@@ -142,16 +135,13 @@ async def analyze_news(title):
 السبب: 3 كلمات فقط
 """
 
-    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
-
-    payload = {
-        "model": "google/gemini-2.5-flash-lite",
-        "messages": [{"role":"user","content":prompt}]
-    }
-
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as r:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                json={"model":"google/gemini-2.5-flash-lite","messages":[{"role":"user","content":prompt}]}
+            ) as r:
                 data = await r.json()
                 return "\n".join(data["choices"][0]["message"]["content"].split("\n")[:5])
     except:
@@ -167,18 +157,16 @@ async def get_stock(session, symbol):
 async def get_candles(session, symbol):
     now = int(time.time())
     past = now - (60*60*24*200)
-
     url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=D&from={past}&to={now}&token={API_KEY}"
-
     async with session.get(url) as r:
         data = await r.json()
         return data.get("c", []) if data.get("s")=="ok" else []
 
 def rsi(prices):
-    if len(prices) < 15: return None
+    if len(prices)<15: return None
     gains, losses = [], []
     for i in range(1,15):
-        diff = prices[-i] - prices[-i-1]
+        diff = prices[-i]-prices[-i-1]
         (gains if diff>0 else losses).append(abs(diff))
     avg_gain = sum(gains)/14 if gains else 0
     avg_loss = sum(losses)/14 if losses else 0
@@ -187,7 +175,67 @@ def rsi(prices):
 def ma(prices,n):
     return round(sum(prices[-n:])/n,2) if len(prices)>=n else None
 
-# ===== SEND =====
+# ===== SEC =====
+async def load_cik_map(session):
+    async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
+        data = await r.json()
+    return {v["ticker"]:str(v["cik_str"]).zfill(10) for v in data.values()}
+
+async def send_sec(bot, session, symbol, cik_map):
+    cik = cik_map.get(symbol)
+    if not cik: return
+
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    async with session.get(url, headers=SEC_HEADERS) as r:
+        data = await r.json()
+
+    filings = data.get("filings",{}).get("recent",{})
+
+    for i in range(len(filings.get("form",[]))):
+
+        form = filings["form"][i]
+        if form not in IMPORTANT_FORMS:
+            continue
+
+        date = filings["filingDate"][i]
+        key = f"{symbol}_{form}_{date}"
+        if key in sent_sec:
+            continue
+        sent_sec.add(key)
+
+        accession = filings["accessionNumber"][i].replace("-","")
+        link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
+
+        # نوع الحدث
+        event = "حدث مهم"
+
+        try:
+            async with session.get(link, headers=SEC_HEADERS) as r2:
+                text = (await r2.text()).lower()
+
+            if "acquisition" in text: event="استحواذ"
+            elif "merger" in text: event="اندماج"
+            elif "agreement" in text: event="اتفاقية"
+            elif "ceo" in text or "resign" in text: event="تغيير إداري"
+            elif "bankruptcy" in text: event="إفلاس"
+            elif "offering" in text: event="طرح أسهم"
+
+        except:
+            pass
+
+        msg = f"""🔥 {form} ({event}) | {symbol}
+
+📄 إشعار رسمي
+
+🔗 {link}
+"""
+
+        for chat_id in CHAT_IDS:
+            await bot.send_message(chat_id=chat_id, text=msg)
+
+        break
+
+# ===== SEND NEWS =====
 async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
@@ -248,13 +296,15 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v18 SMART + TOP50 DAILY")
+    print("🚀 FINAL PRO RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
         global AUTO_WATCHLIST
         AUTO_WATCHLIST = await get_top50(session)
         last_update = time.time()
+
+        cik_map = await load_cik_map(session)
 
         while True:
             try:
@@ -263,6 +313,7 @@ async def main():
                     AUTO_WATCHLIST = await get_top50(session)
                     last_update = time.time()
 
+                # أخبار
                 feed = []
                 for url in RSS_FEEDS:
                     f = feedparser.parse(url)
@@ -273,6 +324,10 @@ async def main():
                 for n in feed:
                     if count >= MAX_NEWS_PER_CYCLE: break
                     if await send(bot, session, n): count += 1
+
+                # SEC
+                for s in (WATCHLIST + AUTO_WATCHLIST)[:5]:
+                    await send_sec(bot, session, s, cik_map)
 
                 await asyncio.sleep(300)
 
