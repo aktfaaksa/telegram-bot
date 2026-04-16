@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence FINAL PRO =====
+# ===== Alpha Market Intelligence FINAL (SEC SMART ONLY) =====
 
 import asyncio
 import aiohttp
@@ -43,7 +43,7 @@ seen_titles = set()
 
 JUNK = [
     "mortgage","lifestyle","ramsey","personal","story",
-    "jim cramer","opinion","analyst says"
+    "jim cramer","opinion","analyst says","transcript","earnings transcript"
 ]
 
 # ===== SEC =====
@@ -173,6 +173,11 @@ async def send(bot, session, news):
     if impact == "🟡 عادي": return False
 
     symbol = extract_symbol(title)
+
+    ALL_STOCKS = WATCHLIST + AUTO_WATCHLIST
+    if symbol not in ALL_STOCKS:
+        return False
+
     translated = translate_text(title)
     ai = await analyze_news(title)
 
@@ -213,64 +218,69 @@ async def send(bot, session, news):
 
     return True
 
-# ===== SEC =====
-async def load_cik_map(session):
-    async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
-        data = await r.json()
-    return {item["ticker"]: str(item["cik_str"]).zfill(10) for item in data.values()}
-
-async def get_sec_filings(session, symbol, cik_map):
-    cik = cik_map.get(symbol)
-    if not cik:
-        return []
-
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-
-    async with session.get(url, headers=SEC_HEADERS) as r:
-        data = await r.json()
-
-    filings = data.get("filings", {}).get("recent", {})
-    results = []
-
-    for i in range(len(filings.get("form", []))):
-        form = filings["form"][i]
-
-        if form in IMPORTANT_FORMS:
-            accession = filings["accessionNumber"][i].replace("-", "")
-            link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
-
-            results.append({
-                "symbol": symbol,
-                "form": form,
-                "date": filings["filingDate"][i],
-                "link": link
-            })
-
-    return results[:1]
-
-def is_new_sec(f):
-    key = f"{f['symbol']}_{f['form']}_{f['date']}"
-    if key in sent_sec:
-        return False
-    sent_sec.add(key)
-    return True
-
+# ===== SEC (تم تطويره فقط 🔥) =====
 async def send_sec(bot, session, symbol, cik_map):
+
     data = await get_sec_filings(session, symbol, cik_map)
 
     for f in data:
+
         if not is_new_sec(f):
             continue
 
-        label = {
-            "8-K": "حدث مهم",
-            "13D": "مستثمر كبير"
-        }.get(f["form"], "تحديث")
+        title = "تحديث مهم"
+        summary = "لم يتم العثور على تفاصيل واضحة"
+        direction = "📊 محايد"
 
-        msg = f"""🔥 {f['form']} ({label}) | {f['symbol']}
+        try:
+            async with session.get(f["link"], headers=SEC_HEADERS) as r:
+                html = await r.text()
 
-📄 إشعار رسمي
-📈 تأثير محتمل
+            doc_match = re.search(r'href="(/Archives/edgar/data/.*?\.htm)"', html)
+
+            if doc_match:
+                doc_url = "https://www.sec.gov" + doc_match.group(1)
+
+                async with session.get(doc_url, headers=SEC_HEADERS) as r2:
+                    doc_text = await r2.text()
+
+                text = re.sub(r'<.*?>', '', doc_text).lower()
+
+                if "acquisition" in text:
+                    title = "استحواذ"
+                    direction = "📈 صعودي"
+                elif "merger" in text:
+                    title = "اندماج"
+                    direction = "📈 صعودي"
+                elif "agreement" in text:
+                    title = "اتفاقية"
+                    direction = "📈 صعودي"
+                elif "ceo" in text or "resign" in text:
+                    title = "تغيير إداري"
+                    direction = "📉 سلبي"
+                elif "bankruptcy" in text:
+                    title = "إفلاس"
+                    direction = "📉 هبوط قوي"
+                elif "offering" in text:
+                    title = "طرح أسهم"
+                    direction = "📉 سلبي"
+
+                lines = doc_text.split("\n")
+
+                for line in lines:
+                    line = re.sub(r'<.*?>', '', line).strip()
+                    if 50 < len(line) < 200:
+                        summary = line
+                        break
+
+        except:
+            pass
+
+        msg = f"""🔥 {f['form']} ({title}) | {f['symbol']}
+
+📄 {summary[:120]}
+
+{direction}
 
 🔗 {f['link']}
 """
@@ -280,46 +290,3 @@ async def send_sec(bot, session, symbol, cik_map):
                 await bot.send_message(chat_id=chat_id, text=msg)
             except:
                 pass
-
-# ===== MAIN =====
-async def main():
-    print("🚀 BOT RUNNING PRO")
-
-    async with aiohttp.ClientSession() as session:
-
-        cik_map = await load_cik_map(session)
-
-        global AUTO_WATCHLIST
-        AUTO_WATCHLIST = await get_top_movers(session)
-
-        while True:
-            try:
-                if int(time.time()) % 3600 < 5:
-                    AUTO_WATCHLIST = await get_top_movers(session)
-
-                ALL_STOCKS = list(set(WATCHLIST + AUTO_WATCHLIST))
-
-                feed = []
-                for url in RSS_FEEDS:
-                    f = feedparser.parse(url)
-                    for e in f.entries:
-                        feed.append({"title":e.title,"link":e.link})
-
-                count = 0
-                for n in feed:
-                    if count >= MAX_NEWS_PER_CYCLE:
-                        break
-                    if await send(bot, session, n):
-                        count += 1
-
-                for s in ALL_STOCKS[:5]:
-                    await send_sec(bot, session, s, cik_map)
-
-                await asyncio.sleep(300)
-
-            except Exception as e:
-                print("ERROR:", e)
-                await asyncio.sleep(60)
-
-if __name__ == "__main__":
-    asyncio.run(main())
