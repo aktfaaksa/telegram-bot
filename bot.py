@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v28 STABLE =====
+# ===== Alpha Market Intelligence v28 CLEAN PRO =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
@@ -25,7 +25,12 @@ SEC_HEADERS = {
 
 SEC_URL = "https://www.sec.gov/files/company_tickers.json"
 
-BAD = ["will","should","could","how","why","top","best"]
+# 🔥 تنظيف أقوى
+BAD = [
+    "will","should","could","how","why","top","best",
+    "attractive","opportunity","outlook","analysis",
+    "offers","gained","appears","story"
+]
 
 def clean(title):
     return any(x in title.lower() for x in BAD)
@@ -136,15 +141,15 @@ async def send_news(session, n):
     price = st.get("c",0)
     change = st.get("dp",0)
 
-    # 🔥 التعديل هنا فقط (صعود فقط + متوازن)
-    if price == 0 or change < 1.2 or price < 2:
+    # 🔥 رفع القوة (1.8%) + صعود فقط
+    if price == 0 or change < 1.8 or price < 2:
         return
 
     cur, avg = await volume(session, s)
     if avg > 0 and cur < avg*1.5:
         return
 
-    msg = f"""🔥 فرصة
+    msg = f"""🔥 فرصة قوية
 
 📰 {title}
 🇸🇦 {tr(title)}
@@ -160,7 +165,7 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v28 STABLE RUNNING")
+    print("🚀 v28 CLEAN PRO RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik(session)
