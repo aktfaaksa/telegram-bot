@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v23 ELITE FINAL =====
+# ===== Alpha Market Intelligence v24 REAL SEC =====
 
 import asyncio
 import aiohttp
@@ -43,26 +43,17 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 sent_sec_ids = set()
 sent_sec_symbols_cycle = set()
 
-# ===== EVENT MAP =====
-EVENT_MAP = {
-    "acquisition": "استحواذ",
-    "merger": "اندماج",
-    "offering": "طرح أسهم",
-    "warrant": "Warrants",
-    "convertible": "سندات",
-    "bankruptcy": "إفلاس",
-    "restructuring": "إعادة هيكلة",
-    "partnership": "شراكة",
-    "collaboration": "تعاون",
-    "agreement": "اتفاقية",
-    "contract": "عقد"
+# ===== ITEM MAP (🔥 الحقيقي) =====
+ITEM_MAP = {
+    "1.01": "اتفاقية",
+    "1.02": "إنهاء اتفاقية",
+    "2.02": "أرباح",
+    "2.03": "تمويل",
+    "3.02": "طرح أسهم",
+    "5.02": "تغيير إداري",
+    "7.01": "إفصاح",
+    "8.01": "حدث مهم"
 }
-
-PRIORITY = [
-    "استحواذ","اندماج","إفلاس",
-    "طرح أسهم","Warrants","سندات",
-    "شراكة","تعاون","اتفاقية"
-]
 
 # ===== FILTER =====
 JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
@@ -171,9 +162,14 @@ async def load_cik_map(session):
         data = await r.json()
     return {v["ticker"]:str(v["cik_str"]).zfill(10) for v in data.values()}
 
+def extract_item(text):
+    match = re.search(r'item\s+(\d\.\d+)', text)
+    if match:
+        return match.group(1)
+    return None
+
 async def send_sec(bot, session, symbol, cik_map):
 
-    # منع تكرار نفس السهم
     if symbol in sent_sec_symbols_cycle:
         return
 
@@ -198,8 +194,6 @@ async def send_sec(bot, session, symbol, cik_map):
             continue
 
         accession_id = filings["accessionNumber"][i]
-
-        # منع التكرار الحقيقي
         key = f"{symbol}_{accession_id}"
 
         if key in sent_sec_ids:
@@ -211,30 +205,16 @@ async def send_sec(bot, session, symbol, cik_map):
         accession = accession_id.replace("-","")
         link = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.html"
 
-        event = "حدث مهم"
+        event = "إفصاح عام"
 
         try:
             async with session.get(link, headers=SEC_HEADERS) as r2:
                 text = (await r2.text()).lower()
 
-            found = []
+            item = extract_item(text)
 
-            for k,v in EVENT_MAP.items():
-                if k in text:
-                    if k == "contract":
-                        continue
-                    found.append(v)
-
-            if not found and "contract" in text:
-                found.append("عقد")
-
-            for p in PRIORITY:
-                if p in found:
-                    event = p
-                    break
-
-            if event == "حدث مهم" and found:
-                event = found[0]
+            if item and item in ITEM_MAP:
+                event = ITEM_MAP[item]
 
         except:
             pass
@@ -297,7 +277,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 ELITE FINAL RUNNING")
+    print("🚀 REAL SEC RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
