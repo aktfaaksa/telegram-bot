@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v21 FINAL FIXED =====
+# ===== Alpha Market Intelligence v22 ELITE CLEAN =====
 
 import asyncio
 import aiohttp
@@ -31,11 +31,9 @@ RSS_FEEDS = [
 
 sent_hashes = set()
 seen_titles = set()
-seen_companies = set()
+seen_symbols_cycle = set()
 
-JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
-
-# ===== SEC HEADERS =====
+# ===== SEC =====
 SEC_HEADERS = {
     "User-Agent": "market-bot aktfaaksa@gmail.com"
 }
@@ -51,21 +49,25 @@ EVENT_MAP = {
     "warrant": "Warrants",
     "convertible": "سندات",
     "bankruptcy": "إفلاس",
-    "default": "تعثر",
     "restructuring": "إعادة هيكلة",
     "partnership": "شراكة",
     "collaboration": "تعاون",
-    "contract": "عقد",
     "agreement": "اتفاقية",
-    "ceo": "تغيير إداري",
-    "resign": "استقالة",
-    "director": "إدارة"
+    "contract": "عقد"
 }
 
 PRIORITY = [
     "استحواذ","اندماج","إفلاس",
     "طرح أسهم","Warrants","سندات",
     "شراكة","تعاون","اتفاقية"
+]
+
+# ===== FILTERS =====
+JUNK = ["mortgage","lifestyle","ramsey","personal","story","transcript"]
+
+BAD_WORDS = [
+    "best stocks","should you buy","top stocks",
+    "is this stock","one of the best"
 ]
 
 # ===== TOP 50 =====
@@ -98,9 +100,9 @@ def is_unique(title):
     return True
 
 def is_junk(title):
-    return any(k in title.lower() for k in JUNK)
+    t = title.lower()
+    return any(k in t for k in JUNK) or any(b in t for b in BAD_WORDS)
 
-# ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
     match = re.findall(r'\(([A-Z]{1,5})\)', t)
@@ -113,7 +115,6 @@ def extract_symbol(title):
 
     return "MARKET"
 
-# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
     if any(x in t for x in ["earnings","merger","acquisition","bankruptcy"]):
@@ -122,14 +123,13 @@ def get_impact(title):
         return "⚡ متوسط"
     return "🟡 عادي"
 
-# ===== TRANSLATE =====
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return text
 
-# ===== AI (FIXED SHORT) =====
+# ===== AI =====
 async def analyze_news(title):
     if not OPENROUTER_API_KEY:
         return "محايد | 6/10 | احتفاظ | عادي"
@@ -138,7 +138,7 @@ async def analyze_news(title):
 {title}
 
 اكتب فقط:
-(صعودي/هبوطي/محايد) | رقم/10 | (شراء/بيع/احتفاظ) | سبب كلمتين
+صعودي أو هبوطي أو محايد | رقم/10 | شراء أو بيع أو احتفاظ | سبب كلمتين
 """
 
     try:
@@ -152,7 +152,8 @@ async def analyze_news(title):
                 }
             ) as r:
                 data = await r.json()
-                return data["choices"][0]["message"]["content"].strip()
+                result = data["choices"][0]["message"]["content"].strip()
+                return result.replace("(", "").replace(")", "")
     except:
         return "تحليل غير متوفر"
 
@@ -195,6 +196,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
         date = filings["filingDate"][i]
         key = f"{symbol}_{date}"
+
         if key in sent_sec:
             continue
         sent_sec.add(key)
@@ -208,18 +210,15 @@ async def send_sec(bot, session, symbol, cik_map):
             async with session.get(link, headers=SEC_HEADERS) as r2:
                 text = (await r2.text()).lower()
 
-            events = []
-            for k,v in EVENT_MAP.items():
-                if k in text:
-                    events.append(v)
+            found = [v for k,v in EVENT_MAP.items() if k in text]
 
             for p in PRIORITY:
-                if p in events:
+                if p in found:
                     event = p
                     break
 
-            if event == "حدث مهم" and events:
-                event = events[0]
+            if event == "حدث مهم" and found:
+                event = found[0]
 
         except:
             pass
@@ -250,9 +249,10 @@ async def send(bot, session, news):
     if symbol == "MARKET":
         return False
 
-    if symbol in seen_companies:
+    # 🔥 منع تكرار نفس السهم في نفس الدورة
+    if symbol in seen_symbols_cycle:
         return False
-    seen_companies.add(symbol)
+    seen_symbols_cycle.add(symbol)
 
     impact = get_impact(title)
     if impact == "🟡 عادي":
@@ -262,15 +262,13 @@ async def send(bot, session, news):
     ai = await analyze_news(title)
 
     stock = await get_stock(session, symbol)
-    price = stock.get("c", "")
-    change = stock.get("dp", "")
 
     msg = f"""{impact}
 
 📰 {title}
 🇸🇦 {translated}
 
-📊 {symbol} | {price}$ | {round(change,2)}%
+📊 {symbol} | {stock.get('c')}$ | {round(stock.get('dp',0),2)}%
 
 🧠 {ai}
 
@@ -284,7 +282,7 @@ async def send(bot, session, news):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 FINAL FIXED RUNNING")
+    print("🚀 ELITE CLEAN RUNNING")
 
     async with aiohttp.ClientSession() as session:
 
@@ -300,7 +298,7 @@ async def main():
                     AUTO_WATCHLIST = await get_top50(session)
                     last_update = time.time()
 
-                seen_companies.clear()
+                seen_symbols_cycle.clear()
 
                 feed = []
                 for url in RSS_FEEDS:
