@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v29 PRO =====
+# ===== Alpha Market Intelligence v28 STABLE =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
@@ -76,7 +76,7 @@ async def load_cik(session):
 async def send_sec(session, cik_map):
     today = time.strftime("%Y-%m-%d")
 
-    for s, cik in list(cik_map.items())[:30]:  # تقليل العدد
+    for s, cik in list(cik_map.items())[:30]:
         try:
             async with session.get(
                 f"https://data.sec.gov/submissions/CIK{cik}.json",
@@ -88,7 +88,6 @@ async def send_sec(session, cik_map):
 
         text = str(d).lower()
 
-        # 🔥 فلترة أحداث قوية فقط
         if not any(x in text for x in ["acquisition","merger","bankruptcy","ceo","earnings"]):
             continue
 
@@ -137,15 +136,15 @@ async def send_news(session, n):
     price = st.get("c",0)
     change = st.get("dp",0)
 
-    # 🔥 فلترة صحيحة (صعود فقط)
-    if price == 0 or change < 1.5 or price < 2:
+    # 🔥 التعديل هنا فقط (صعود فقط + متوازن)
+    if price == 0 or change < 1.2 or price < 2:
         return
 
     cur, avg = await volume(session, s)
     if avg > 0 and cur < avg*1.5:
         return
 
-    msg = f"""🔥 فرصة قوية
+    msg = f"""🔥 فرصة
 
 📰 {title}
 🇸🇦 {tr(title)}
@@ -161,14 +160,13 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v29 PRO RUNNING")
+    print("🚀 v28 STABLE RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik(session)
 
         while True:
             try:
-                # NEWS
                 feed = []
                 for url in RSS_FEEDS:
                     f = feedparser.parse(url)
@@ -178,7 +176,6 @@ async def main():
                 for n in feed:
                     await send_news(session, n)
 
-                # SEC
                 await send_sec(session, cik_map)
 
                 await asyncio.sleep(300)
