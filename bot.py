@@ -52,7 +52,7 @@ sent_to_secondary = set()
 
 # ===== SEC =====
 SEC_HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -110,7 +110,7 @@ def is_junk(title):
     t = title.lower()
     return any(k in t for k in JUNK) or any(b in t for b in BAD_WORDS)
 
-# 🔥 FIXED SYMBOL EXTRACTION
+# ===== SYMBOL =====
 def extract_symbol(title):
     t = title.upper()
 
@@ -119,7 +119,6 @@ def extract_symbol(title):
         return match[0]
 
     words = re.findall(r'\b[A-Z]{2,5}\b', t)
-
     for w in words:
         if w in WATCHLIST or w in AUTO_WATCHLIST:
             return w
@@ -172,13 +171,31 @@ async def get_stock(session, symbol):
     except:
         return {}
 
-# ===== SEC =====
+# ===== FIX CIK LOAD (NO CRASH) =====
 async def load_cik_map(session):
-    async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
-        data = await r.json()
-    return {v["ticker"]:str(v["cik_str"]).zfill(10) for v in data.values()}
+    try:
+        async with session.get(SEC_TICKERS_URL, headers=SEC_HEADERS) as r:
 
-# 🔥 SMART SEC
+            if r.status != 200:
+                print("SEC blocked:", r.status)
+                return {}
+
+            if "application/json" not in r.headers.get("Content-Type",""):
+                print("SEC not json")
+                return {}
+
+            data = await r.json()
+
+        return {
+            v["ticker"]: str(v["cik_str"]).zfill(10)
+            for v in data.values()
+        }
+
+    except Exception as e:
+        print("CIK error:", e)
+        return {}
+
+# ===== SEC =====
 async def send_sec(bot, session, symbol, cik_map):
 
     if symbol in sent_sec_symbols_cycle:
@@ -206,7 +223,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
         accession_id = filings["accessionNumber"][i]
 
-        # 🔥 فلترة التاريخ (جديد فقط)
+        # ===== FILTER DATE =====
         filing_date = filings["filingDate"][i]
         today = time.strftime("%Y-%m-%d")
 
@@ -237,7 +254,7 @@ async def send_sec(bot, session, symbol, cik_map):
         except:
             continue
 
-        # 🔥 فلترة قوية
+        # ===== STRONG FILTER =====
         if "warrant" in text:
             continue
 
@@ -276,7 +293,7 @@ async def send_sec(bot, session, symbol, cik_map):
 
         break
 
-# ===== SEND NEWS =====
+# ===== NEWS =====
 async def send(bot, session, news):
     title = news["title"]
     link = news["link"]
@@ -353,7 +370,6 @@ async def main():
                     if await send(bot, session, n):
                         count += 1
 
-                # 🔥 SEC LOOP
                 for s in WATCHLIST:
                     await send_sec(bot, session, s, cik_map)
                     await asyncio.sleep(1)
