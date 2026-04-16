@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v28 HYBRID + SEC =====
+# ===== Alpha Market Intelligence v29 PRO =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
@@ -19,25 +19,21 @@ RSS_FEEDS = [
 sent = set()
 sent_sec = set()
 
-# ===== SEC =====
 SEC_HEADERS = {
     "User-Agent": "AlphaMarketBot aktfaaksa@gmail.com"
 }
 
 SEC_URL = "https://www.sec.gov/files/company_tickers.json"
 
-# ===== تنظيف =====
 BAD = ["will","should","could","how","why","top","best"]
 
 def clean(title):
     return any(x in title.lower() for x in BAD)
 
-# ===== استخراج السهم =====
 def symbol(title):
     m = re.findall(r'\(([A-Z]{1,5})\)', title.upper())
     return m[0] if m else None
 
-# ===== ترجمة =====
 def tr(x):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(x)
@@ -80,7 +76,7 @@ async def load_cik(session):
 async def send_sec(session, cik_map):
     today = time.strftime("%Y-%m-%d")
 
-    for s, cik in list(cik_map.items())[:200]:  # limit
+    for s, cik in list(cik_map.items())[:30]:  # تقليل العدد
         try:
             async with session.get(
                 f"https://data.sec.gov/submissions/CIK{cik}.json",
@@ -88,6 +84,12 @@ async def send_sec(session, cik_map):
             ) as r:
                 d = await r.json()
         except:
+            continue
+
+        text = str(d).lower()
+
+        # 🔥 فلترة أحداث قوية فقط
+        if not any(x in text for x in ["acquisition","merger","bankruptcy","ceo","earnings"]):
             continue
 
         f = d.get("filings", {}).get("recent", {})
@@ -105,10 +107,10 @@ async def send_sec(session, cik_map):
 
             sent_sec.add(key)
 
-            msg = f"""🚨 إعلان رسمي
+            msg = f"""🚨 إعلان رسمي مهم
 
 🏢 {s}
-📄 8-K Filing
+📄 8-K (حدث قوي)
 
 🔗 https://www.sec.gov
 """
@@ -135,20 +137,20 @@ async def send_news(session, n):
     price = st.get("c",0)
     change = st.get("dp",0)
 
-    # ===== فلترة =====
-    if price == 0 or abs(change) < 1.5 or price < 2:
+    # 🔥 فلترة صحيحة (صعود فقط)
+    if price == 0 or change < 1.5 or price < 2:
         return
 
     cur, avg = await volume(session, s)
     if avg > 0 and cur < avg*1.5:
         return
 
-    msg = f"""🔥 فرصة
+    msg = f"""🔥 فرصة قوية
 
 📰 {title}
 🇸🇦 {tr(title)}
 
-📊 {s} | {price}$ | {round(change,2)}%
+📊 {s} | {price}$ | +{round(change,2)}%
 📈 فوليوم عالي
 
 🔗 {link}
@@ -159,7 +161,7 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v28 HYBRID + SEC RUNNING")
+    print("🚀 v29 PRO RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik(session)
