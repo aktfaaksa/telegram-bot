@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v29.1 | Balanced Active Engine 🚀 =====
+# ===== Alpha Market Intelligence v29.2 | Balanced + Geo Engine 🌍🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
@@ -33,8 +33,19 @@ STRONG = [
 
 WEAK = [
     "price target","rating","coverage","transcript",
-    "investment","outlook","analysis"
+    "investment","outlook","analysis","why","undervalued"
 ]
+
+# 🌍 GEO KEYWORDS
+GEO = [
+    "war","conflict","sanctions","china","russia",
+    "military","oil","iran","israel","ukraine",
+    "government","policy","fed","interest rates","inflation"
+]
+
+def is_geo(title):
+    t = title.lower()
+    return any(x in t for x in GEO)
 
 def classify(title):
     t = title.lower()
@@ -78,16 +89,35 @@ async def volume(session, s):
     except:
         return 0,0
 
-# ===== SCORE =====
-def score(change, vol_ratio, level):
-    base = 5
-    if level == "HIGH":
-        base += 2
-    if change > 2:
-        base += 1
-    if vol_ratio > 1.5:
-        base += 1
-    return min(base, 10)
+# ===== GEO NEWS =====
+async def send_geo(session, n):
+    title, link = n["title"], n["link"]
+
+    if not is_geo(title):
+        return
+
+    h = "geo_" + hashlib.md5(title.encode()).hexdigest()
+    if h in sent:
+        return
+    sent.add(h)
+
+    msg = f"""🌍 خبر جيوسياسي مهم
+
+📰 {title}
+🇸🇦 {tr(title)}
+
+💡 التأثير المحتمل:
+- السوق العام
+- النفط / الطاقة
+- القطاعات الحساسة
+
+⚠️ راقب السوق (قد يكون حركة قوية)
+
+🔗 {link}
+"""
+
+    for c in CHAT_IDS:
+        await bot.send_message(chat_id=c, text=msg)
 
 # ===== NEWS =====
 async def send_news(session, n):
@@ -97,6 +127,9 @@ async def send_news(session, n):
     if h in sent:
         return
     sent.add(h)
+
+    # 🌍 أرسل الجيوسياسي أول
+    await send_geo(session, n)
 
     level = classify(title)
     if level == "LOW":
@@ -116,15 +149,12 @@ async def send_news(session, n):
     cur, avg = await volume(session, s)
     vol_ratio = (cur/avg) if avg > 0 else 1
 
-    # 🔥 فلترة أخف (عشان يشتغل)
     if level == "HIGH":
         if change < 1.5 or vol_ratio < 1.2:
             return
     elif level == "MED":
         if change < 0.8 or vol_ratio < 1.0:
             return
-
-    sc = score(change, vol_ratio, level)
 
     msg = f"""{"🚨 فرصة فورية" if level=="HIGH" else "🟡 متابعة"}
 
@@ -133,15 +163,12 @@ async def send_news(session, n):
 📰 {title}
 🇸🇦 {tr(title)}
 
-📊 السعر: {price}$ | +{round(change,2)}%
-📈 الفوليوم: {round(vol_ratio,2)}x
-
-📊 قوة الإشارة: {sc}/10
+📊 {price}$ | +{round(change,2)}%
+📈 فوليوم: {round(vol_ratio,2)}x
 
 💡 السبب:
 - خبر {'قوي' if level=='HIGH' else 'متوسط'}
 - فوليوم نشط
-- حركة حالية
 
 🔗 {link}
 """
@@ -198,14 +225,13 @@ async def send_sec(session, cik_map):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v29.1 BALANCED ACTIVE RUNNING")
+    print("🚀 v29.2 GEO RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik(session)
 
-        # ✅ رسالة تأكيد تشغيل
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت يعمل الآن (v29.1)")
+            await bot.send_message(chat_id=c, text="✅ البوت يعمل الآن (v29.2 + GEO)")
 
         while True:
             try:
