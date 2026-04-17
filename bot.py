@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v29.2 | Balanced + Geo Engine 🌍🚀 =====
+# ===== Alpha Market Intelligence v29.3 | Smart Geo Control 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
@@ -18,6 +18,7 @@ RSS_FEEDS = [
 
 sent = set()
 sent_sec = set()
+last_geo_time = 0
 
 SEC_HEADERS = {
     "User-Agent": "AlphaMarketBot aktfaaksa@gmail.com"
@@ -33,19 +34,18 @@ STRONG = [
 
 WEAK = [
     "price target","rating","coverage","transcript",
-    "investment","outlook","analysis","why","undervalued"
+    "investment","outlook","analysis","why","undervalued",
+    "daily","wrap","stocks rise"
 ]
 
-# 🌍 GEO KEYWORDS
 GEO = [
     "war","conflict","sanctions","china","russia",
     "military","oil","iran","israel","ukraine",
-    "government","policy","fed","interest rates","inflation"
+    "fed","interest rates","inflation"
 ]
 
 def is_geo(title):
-    t = title.lower()
-    return any(x in t for x in GEO)
+    return any(x in title.lower() for x in GEO)
 
 def classify(title):
     t = title.lower()
@@ -64,6 +64,39 @@ def tr(x):
         return GoogleTranslator(source='auto', target='ar').translate(x)
     except:
         return x
+
+# ===== GEO CONTROL =====
+async def send_geo(session, n):
+    global last_geo_time
+
+    title, link = n["title"], n["link"]
+
+    if not is_geo(title):
+        return
+
+    # ⏱️ cooldown 15 min
+    if time.time() - last_geo_time < 900:
+        return
+
+    last_geo_time = time.time()
+
+    msg = f"""🌍 حدث جيوسياسي مهم
+
+📰 {title}
+🇸🇦 {tr(title)}
+
+💡 التأثير:
+- السوق العام
+- الطاقة / النفط
+- تقلب عالي
+
+⚠️ انتبه لحركة السوق
+
+🔗 {link}
+"""
+
+    for c in CHAT_IDS:
+        await bot.send_message(chat_id=c, text=msg)
 
 # ===== STOCK =====
 async def stock(session, s):
@@ -89,36 +122,6 @@ async def volume(session, s):
     except:
         return 0,0
 
-# ===== GEO NEWS =====
-async def send_geo(session, n):
-    title, link = n["title"], n["link"]
-
-    if not is_geo(title):
-        return
-
-    h = "geo_" + hashlib.md5(title.encode()).hexdigest()
-    if h in sent:
-        return
-    sent.add(h)
-
-    msg = f"""🌍 خبر جيوسياسي مهم
-
-📰 {title}
-🇸🇦 {tr(title)}
-
-💡 التأثير المحتمل:
-- السوق العام
-- النفط / الطاقة
-- القطاعات الحساسة
-
-⚠️ راقب السوق (قد يكون حركة قوية)
-
-🔗 {link}
-"""
-
-    for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text=msg)
-
 # ===== NEWS =====
 async def send_news(session, n):
     title, link = n["title"], n["link"]
@@ -128,7 +131,7 @@ async def send_news(session, n):
         return
     sent.add(h)
 
-    # 🌍 أرسل الجيوسياسي أول
+    # 🌍 جيوسياسي
     await send_geo(session, n)
 
     level = classify(title)
@@ -168,7 +171,6 @@ async def send_news(session, n):
 
 💡 السبب:
 - خبر {'قوي' if level=='HIGH' else 'متوسط'}
-- فوليوم نشط
 
 🔗 {link}
 """
@@ -176,62 +178,14 @@ async def send_news(session, n):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC =====
-async def load_cik(session):
-    async with session.get(SEC_URL, headers=SEC_HEADERS) as r:
-        data = await r.json()
-    return {v["ticker"]: str(v["cik_str"]).zfill(10) for v in data.values()}
-
-async def send_sec(session, cik_map):
-    today = time.strftime("%Y-%m-%d")
-
-    for s, cik in list(cik_map.items())[:80]:
-        try:
-            async with session.get(
-                f"https://data.sec.gov/submissions/CIK{cik}.json",
-                headers=SEC_HEADERS
-            ) as r:
-                d = await r.json()
-        except:
-            continue
-
-        f = d.get("filings", {}).get("recent", {})
-
-        for i in range(len(f.get("form", []))):
-            if f["form"][i] != "8-K":
-                continue
-
-            if f["filingDate"][i] != today:
-                continue
-
-            key = f"{s}_{f['accessionNumber'][i]}"
-            if key in sent_sec:
-                continue
-
-            sent_sec.add(key)
-
-            msg = f"""🚨 SEC Alert
-
-🏢 {s}
-📄 8-K Filing
-
-🔗 https://www.sec.gov
-"""
-
-            for c in CHAT_IDS:
-                await bot.send_message(chat_id=c, text=msg)
-
-            break
-
 # ===== MAIN =====
 async def main():
-    print("🚀 v29.2 GEO RUNNING")
+    print("🚀 v29.3 SMART GEO RUNNING")
 
     async with aiohttp.ClientSession() as session:
-        cik_map = await load_cik(session)
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت يعمل الآن (v29.2 + GEO)")
+            await bot.send_message(chat_id=c, text="✅ البوت يعمل الآن (v29.3)")
 
         while True:
             try:
@@ -243,8 +197,6 @@ async def main():
 
                 for n in feed:
                     await send_news(session, n)
-
-                await send_sec(session, cik_map)
 
                 await asyncio.sleep(300)
 
