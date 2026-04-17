@@ -1,9 +1,8 @@
-# ===== Alpha Market Intelligence v28 CLEAN PRO =====
-
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
+# ===== CONFIG =====
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
@@ -19,33 +18,46 @@ RSS_FEEDS = [
 sent = set()
 sent_sec = set()
 
+# ✅ ايميلك مضاف
 SEC_HEADERS = {
     "User-Agent": "AlphaMarketBot aktfaaksa@gmail.com"
 }
 
 SEC_URL = "https://www.sec.gov/files/company_tickers.json"
 
-# 🔥 تنظيف أقوى
-BAD = [
-    "will","should","could","how","why","top","best",
-    "attractive","opportunity","outlook","analysis",
-    "offers","gained","appears","story"
+# ===== KEYWORDS =====
+STRONG = [
+    "earnings","acquisition","merger","contract","deal",
+    "partnership","fda","approval","ai","nvidia","guidance"
 ]
 
-def clean(title):
-    return any(x in title.lower() for x in BAD)
+WEAK = [
+    "price target","rating","coverage","transcript",
+    "investment","outlook","analysis","offers","choice"
+]
 
+# ===== CLASSIFY =====
+def classify(title):
+    t = title.lower()
+    if any(x in t for x in WEAK):
+        return "LOW"
+    if any(x in t for x in STRONG):
+        return "HIGH"
+    return "MED"
+
+# ===== SYMBOL =====
 def symbol(title):
     m = re.findall(r'\(([A-Z]{1,5})\)', title.upper())
     return m[0] if m else None
 
+# ===== TRANSLATE =====
 def tr(x):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(x)
     except:
         return x
 
-# ===== Finnhub =====
+# ===== STOCK =====
 async def stock(session, s):
     try:
         async with session.get(
@@ -55,7 +67,7 @@ async def stock(session, s):
     except:
         return {}
 
-# ===== Volume =====
+# ===== VOLUME =====
 async def volume(session, s):
     try:
         now = int(time.time())
@@ -63,25 +75,93 @@ async def volume(session, s):
         async with session.get(url) as r:
             d = await r.json()
         v = d.get("v", [])
-        if len(v) < 2: return 0,0
+        if len(v) < 2:
+            return 0,0
         return v[-1], sum(v[:-1])/len(v[:-1])
     except:
         return 0,0
 
-# ===== SEC LOAD =====
-async def load_cik(session):
-    try:
-        async with session.get(SEC_URL, headers=SEC_HEADERS) as r:
-            data = await r.json()
-        return {v["ticker"]: str(v["cik_str"]).zfill(10) for v in data.values()}
-    except:
-        return {}
+# ===== SCORE =====
+def score(change, vol_ratio, level):
+    base = 5
+    if level == "HIGH":
+        base += 2
+    if change > 3:
+        base += 1
+    if vol_ratio > 2:
+        base += 1
+    return min(base, 10)
 
-# ===== SEC SEND =====
+# ===== NEWS =====
+async def send_news(session, n):
+    title, link = n["title"], n["link"]
+
+    h = hashlib.md5((title+link).encode()).hexdigest()
+    if h in sent:
+        return
+    sent.add(h)
+
+    level = classify(title)
+    if level == "LOW":
+        return
+
+    s = symbol(title)
+    if not s:
+        return
+
+    st = await stock(session, s)
+    price = st.get("c",0)
+    change = st.get("dp",0)
+
+    if price == 0:
+        return
+
+    cur, avg = await volume(session, s)
+    vol_ratio = (cur/avg) if avg > 0 else 1
+
+    # ===== FILTERS =====
+    if level == "HIGH":
+        if change < 2 or vol_ratio < 1.5:
+            return
+    elif level == "MED":
+        if change < 1.2 or vol_ratio < 1.2:
+            return
+
+    sc = score(change, vol_ratio, level)
+
+    msg = f"""{"🚨 فرصة فورية" if level=="HIGH" else "🟡 متابعة"}
+
+🏢 {s}
+
+📰 {title}
+🇸🇦 {tr(title)}
+
+📊 السعر: {price}$ | +{round(change,2)}%
+📈 الفوليوم: {round(vol_ratio,2)}x
+
+📊 قوة الإشارة: {sc}/10
+
+💡 السبب:
+- خبر {'قوي ومحفز' if level=='HIGH' else 'متوسط'}
+- فوليوم مرتفع
+- بداية حركة
+
+🔗 {link}
+"""
+
+    for c in CHAT_IDS:
+        await bot.send_message(chat_id=c, text=msg)
+
+# ===== SEC =====
+async def load_cik(session):
+    async with session.get(SEC_URL, headers=SEC_HEADERS) as r:
+        data = await r.json()
+    return {v["ticker"]: str(v["cik_str"]).zfill(10) for v in data.values()}
+
 async def send_sec(session, cik_map):
     today = time.strftime("%Y-%m-%d")
 
-    for s, cik in list(cik_map.items())[:30]:
+    for s, cik in list(cik_map.items())[:100]:
         try:
             async with session.get(
                 f"https://data.sec.gov/submissions/CIK{cik}.json",
@@ -89,11 +169,6 @@ async def send_sec(session, cik_map):
             ) as r:
                 d = await r.json()
         except:
-            continue
-
-        text = str(d).lower()
-
-        if not any(x in text for x in ["acquisition","merger","bankruptcy","ceo","earnings"]):
             continue
 
         f = d.get("filings", {}).get("recent", {})
@@ -111,10 +186,12 @@ async def send_sec(session, cik_map):
 
             sent_sec.add(key)
 
-            msg = f"""🚨 إعلان رسمي مهم
+            msg = f"""🚨 SEC مهم
 
 🏢 {s}
-📄 8-K (حدث قوي)
+📄 8-K Filing
+
+💡 حدث رسمي قد يؤثر على السهم
 
 🔗 https://www.sec.gov
 """
@@ -124,48 +201,9 @@ async def send_sec(session, cik_map):
 
             break
 
-# ===== NEWS =====
-async def send_news(session, n):
-    title, link = n["title"], n["link"]
-
-    h = hashlib.md5((title+link).encode()).hexdigest()
-    if h in sent: return
-    sent.add(h)
-
-    if clean(title): return
-
-    s = symbol(title)
-    if not s: return
-
-    st = await stock(session, s)
-    price = st.get("c",0)
-    change = st.get("dp",0)
-
-    # 🔥 رفع القوة (1.8%) + صعود فقط
-    if price == 0 or change < 1.8 or price < 2:
-        return
-
-    cur, avg = await volume(session, s)
-    if avg > 0 and cur < avg*1.5:
-        return
-
-    msg = f"""🔥 فرصة قوية
-
-📰 {title}
-🇸🇦 {tr(title)}
-
-📊 {s} | {price}$ | +{round(change,2)}%
-📈 فوليوم عالي
-
-🔗 {link}
-"""
-
-    for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text=msg)
-
 # ===== MAIN =====
 async def main():
-    print("🚀 v28 CLEAN PRO RUNNING")
+    print("🚀 v29 BALANCED SMART RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik(session)
