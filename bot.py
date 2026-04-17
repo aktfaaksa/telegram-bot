@@ -1,8 +1,9 @@
+# ===== Alpha Market Intelligence v29.1 | Balanced Active Engine 🚀 =====
+
 import asyncio, aiohttp, feedparser, hashlib, os, re, time
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
-# ===== CONFIG =====
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("FINNHUB_API_KEY")
 CHAT_ID_MAIN = int(os.getenv("CHAT_ID"))
@@ -18,7 +19,6 @@ RSS_FEEDS = [
 sent = set()
 sent_sec = set()
 
-# ✅ ايميلك مضاف
 SEC_HEADERS = {
     "User-Agent": "AlphaMarketBot aktfaaksa@gmail.com"
 }
@@ -33,10 +33,9 @@ STRONG = [
 
 WEAK = [
     "price target","rating","coverage","transcript",
-    "investment","outlook","analysis","offers","choice"
+    "investment","outlook","analysis"
 ]
 
-# ===== CLASSIFY =====
 def classify(title):
     t = title.lower()
     if any(x in t for x in WEAK):
@@ -45,12 +44,10 @@ def classify(title):
         return "HIGH"
     return "MED"
 
-# ===== SYMBOL =====
 def symbol(title):
     m = re.findall(r'\(([A-Z]{1,5})\)', title.upper())
     return m[0] if m else None
 
-# ===== TRANSLATE =====
 def tr(x):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(x)
@@ -86,9 +83,9 @@ def score(change, vol_ratio, level):
     base = 5
     if level == "HIGH":
         base += 2
-    if change > 3:
+    if change > 2:
         base += 1
-    if vol_ratio > 2:
+    if vol_ratio > 1.5:
         base += 1
     return min(base, 10)
 
@@ -119,12 +116,12 @@ async def send_news(session, n):
     cur, avg = await volume(session, s)
     vol_ratio = (cur/avg) if avg > 0 else 1
 
-    # ===== FILTERS =====
+    # 🔥 فلترة أخف (عشان يشتغل)
     if level == "HIGH":
-        if change < 2 or vol_ratio < 1.5:
+        if change < 1.5 or vol_ratio < 1.2:
             return
     elif level == "MED":
-        if change < 1.2 or vol_ratio < 1.2:
+        if change < 0.8 or vol_ratio < 1.0:
             return
 
     sc = score(change, vol_ratio, level)
@@ -142,9 +139,9 @@ async def send_news(session, n):
 📊 قوة الإشارة: {sc}/10
 
 💡 السبب:
-- خبر {'قوي ومحفز' if level=='HIGH' else 'متوسط'}
-- فوليوم مرتفع
-- بداية حركة
+- خبر {'قوي' if level=='HIGH' else 'متوسط'}
+- فوليوم نشط
+- حركة حالية
 
 🔗 {link}
 """
@@ -161,7 +158,7 @@ async def load_cik(session):
 async def send_sec(session, cik_map):
     today = time.strftime("%Y-%m-%d")
 
-    for s, cik in list(cik_map.items())[:100]:
+    for s, cik in list(cik_map.items())[:80]:
         try:
             async with session.get(
                 f"https://data.sec.gov/submissions/CIK{cik}.json",
@@ -186,12 +183,10 @@ async def send_sec(session, cik_map):
 
             sent_sec.add(key)
 
-            msg = f"""🚨 SEC مهم
+            msg = f"""🚨 SEC Alert
 
 🏢 {s}
 📄 8-K Filing
-
-💡 حدث رسمي قد يؤثر على السهم
 
 🔗 https://www.sec.gov
 """
@@ -203,10 +198,14 @@ async def send_sec(session, cik_map):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 v29 BALANCED SMART RUNNING")
+    print("🚀 v29.1 BALANCED ACTIVE RUNNING")
 
     async with aiohttp.ClientSession() as session:
         cik_map = await load_cik(session)
+
+        # ✅ رسالة تأكيد تشغيل
+        for c in CHAT_IDS:
+            await bot.send_message(chat_id=c, text="✅ البوت يعمل الآن (v29.1)")
 
         while True:
             try:
