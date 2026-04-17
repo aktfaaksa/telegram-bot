@@ -35,7 +35,8 @@ STRONG = [
 WEAK = [
     "price target","rating","coverage","transcript",
     "investment","outlook","analysis","why","undervalued",
-    "daily","wrap","stocks rise"
+    "daily","wrap","stocks rise","could","beginning",
+    "watch","story","milestone","invest"
 ]
 
 GEO = [
