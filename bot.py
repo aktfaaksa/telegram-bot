@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v34 (Smart Pro) 🚀 =====
+# ===== Alpha Market Intelligence v35 (Clear Decision PRO) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -109,13 +109,22 @@ def ai_analyze(text, form):
 استخرج فقط:
 
 👤 الشخص
-📊 الحدث (شراء أو بيع فقط)
-💰 عدد الأسهم (إذا موجود)
+📊 نوع العملية:
+- شراء أسهم (Insider Buy)
+- بيع أسهم (Insider Sell)
+- إفصاح ملكية
+
+💰 عدد الأسهم (إذا موجود فقط)
 ⚡️ التأثير:
 - شراء = إيجابي
 - بيع = سلبي
+- إفصاح = محايد
 
-بدون شرح - نقاط فقط
+قواعد:
+- لا تكتب "غير موجود" أو "غير محدد"
+- إذا ما فيه رقم لا تكتب سطر 💰
+- لا تكتب شرح
+- 3-5 سطور فقط
 
 {text[:1500]}
 """
@@ -149,6 +158,18 @@ def ai_analyze(text, form):
 
     except:
         return None
+
+# ===== CLEAN OUTPUT =====
+def clean_output(text):
+    lines = text.split("\n")
+    clean = []
+
+    for line in lines:
+        if "غير" in line:
+            continue
+        clean.append(line)
+
+    return "\n".join(clean)
 
 # ===== NEWS =====
 async def send_news(session, news):
@@ -199,6 +220,8 @@ async def send_sec(session):
     except:
         return
 
+    ticker = data.get("tickers", ["AAPL"])[0]
+
     filings = data.get("filings", {}).get("recent", {})
     if not filings:
         return
@@ -220,7 +243,6 @@ async def send_sec(session):
         except:
             continue
 
-        # فلترة مهمة
         if form == "4" and not any(x in text.lower() for x in ["share","transaction"]):
             continue
 
@@ -228,8 +250,11 @@ async def send_sec(session):
         if not summary:
             return
 
+        summary = clean_output(summary)
+
         msg = f"""🏛️ SEC
 
+🏢 {ticker}
 📄 Form {form}
 
 {summary}
@@ -242,12 +267,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v34")
+    print("🚀 RUNNING v35")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v34")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v35")
 
         while True:
             try:
