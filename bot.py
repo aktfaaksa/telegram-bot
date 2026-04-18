@@ -1,261 +1,202 @@
-# ===== Alpha Market Intelligence v31 (Smart Analysis) 🚀 =====
-
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
 # ===== CONFIG =====
-TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 
-RSS_FEEDS = [
+SEC_HEADERS = {
+    "User-Agent": "AlphaBot/1.0 (aktfaaksa@gmail.com)"
+}
+
+RSS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
-# ✅ SEC Email
-SEC_HEADERS = {
-    "User-Agent": "AlphaMarketBot/1.0 (aktfaaksa@gmail.com)"
-}
-
-# ===== STATE =====
 sent = set()
-sent_sec = set()
-last_sent_symbol = {}
-last_geo_time = 0
-
-# ===== KEYWORDS =====
-STRONG = ["earnings","merger","acquisition","deal","contract","fda","approval"]
-WEAK = ["analysis","why","opinion","watch"]
+last_geo = 0
+cooldown = {}
 
 # ===== UTIL =====
 def tr(x):
     try:
-        if len(x) > 400:
-            return x
-        return GoogleTranslator(source='auto', target='ar').translate(x)
+        return GoogleTranslator(source='auto', target='ar').translate(x) if len(x) < 300 else x
     except:
         return x
 
-def can_send(symbol):
+def can_send(s):
     now = time.time()
-    if symbol in last_sent_symbol and now - last_sent_symbol[symbol] < 1800:
+    if s in cooldown and now - cooldown[s] < 1800:
         return False
-    last_sent_symbol[symbol] = now
+    cooldown[s] = now
     return True
 
-def symbol(title):
-    m = re.findall(r'\(([A-Z]{1,5})\)', title.upper())
+def symbol(t):
+    m = re.findall(r'\(([A-Z]{1,5})\)', t)
     return m[0] if m else None
 
-# ===== GEO SMART =====
-def geo_score(title):
-    t = title.lower()
+# ===== GEO =====
+def geo_score(t):
+    t = t.lower()
     score = 0
 
-    # كلمات قوية
-    if any(x in t for x in ["attack","strike","war","missile"]):
-        score += 3
-
-    if any(x in t for x in ["sanctions","ban","tariffs"]):
-        score += 2
-
-    if any(x in t for x in ["agreement","deal","ceasefire"]):
-        score += 2
-
-    # مناطق حساسة
-    if any(x in t for x in ["iran","russia","ukraine","middle east"]):
-        score += 2
-
-    if any(x in t for x in ["oil","gas","port"]):
-        score += 2
+    if any(x in t for x in ["attack","strike","war"]): score += 4
+    if any(x in t for x in ["oil","hormuz","gas"]): score += 3
+    if any(x in t for x in ["iran","russia","ukraine"]): score += 2
+    if re.search(r'\d+%', t): score += 3
+    if any(x in t for x in ["rally","crash","surge"]): score += 2
 
     return score
 
-def geo_level(score):
-    if score >= 5:
-        return "🔴 عالي"
-    elif score >= 3:
-        return "🟡 متوسط"
-    return "🟢 ضعيف"
+def geo_level(s):
+    return "🔴 عالي" if s >= 6 else "🟡 متوسط" if s >= 3 else None
 
-def geo_impact(title):
-    t = title.lower()
-
-    if any(x in t for x in ["oil","gas","iran","russia","middle east","port"]):
+def geo_impact(t):
+    t = t.lower()
+    if any(x in t for x in ["oil","iran","hormuz","russia"]):
         return "🛢️ النفط / الطاقة"
-
-    if any(x in t for x in ["fed","inflation","rates"]):
-        return "💰 السوق / الفائدة"
-
-    if any(x in t for x in ["china","trade","tariffs"]):
-        return "📦 التجارة"
-
-    return "📊 السوق العام"
+    if "fed" in t:
+        return "💰 الفائدة"
+    return "📊 السوق"
 
 async def send_geo(n):
-    global last_geo_time
+    global last_geo
+    s = geo_score(n["title"])
+    lvl = geo_level(s)
 
-    title, link = n["title"], n["link"]
-
-    score = geo_score(title)
-
-    if score < 3:
+    if not lvl or time.time() - last_geo < 1800:
         return
 
-    if time.time() - last_geo_time < 1800:
-        return
+    last_geo = time.time()
 
-    last_geo_time = time.time()
+    msg = f"""🌍 حدث جيوسياسي
 
-    level = geo_level(score)
-    impact = geo_impact(title)
+📰 {n["title"]}
+🇸🇦 {tr(n["title"])}
 
-    msg = f"""🌍 حدث جيوسياسي مهم
-
-📰 {title}
-🇸🇦 {tr(title)}
-
-{impact}
-⚡️ التصنيف: {level}
-
-⚠️ راقب السوق
-🔗 {link}
+{geo_impact(n["title"])}
+⚡️ {lvl}
+🔗 {n["link"]}
 """
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
 # ===== AI =====
-def ai_analyze(text):
+def ai(text):
     try:
-        url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": "openai/gpt-4o-mini",
-            "messages": [{
-                "role": "user",
-                "content": f"""
-حلل هذا التقرير المالي واطلع أهم النقاط:
-
-- الحدث
-- الأرقام
-- التأثير
-
-بشكل عربي مختصر:
-
-{text[:2000]}
-"""
-            }]
-        }
-
-        r = requests.post(url, headers=headers, json=data, timeout=20)
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "openai/gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"لخص أهم نقطة وتأثير السوق:\n{text[:1500]}"
+                }]
+            },
+            timeout=15
+        )
         return r.json()["choices"][0]["message"]["content"]
-
     except:
         return None
 
 # ===== NEWS =====
 async def send_news(session, n):
-    title, link = n["title"], n["link"]
-
-    h = hashlib.md5((title + link).encode()).hexdigest()
-    if h in sent:
-        return
+    h = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
+    if h in sent: return
     sent.add(h)
 
     await send_geo(n)
 
-    if any(x in title.lower() for x in WEAK):
+    s = symbol(n["title"])
+    if not s or not can_send(s): return
+
+    try:
+        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={s}&token={FINNHUB}") as r:
+            d = await r.json()
+    except:
         return
 
-    s = symbol(title)
-    if not s or not can_send(s):
-        return
+    if not d.get("c"): return
 
-    st = await session.get(f"https://finnhub.io/api/v1/quote?symbol={s}&token={FINNHUB}")
-    data = await st.json()
-
-    price = data.get("c", 0)
-    change = data.get("dp", 0)
-
-    if price == 0:
-        return
-
-    msg = f"""🟡 متابعة
+    msg = f"""🟡 خبر
 
 🏢 {s}
+📰 {n["title"]}
+🇸🇦 {tr(n["title"])}
 
-📰 {title}
-🇸🇦 {tr(title)}
-
-📊 {price}$ | {round(change,2)}%
-
-🔗 {link}
+📊 {d['c']}$ | {round(d['dp'],2)}%
+🔗 {n["link"]}
 """
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC (AI) =====
+# ===== SEC =====
 async def send_sec(session):
     url = "https://data.sec.gov/submissions/CIK0000320193.json"
 
     try:
         async with session.get(url, headers=SEC_HEADERS) as r:
-            data = await r.text()
+            d = await r.json()
     except:
         return
 
-    if "8-K" not in data:
-        return
+    f = d.get("filings", {}).get("recent", {})
+    if not f: return
 
-    summary = ai_analyze(data)
+    for i in range(len(f.get("form", []))):
+        if f["form"][i] not in ["8-K","3","4"]:
+            continue
 
-    if not summary:
-        return
+        acc = f["accessionNumber"][i].replace("-", "")
+        link = f"https://www.sec.gov/Archives/edgar/data/320193/{acc}/{f['accessionNumber'][i]}.txt"
 
-    msg = f"""🏛️ SEC مهم
+        try:
+            async with session.get(link, headers=SEC_HEADERS) as r:
+                txt = await r.text()
+        except:
+            continue
+
+        summary = ai(txt)
+        if not summary: return
+
+        msg = f"""🏛️ SEC
+
+📄 {f["form"][i]}
 
 {summary}
 """
 
-    for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text=msg)
-
-# ===== SYSTEM =====
-async def startup():
-    for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text="✅ البوت يعمل (v31)")
-
-async def heartbeat():
-    while True:
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="🟢 النظام مستقر")
-        await asyncio.sleep(3600)
+            await bot.send_message(chat_id=c, text=msg)
+
+        break
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v31")
+    print("RUNNING...")
 
     async with aiohttp.ClientSession() as session:
-        await startup()
-        asyncio.create_task(heartbeat())
+        for c in CHAT_IDS:
+            await bot.send_message(chat_id=c, text="✅ البوت شغال")
 
         while True:
             try:
-                for url in RSS_FEEDS:
-                    f = feedparser.parse(url)
-                    for e in f.entries:
+                for url in RSS:
+                    feed = feedparser.parse(url)
+                    for e in feed.entries:
                         await send_news(session, {"title": e.title, "link": e.link})
 
                 await send_sec(session)
@@ -263,8 +204,7 @@ async def main():
                 await asyncio.sleep(300)
 
             except Exception as e:
-                print("ERROR:", e)
+                print(e)
                 await asyncio.sleep(60)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
