@@ -1,10 +1,9 @@
-# ===== Alpha Market Intelligence v39 (Ultra Filter) 🚀 =====
+# ===== Alpha Market Intelligence v40 (Auto Smart SEC) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
-# ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
@@ -21,29 +20,30 @@ RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
-# ===== STATE =====
 sent = set()
 sent_sec = set()
 cooldown = {}
 last_geo = 0
 
-# ===== FILTERS =====
+# 🔥 الشركات النشطة تلقائيًا
+active_stocks = set()
+
 BAD_NEWS = [
     "announces","launches","case study","initiative","expands",
     "best","top","why","report","partnership",
-    "bull case","bear case","analysis","opinion","what to know"
-]
-
-BIG_COMPANIES = [
-    "apple","tesla","amazon","nvidia","microsoft","google","meta"
+    "bull case","bear case","analysis","opinion"
 ]
 
 # ===== UTIL =====
 def tr(x):
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(x) if len(x) < 300 else x
+        return x if len(x) > 300 else GoogleTranslator(source='auto', target='ar').translate(x)
     except:
         return x
+
+def extract_symbol(title):
+    m = re.findall(r'\(([A-Z]{1,5})\)', title)
+    return m[0] if m else None
 
 def can_send(symbol):
     now = time.time()
@@ -52,87 +52,46 @@ def can_send(symbol):
     cooldown[symbol] = now
     return True
 
-def extract_symbol(title):
-    m = re.findall(r'\(([A-Z]{1,5})\)', title)
-    return m[0] if m else None
-
 # ===== GEO =====
-def geo_score(title):
-    t = title.lower()
-
-    if any(x in t for x in BIG_COMPANIES):
+def geo_score(t):
+    t = t.lower()
+    if any(x in t for x in ["apple","tesla","amazon"]):
         return 0
 
     score = 0
-    if any(x in t for x in ["attack","strike","war","missile"]): score += 4
-    if any(x in t for x in ["oil","hormuz","gas"]): score += 3
-    if any(x in t for x in ["iran","russia","ukraine","middle east"]): score += 2
+    if any(x in t for x in ["war","attack","strike"]): score += 4
+    if any(x in t for x in ["oil","hormuz"]): score += 3
+    if any(x in t for x in ["iran","russia","china"]): score += 2
     if re.search(r'\d+%', t): score += 3
-    if any(x in t for x in ["rally","crash","surge"]): score += 2
-
     return score
 
-def geo_level(score):
-    if score >= 6: return "🔴 عالي"
-    if score >= 3: return "🟡 متوسط"
-    return None
+def geo_level(s):
+    return "🔴 عالي" if s >= 6 else "🟡 متوسط" if s >= 3 else None
 
-def geo_impact(title):
-    t = title.lower()
-    if any(x in t for x in ["oil","hormuz","iran","russia"]):
-        return "🛢️ النفط / الطاقة"
-    if "fed" in t:
-        return "💰 الفائدة"
-    return "📊 السوق"
-
-async def send_geo(news):
+async def send_geo(n):
     global last_geo
 
-    score = geo_score(news["title"])
-    level = geo_level(score)
+    score = geo_score(n["title"])
+    lvl = geo_level(score)
 
-    if not level or time.time() - last_geo < 1800:
+    if not lvl or time.time() - last_geo < 1800:
         return
 
     last_geo = time.time()
 
     msg = f"""🌍 حدث مهم
 
-📰 {news["title"]}
-🇸🇦 {tr(news["title"])}
+📰 {n["title"]}
+🇸🇦 {tr(n["title"])}
 
-{geo_impact(news["title"])}
-⚡️ {level}
+⚡️ {lvl}
 """
-
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
 # ===== AI =====
-def ai_analyze(text, form):
+def ai(text):
     try:
-        if form == "4":
-            prompt = f"""
-Form 4 insider trading:
-
-👤 الاسم
-📊 شراء أسهم (Insider Buy) أو بيع أسهم (Insider Sell)
-💰 الرقم (إذا موجود فقط)
-⚡️ إيجابي أو سلبي
-
-بدون شرح
-
-{text[:1500]}
-"""
-        else:
-            prompt = f"""
-👤 الشخص
-📊 الحدث
-⚡️ التأثير
-
-{text[:1500]}
-"""
-
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -141,141 +100,156 @@ Form 4 insider trading:
             },
             json={
                 "model": "openai/gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+Form 4:
+
+👤 الشخص
+📊 شراء أو بيع أسهم فقط
+⚡️ إيجابي أو سلبي
+
+بدون شرح
+
+{text[:1200]}
+"""
+                }]
             },
             timeout=15
         )
-
         return r.json()["choices"][0]["message"]["content"]
-
     except:
         return None
 
-def clean(text):
-    lines = text.split("\n")
-    return "\n".join([
-        l.strip().replace("-", "")
-        for l in lines
-        if l.strip() and "غير" not in l and "العملية" not in l
-    ])
-
 # ===== NEWS =====
-async def send_news(session, news):
-    title = news["title"].lower()
+async def send_news(session, n):
+    title = n["title"].lower()
 
     if any(x in title for x in BAD_NEWS):
         return
 
-    # فلتر إضافي قوي
-    if any(x in title for x in ["bull case","analysis","opinion"]):
-        return
-
-    key = hashlib.md5((news["title"] + news["link"]).encode()).hexdigest()
+    key = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
     if key in sent:
         return
     sent.add(key)
 
-    await send_geo(news)
+    await send_geo(n)
 
-    symbol = extract_symbol(news["title"])
+    symbol = extract_symbol(n["title"])
     if not symbol or not can_send(symbol):
         return
 
+    # 🔥 أضف للسوق النشط
+    active_stocks.add(symbol)
+
     try:
         async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
-            data = await r.json()
+            d = await r.json()
     except:
         return
 
-    if not data.get("c"):
+    if not d.get("c"):
         return
 
     msg = f"""🟡 خبر
 
 🏢 {symbol}
-📰 {news["title"]}
-🇸🇦 {tr(news["title"])}
+📰 {n["title"]}
+🇸🇦 {tr(n["title"])}
 
-📊 {data['c']}$ | {round(data['dp'],2)}%
+📊 {d['c']}$ | {round(d['dp'],2)}%
 """
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC =====
+# ===== SEC AUTO =====
 async def send_sec(session):
-    url = "https://data.sec.gov/submissions/CIK0000320193.json"
-
-    try:
-        async with session.get(url, headers=SEC_HEADERS) as r:
-            data = await r.json()
-    except:
+    if not active_stocks:
         return
 
-    ticker = data.get("tickers", ["AAPL"])[0]
-    filings = data.get("filings", {}).get("recent", {})
-
-    for i in range(len(filings.get("form", []))):
-        form = filings["form"][i]
-
-        if form != "4":
-            continue
-
-        accession = filings["accessionNumber"][i]
-
-        key = f"{ticker}_{accession}"
-        if key in sent_sec:
-            continue
-        sent_sec.add(key)
-
-        acc = accession.replace("-", "")
-        link = f"https://www.sec.gov/Archives/edgar/data/320193/{acc}/{accession}.txt"
+    for ticker in list(active_stocks)[:10]:  # limit
 
         try:
-            async with session.get(link, headers=SEC_HEADERS) as r:
-                text = await r.text()
+            cik_url = f"https://www.sec.gov/files/company_tickers.json"
+            async with session.get(cik_url, headers=SEC_HEADERS) as r:
+                data = await r.json()
+
+            cik = None
+            for v in data.values():
+                if v["ticker"] == ticker:
+                    cik = str(v["cik_str"]).zfill(10)
+                    break
+
+            if not cik:
+                continue
+
+            async with session.get(
+                f"https://data.sec.gov/submissions/CIK{cik}.json",
+                headers=SEC_HEADERS
+            ) as r:
+                d = await r.json()
+
         except:
             continue
 
-        if not any(x in text.lower() for x in ["buy","purchase","sale","sold"]):
-            continue
+        filings = d.get("filings", {}).get("recent", {})
 
-        summary = ai_analyze(text, form)
-        if not summary:
-            return
+        for i in range(len(filings.get("form", []))):
+            if filings["form"][i] != "4":
+                continue
 
-        summary = clean(summary)
+            acc = filings["accessionNumber"][i]
+            key = f"{ticker}_{acc}"
 
-        msg = f"""🏛️ SEC
+            if key in sent_sec:
+                continue
+            sent_sec.add(key)
+
+            url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc.replace('-','')}/{acc}.txt"
+
+            try:
+                async with session.get(url, headers=SEC_HEADERS) as r:
+                    txt = await r.text()
+            except:
+                continue
+
+            if not any(x in txt.lower() for x in ["buy","sale","purchase"]):
+                continue
+
+            summary = ai(txt)
+            if not summary:
+                continue
+
+            msg = f"""🏛️ SEC
 
 🏢 {ticker}
-📄 Form 4
 
 {summary}
 """
 
-        for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text=msg)
+            for c in CHAT_IDS:
+                await bot.send_message(chat_id=c, text=msg)
 
-        break
+            break
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v39")
+    print("🚀 RUNNING v40")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v39")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v40")
 
         while True:
             try:
                 for url in RSS_FEEDS:
                     feed = feedparser.parse(url)
-                    for entry in feed.entries:
+                    for e in feed.entries:
                         await send_news(session, {
-                            "title": entry.title,
-                            "link": entry.link
+                            "title": e.title,
+                            "link": e.link
                         })
 
                 await send_sec(session)
