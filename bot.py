@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v33 (Smart Clean PRO) 🚀 =====
+# ===== Alpha Market Intelligence v34 (Smart Pro) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -16,7 +16,7 @@ SEC_HEADERS = {
     "User-Agent": "AlphaBot/1.0 (aktfaaksa@gmail.com)"
 }
 
-RSS = [
+RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
@@ -39,67 +39,99 @@ def tr(x):
     except:
         return x
 
-def can_send(s):
+def can_send(symbol):
     now = time.time()
-    if s in cooldown and now - cooldown[s] < 1800:
+    if symbol in cooldown and now - cooldown[symbol] < 1800:
         return False
-    cooldown[s] = now
+    cooldown[symbol] = now
     return True
 
-def symbol(t):
-    m = re.findall(r'\(([A-Z]{1,5})\)', t)
+def extract_symbol(title):
+    m = re.findall(r'\(([A-Z]{1,5})\)', title)
     return m[0] if m else None
 
 # ===== GEO =====
-def geo_score(t):
-    t = t.lower()
+def geo_score(title):
+    t = title.lower()
     score = 0
 
     if any(x in t for x in ["attack","strike","war","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz","gas"]): score += 3
-    if any(x in t for x in ["iran","russia","ukraine"]): score += 2
+    if any(x in t for x in ["iran","russia","ukraine","china"]): score += 2
     if re.search(r'\d+%', t): score += 3
     if any(x in t for x in ["rally","crash","surge"]): score += 2
 
     return score
 
-def geo_level(s):
-    return "🔴 عالي" if s >= 6 else "🟡 متوسط" if s >= 3 else None
+def geo_level(score):
+    if score >= 6: return "🔴 عالي"
+    if score >= 3: return "🟡 متوسط"
+    return None
 
-def geo_impact(t):
-    t = t.lower()
-    if any(x in t for x in ["oil","iran","hormuz","russia"]):
+def geo_impact(title):
+    t = title.lower()
+    if any(x in t for x in ["oil","hormuz","iran","russia"]):
         return "🛢️ النفط / الطاقة"
     if "fed" in t:
         return "💰 الفائدة"
     return "📊 السوق"
 
-async def send_geo(n):
+async def send_geo(news):
     global last_geo
 
-    score = geo_score(n["title"])
-    lvl = geo_level(score)
+    score = geo_score(news["title"])
+    level = geo_level(score)
 
-    if not lvl or time.time() - last_geo < 1800:
+    if not level or time.time() - last_geo < 1800:
         return
 
     last_geo = time.time()
 
     msg = f"""🌍 حدث مهم
 
-📰 {n["title"]}
-🇸🇦 {tr(n["title"])}
+📰 {news["title"]}
+🇸🇦 {tr(news["title"])}
 
-{geo_impact(n["title"])}
-⚡️ {lvl}
+{geo_impact(news["title"])}
+⚡️ {level}
 """
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== AI (SMART CLEAN) =====
-def ai(text):
+# ===== AI =====
+def ai_analyze(text, form):
     try:
+        if form == "4":
+            prompt = f"""
+هذا Form 4 (تداول داخلي)
+
+استخرج فقط:
+
+👤 الشخص
+📊 الحدث (شراء أو بيع فقط)
+💰 عدد الأسهم (إذا موجود)
+⚡️ التأثير:
+- شراء = إيجابي
+- بيع = سلبي
+
+بدون شرح - نقاط فقط
+
+{text[:1500]}
+"""
+        else:
+            prompt = f"""
+استخرج:
+
+👤 الشخص
+📊 الحدث
+⚡️ التأثير
+
+مختصر جدًا
+
+{text[:1500]}
+"""
+
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -108,66 +140,50 @@ def ai(text):
             },
             json={
                 "model": "openai/gpt-4o-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": f"""
-استخرج فقط:
-
-👤 الشخص
-📊 الحدث (شراء / بيع / تعيين)
-💰 الرقم (إذا موجود فقط)
-⚡️ التأثير (إيجابي / سلبي / محايد)
-
-قواعد:
-- لا تكتب "غير محدد"
-- إذا ما فيه رقم لا تكتب سطر الرقم
-- لا تكتب شرح
-- 3-5 سطور فقط
-
-{text[:1500]}
-"""
-                }]
+                "messages": [{"role": "user", "content": prompt}]
             },
             timeout=15
         )
+
         return r.json()["choices"][0]["message"]["content"]
+
     except:
         return None
 
 # ===== NEWS =====
-async def send_news(session, n):
-    title = n["title"]
+async def send_news(session, news):
+    title = news["title"]
 
     if any(x in title.lower() for x in BAD_NEWS):
         return
 
-    h = hashlib.md5((title + n["link"]).encode()).hexdigest()
-    if h in sent:
+    key = hashlib.md5((title + news["link"]).encode()).hexdigest()
+    if key in sent:
         return
-    sent.add(h)
+    sent.add(key)
 
-    await send_geo(n)
+    await send_geo(news)
 
-    s = symbol(title)
-    if not s or not can_send(s):
+    symbol = extract_symbol(title)
+    if not symbol or not can_send(symbol):
         return
 
     try:
-        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={s}&token={FINNHUB}") as r:
-            d = await r.json()
+        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
+            data = await r.json()
     except:
         return
 
-    if not d.get("c"):
+    if not data.get("c"):
         return
 
     msg = f"""🟡 خبر
 
-🏢 {s}
+🏢 {symbol}
 📰 {title}
 🇸🇦 {tr(title)}
 
-📊 {d['c']}$ | {round(d['dp'],2)}%
+📊 {data['c']}$ | {round(data['dp'],2)}%
 """
 
     for c in CHAT_IDS:
@@ -179,40 +195,42 @@ async def send_sec(session):
 
     try:
         async with session.get(url, headers=SEC_HEADERS) as r:
-            d = await r.json()
+            data = await r.json()
     except:
         return
 
-    f = d.get("filings", {}).get("recent", {})
-    if not f:
+    filings = data.get("filings", {}).get("recent", {})
+    if not filings:
         return
 
-    for i in range(len(f.get("form", []))):
-        form = f["form"][i]
+    for i in range(len(filings.get("form", []))):
+        form = filings["form"][i]
 
         if form not in ["8-K","3","4"]:
             continue
 
-        acc = f["accessionNumber"][i].replace("-", "")
-        link = f"https://www.sec.gov/Archives/edgar/data/320193/{acc}/{f['accessionNumber'][i]}.txt"
+        accession = filings["accessionNumber"][i]
+        acc = accession.replace("-", "")
+
+        link = f"https://www.sec.gov/Archives/edgar/data/320193/{acc}/{accession}.txt"
 
         try:
             async with session.get(link, headers=SEC_HEADERS) as r:
-                txt = await r.text()
+                text = await r.text()
         except:
             continue
 
-        # فلترة insider
-        if not any(x in txt.lower() for x in ["share","stock","transaction","officer"]):
+        # فلترة مهمة
+        if form == "4" and not any(x in text.lower() for x in ["share","transaction"]):
             continue
 
-        summary = ai(txt)
+        summary = ai_analyze(text, form)
         if not summary:
             return
 
         msg = f"""🏛️ SEC
 
-📄 {form}
+📄 Form {form}
 
 {summary}
 """
@@ -224,26 +242,29 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v33")
+    print("🚀 RUNNING v34")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v33")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v34")
 
         while True:
             try:
-                for url in RSS:
+                for url in RSS_FEEDS:
                     feed = feedparser.parse(url)
-                    for e in feed.entries:
-                        await send_news(session, {"title": e.title, "link": e.link})
+                    for entry in feed.entries:
+                        await send_news(session, {
+                            "title": entry.title,
+                            "link": entry.link
+                        })
 
                 await send_sec(session)
 
                 await asyncio.sleep(300)
 
             except Exception as e:
-                print(e)
+                print("ERROR:", e)
                 await asyncio.sleep(60)
 
 asyncio.run(main())
