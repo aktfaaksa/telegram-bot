@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v35 (Clear Decision PRO) 🚀 =====
+# ===== Alpha Market Intelligence v37 (Anti-Duplicate PRO) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -23,6 +23,7 @@ RSS_FEEDS = [
 
 # ===== STATE =====
 sent = set()
+sent_sec = set()   # 🔥 منع تكرار SEC
 cooldown = {}
 last_geo = 0
 
@@ -30,6 +31,10 @@ last_geo = 0
 BAD_NEWS = [
     "announces","launches","case study","initiative","expands",
     "best","top","why","report","partnership"
+]
+
+BIG_COMPANIES = [
+    "apple","tesla","amazon","nvidia","microsoft","google","meta"
 ]
 
 # ===== UTIL =====
@@ -53,11 +58,14 @@ def extract_symbol(title):
 # ===== GEO =====
 def geo_score(title):
     t = title.lower()
-    score = 0
 
+    if any(x in t for x in BIG_COMPANIES):
+        return 0
+
+    score = 0
     if any(x in t for x in ["attack","strike","war","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz","gas"]): score += 3
-    if any(x in t for x in ["iran","russia","ukraine","china"]): score += 2
+    if any(x in t for x in ["iran","russia","ukraine","middle east"]): score += 2
     if re.search(r'\d+%', t): score += 3
     if any(x in t for x in ["rally","crash","surge"]): score += 2
 
@@ -104,39 +112,27 @@ def ai_analyze(text, form):
     try:
         if form == "4":
             prompt = f"""
-هذا Form 4 (تداول داخلي)
-
-استخرج فقط:
+Form 4 insider trading:
 
 👤 الشخص
-📊 نوع العملية:
+📊 العملية:
 - شراء أسهم (Insider Buy)
 - بيع أسهم (Insider Sell)
-- إفصاح ملكية
 
-💰 عدد الأسهم (إذا موجود فقط)
+💰 العدد (إذا موجود)
 ⚡️ التأثير:
 - شراء = إيجابي
 - بيع = سلبي
-- إفصاح = محايد
 
-قواعد:
-- لا تكتب "غير موجود" أو "غير محدد"
-- إذا ما فيه رقم لا تكتب سطر 💰
-- لا تكتب شرح
-- 3-5 سطور فقط
+بدون شرح
 
 {text[:1500]}
 """
         else:
             prompt = f"""
-استخرج:
-
 👤 الشخص
 📊 الحدث
 ⚡️ التأثير
-
-مختصر جدًا
 
 {text[:1500]}
 """
@@ -159,17 +155,8 @@ def ai_analyze(text, form):
     except:
         return None
 
-# ===== CLEAN OUTPUT =====
-def clean_output(text):
-    lines = text.split("\n")
-    clean = []
-
-    for line in lines:
-        if "غير" in line:
-            continue
-        clean.append(line)
-
-    return "\n".join(clean)
+def clean(text):
+    return "\n".join([l for l in text.split("\n") if "غير" not in l])
 
 # ===== NEWS =====
 async def send_news(session, news):
@@ -221,20 +208,23 @@ async def send_sec(session):
         return
 
     ticker = data.get("tickers", ["AAPL"])[0]
-
     filings = data.get("filings", {}).get("recent", {})
-    if not filings:
-        return
 
     for i in range(len(filings.get("form", []))):
         form = filings["form"][i]
 
-        if form not in ["8-K","3","4"]:
+        if form != "4":
             continue
 
         accession = filings["accessionNumber"][i]
-        acc = accession.replace("-", "")
 
+        # 🔥 منع التكرار
+        key = f"{ticker}_{accession}"
+        if key in sent_sec:
+            continue
+        sent_sec.add(key)
+
+        acc = accession.replace("-", "")
         link = f"https://www.sec.gov/Archives/edgar/data/320193/{acc}/{accession}.txt"
 
         try:
@@ -243,19 +233,19 @@ async def send_sec(session):
         except:
             continue
 
-        if form == "4" and not any(x in text.lower() for x in ["share","transaction"]):
+        if not any(x in text.lower() for x in ["buy","purchase","sale","sold"]):
             continue
 
         summary = ai_analyze(text, form)
         if not summary:
             return
 
-        summary = clean_output(summary)
+        summary = clean(summary)
 
         msg = f"""🏛️ SEC
 
 🏢 {ticker}
-📄 Form {form}
+📄 Form 4
 
 {summary}
 """
@@ -267,12 +257,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v35")
+    print("🚀 RUNNING v37")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v35")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v37")
 
         while True:
             try:
