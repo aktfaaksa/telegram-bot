@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v32 (Clean Decision Bot) 🚀 =====
+# ===== Alpha Market Intelligence v33 (Smart Clean PRO) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -21,9 +21,16 @@ RSS = [
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
+# ===== STATE =====
 sent = set()
 cooldown = {}
 last_geo = 0
+
+# ===== FILTERS =====
+BAD_NEWS = [
+    "announces","launches","case study","initiative","expands",
+    "best","top","why","report","partnership"
+]
 
 # ===== UTIL =====
 def tr(x):
@@ -48,7 +55,7 @@ def geo_score(t):
     t = t.lower()
     score = 0
 
-    if any(x in t for x in ["attack","strike","war"]): score += 4
+    if any(x in t for x in ["attack","strike","war","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz","gas"]): score += 3
     if any(x in t for x in ["iran","russia","ukraine"]): score += 2
     if re.search(r'\d+%', t): score += 3
@@ -69,6 +76,7 @@ def geo_impact(t):
 
 async def send_geo(n):
     global last_geo
+
     score = geo_score(n["title"])
     lvl = geo_level(score)
 
@@ -89,7 +97,7 @@ async def send_geo(n):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== AI (Decision Style) =====
+# ===== AI (SMART CLEAN) =====
 def ai(text):
     try:
         r = requests.post(
@@ -105,12 +113,16 @@ def ai(text):
                     "content": f"""
 استخرج فقط:
 
-👤 من؟
-📊 ماذا حدث؟
-💰 الرقم؟
-⚡️ التأثير (إيجابي/سلبي/محايد)
+👤 الشخص
+📊 الحدث (شراء / بيع / تعيين)
+💰 الرقم (إذا موجود فقط)
+⚡️ التأثير (إيجابي / سلبي / محايد)
 
-بدون شرح - 4 سطور فقط:
+قواعد:
+- لا تكتب "غير محدد"
+- إذا ما فيه رقم لا تكتب سطر الرقم
+- لا تكتب شرح
+- 3-5 سطور فقط
 
 {text[:1500]}
 """
@@ -124,14 +136,21 @@ def ai(text):
 
 # ===== NEWS =====
 async def send_news(session, n):
-    h = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
-    if h in sent: return
+    title = n["title"]
+
+    if any(x in title.lower() for x in BAD_NEWS):
+        return
+
+    h = hashlib.md5((title + n["link"]).encode()).hexdigest()
+    if h in sent:
+        return
     sent.add(h)
 
     await send_geo(n)
 
-    s = symbol(n["title"])
-    if not s or not can_send(s): return
+    s = symbol(title)
+    if not s or not can_send(s):
+        return
 
     try:
         async with session.get(f"https://finnhub.io/api/v1/quote?symbol={s}&token={FINNHUB}") as r:
@@ -139,13 +158,14 @@ async def send_news(session, n):
     except:
         return
 
-    if not d.get("c"): return
+    if not d.get("c"):
+        return
 
     msg = f"""🟡 خبر
 
 🏢 {s}
-📰 {n["title"]}
-🇸🇦 {tr(n["title"])}
+📰 {title}
+🇸🇦 {tr(title)}
 
 📊 {d['c']}$ | {round(d['dp'],2)}%
 """
@@ -164,10 +184,13 @@ async def send_sec(session):
         return
 
     f = d.get("filings", {}).get("recent", {})
-    if not f: return
+    if not f:
+        return
 
     for i in range(len(f.get("form", []))):
-        if f["form"][i] not in ["8-K","3","4"]:
+        form = f["form"][i]
+
+        if form not in ["8-K","3","4"]:
             continue
 
         acc = f["accessionNumber"][i].replace("-", "")
@@ -179,8 +202,8 @@ async def send_sec(session):
         except:
             continue
 
-        # فلترة ذكية
-        if not any(x in txt.lower() for x in ["share","stock","officer","ceo"]):
+        # فلترة insider
+        if not any(x in txt.lower() for x in ["share","stock","transaction","officer"]):
             continue
 
         summary = ai(txt)
@@ -189,7 +212,7 @@ async def send_sec(session):
 
         msg = f"""🏛️ SEC
 
-📄 {f["form"][i]}
+📄 {form}
 
 {summary}
 """
@@ -201,11 +224,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v32")
+    print("🚀 RUNNING v33")
 
     async with aiohttp.ClientSession() as session:
+
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v33")
 
         while True:
             try:
