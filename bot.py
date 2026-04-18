@@ -1,9 +1,11 @@
-# ===== Alpha Market Intelligence v40 (Auto Smart SEC) 🚀 =====
+# ===== Alpha Market Intelligence v41 (Pro Time Filter) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
 from deep_translator import GoogleTranslator
+from datetime import datetime
 
+# ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
@@ -12,7 +14,7 @@ CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/1.0 (aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/2.0 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
@@ -20,13 +22,14 @@ RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
+# ===== STATE =====
 sent = set()
 sent_sec = set()
 cooldown = {}
 last_geo = 0
-
-# 🔥 الشركات النشطة تلقائيًا
 active_stocks = set()
+
+MAX_SEC_PER_CYCLE = 3
 
 BAD_NEWS = [
     "announces","launches","case study","initiative","expands",
@@ -55,11 +58,12 @@ def can_send(symbol):
 # ===== GEO =====
 def geo_score(t):
     t = t.lower()
-    if any(x in t for x in ["apple","tesla","amazon"]):
+
+    if any(x in t for x in ["stocks","buy","analysis","opinion"]):
         return 0
 
     score = 0
-    if any(x in t for x in ["war","attack","strike"]): score += 4
+    if any(x in t for x in ["war","attack","strike","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz"]): score += 3
     if any(x in t for x in ["iran","russia","china"]): score += 2
     if re.search(r'\d+%', t): score += 3
@@ -86,6 +90,7 @@ async def send_geo(n):
 
 ⚡️ {lvl}
 """
+
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
@@ -103,10 +108,11 @@ def ai(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
-Form 4:
+Form 4 insider:
 
-👤 الشخص
-📊 شراء أو بيع أسهم فقط
+👤 الاسم
+📊 شراء أسهم أو بيع أسهم
+💰 عدد الأسهم (إذا موجود)
 ⚡️ إيجابي أو سلبي
 
 بدون شرح
@@ -120,6 +126,13 @@ Form 4:
         return r.json()["choices"][0]["message"]["content"]
     except:
         return None
+
+def clean(text):
+    return "\n".join([
+        l.strip().replace("-", "")
+        for l in text.split("\n")
+        if l.strip() and "غير" not in l
+    ])
 
 # ===== NEWS =====
 async def send_news(session, n):
@@ -139,7 +152,6 @@ async def send_news(session, n):
     if not symbol or not can_send(symbol):
         return
 
-    # 🔥 أضف للسوق النشط
     active_stocks.add(symbol)
 
     try:
@@ -163,20 +175,22 @@ async def send_news(session, n):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC AUTO =====
+# ===== SEC =====
 async def send_sec(session):
     if not active_stocks:
         return
 
-    for ticker in list(active_stocks)[:10]:  # limit
+    today = datetime.utcnow().date()
+    count = 0
+
+    for ticker in list(active_stocks)[:10]:
 
         try:
-            cik_url = f"https://www.sec.gov/files/company_tickers.json"
-            async with session.get(cik_url, headers=SEC_HEADERS) as r:
-                data = await r.json()
+            async with session.get("https://www.sec.gov/files/company_tickers.json", headers=SEC_HEADERS) as r:
+                tickers = await r.json()
 
             cik = None
-            for v in data.values():
+            for v in tickers.values():
                 if v["ticker"] == ticker:
                     cik = str(v["cik_str"]).zfill(10)
                     break
@@ -188,15 +202,20 @@ async def send_sec(session):
                 f"https://data.sec.gov/submissions/CIK{cik}.json",
                 headers=SEC_HEADERS
             ) as r:
-                d = await r.json()
+                data = await r.json()
 
         except:
             continue
 
-        filings = d.get("filings", {}).get("recent", {})
+        filings = data.get("filings", {}).get("recent", {})
 
         for i in range(len(filings.get("form", []))):
             if filings["form"][i] != "4":
+                continue
+
+            # ✅ فلترة التاريخ (اليوم فقط)
+            filing_date = filings["filingDate"][i]
+            if filing_date != str(today):
                 continue
 
             acc = filings["accessionNumber"][i]
@@ -214,12 +233,19 @@ async def send_sec(session):
             except:
                 continue
 
-            if not any(x in txt.lower() for x in ["buy","sale","purchase"]):
+            # ❌ حذف التعويضات
+            if any(x in txt.lower() for x in ["option","award","rsu","restricted"]):
+                continue
+
+            # ❌ لازم يكون فيه عملية فعلية
+            if not any(x in txt.lower() for x in ["buy","purchase","sale","sold"]):
                 continue
 
             summary = ai(txt)
             if not summary:
                 continue
+
+            summary = clean(summary)
 
             msg = f"""🏛️ SEC
 
@@ -231,16 +257,18 @@ async def send_sec(session):
             for c in CHAT_IDS:
                 await bot.send_message(chat_id=c, text=msg)
 
-            break
+            count += 1
+            if count >= MAX_SEC_PER_CYCLE:
+                return
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v40")
+    print("🚀 RUNNING v41")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v40")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v41")
 
         while True:
             try:
