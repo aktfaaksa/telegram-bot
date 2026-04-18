@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v38 (Elite Clean) 🚀 =====
+# ===== Alpha Market Intelligence v39 (Ultra Filter) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -30,7 +30,8 @@ last_geo = 0
 # ===== FILTERS =====
 BAD_NEWS = [
     "announces","launches","case study","initiative","expands",
-    "best","top","why","report","partnership"
+    "best","top","why","report","partnership",
+    "bull case","bear case","analysis","opinion","what to know"
 ]
 
 BIG_COMPANIES = [
@@ -114,18 +115,12 @@ def ai_analyze(text, form):
             prompt = f"""
 Form 4 insider trading:
 
-اكتب بهذا الشكل فقط:
-
 👤 الاسم
 📊 شراء أسهم (Insider Buy) أو بيع أسهم (Insider Sell)
 💰 الرقم (إذا موجود فقط)
 ⚡️ إيجابي أو سلبي
 
-قواعد:
-- سطر واحد لكل معلومة
-- بدون نقاط أو شرطات
-- لا تكتب "العملية"
-- لا تكتب شرح
+بدون شرح
 
 {text[:1500]}
 """
@@ -156,42 +151,33 @@ Form 4 insider trading:
     except:
         return None
 
-# ===== CLEAN OUTPUT =====
 def clean(text):
     lines = text.split("\n")
-    result = []
-
-    for line in lines:
-        line = line.strip()
-
-        if not line or "غير" in line:
-            continue
-
-        if line.startswith("-"):
-            line = line.replace("-", "").strip()
-
-        if "العملية" in line:
-            continue
-
-        result.append(line)
-
-    return "\n".join(result)
+    return "\n".join([
+        l.strip().replace("-", "")
+        for l in lines
+        if l.strip() and "غير" not in l and "العملية" not in l
+    ])
 
 # ===== NEWS =====
 async def send_news(session, news):
-    title = news["title"]
+    title = news["title"].lower()
 
-    if any(x in title.lower() for x in BAD_NEWS):
+    if any(x in title for x in BAD_NEWS):
         return
 
-    key = hashlib.md5((title + news["link"]).encode()).hexdigest()
+    # فلتر إضافي قوي
+    if any(x in title for x in ["bull case","analysis","opinion"]):
+        return
+
+    key = hashlib.md5((news["title"] + news["link"]).encode()).hexdigest()
     if key in sent:
         return
     sent.add(key)
 
     await send_geo(news)
 
-    symbol = extract_symbol(title)
+    symbol = extract_symbol(news["title"])
     if not symbol or not can_send(symbol):
         return
 
@@ -207,8 +193,8 @@ async def send_news(session, news):
     msg = f"""🟡 خبر
 
 🏢 {symbol}
-📰 {title}
-🇸🇦 {tr(title)}
+📰 {news["title"]}
+🇸🇦 {tr(news["title"])}
 
 📊 {data['c']}$ | {round(data['dp'],2)}%
 """
@@ -275,12 +261,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v38")
+    print("🚀 RUNNING v39")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v38")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v39")
 
         while True:
             try:
