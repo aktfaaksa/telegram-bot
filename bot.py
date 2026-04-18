@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v30+ FINAL 🚀 =====
+# ===== Alpha Market Intelligence v31 (Smart Analysis) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -18,7 +18,7 @@ RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
-# ✅ الإيميل مضاف (نهائي)
+# ✅ SEC Email
 SEC_HEADERS = {
     "User-Agent": "AlphaMarketBot/1.0 (aktfaaksa@gmail.com)"
 }
@@ -32,10 +32,6 @@ last_geo_time = 0
 # ===== KEYWORDS =====
 STRONG = ["earnings","merger","acquisition","deal","contract","fda","approval"]
 WEAK = ["analysis","why","opinion","watch"]
-
-GEO = ["iran","russia","china","war","oil","fed","inflation"]
-GEO_STRONG = ["attack","strike","sanctions","decision","agreement"]
-GEO_BAD = ["analysis","opinion","why"]
 
 # ===== UTIL =====
 def tr(x):
@@ -53,53 +49,80 @@ def can_send(symbol):
     last_sent_symbol[symbol] = now
     return True
 
-def classify(title):
-    t = title.lower()
-    if any(x in t for x in WEAK):
-        return "LOW"
-    if any(x in t for x in STRONG):
-        return "HIGH"
-    return "MED"
-
 def symbol(title):
     m = re.findall(r'\(([A-Z]{1,5})\)', title.upper())
     return m[0] if m else None
 
-# ===== GEO =====
-def is_geo(title):
+# ===== GEO SMART =====
+def geo_score(title):
     t = title.lower()
-    if any(x in t for x in GEO_BAD):
-        return False
-    return any(x in t for x in GEO) and any(x in t for x in GEO_STRONG)
+    score = 0
+
+    # كلمات قوية
+    if any(x in t for x in ["attack","strike","war","missile"]):
+        score += 3
+
+    if any(x in t for x in ["sanctions","ban","tariffs"]):
+        score += 2
+
+    if any(x in t for x in ["agreement","deal","ceasefire"]):
+        score += 2
+
+    # مناطق حساسة
+    if any(x in t for x in ["iran","russia","ukraine","middle east"]):
+        score += 2
+
+    if any(x in t for x in ["oil","gas","port"]):
+        score += 2
+
+    return score
+
+def geo_level(score):
+    if score >= 5:
+        return "🔴 عالي"
+    elif score >= 3:
+        return "🟡 متوسط"
+    return "🟢 ضعيف"
 
 def geo_impact(title):
     t = title.lower()
-    if any(x in t for x in ["iran","oil","middle east"]):
-        return "🛢️ النفط ↑"
-    if any(x in t for x in ["fed","inflation"]):
-        return "💰 الفائدة / السوق"
-    if any(x in t for x in ["china","trade"]):
+
+    if any(x in t for x in ["oil","gas","iran","russia","middle east","port"]):
+        return "🛢️ النفط / الطاقة"
+
+    if any(x in t for x in ["fed","inflation","rates"]):
+        return "💰 السوق / الفائدة"
+
+    if any(x in t for x in ["china","trade","tariffs"]):
         return "📦 التجارة"
-    return "📊 عام"
+
+    return "📊 السوق العام"
 
 async def send_geo(n):
     global last_geo_time
-    if time.time() - last_geo_time < 1800:
-        return
 
     title, link = n["title"], n["link"]
 
-    if not is_geo(title):
+    score = geo_score(title)
+
+    if score < 3:
+        return
+
+    if time.time() - last_geo_time < 1800:
         return
 
     last_geo_time = time.time()
+
+    level = geo_level(score)
+    impact = geo_impact(title)
 
     msg = f"""🌍 حدث جيوسياسي مهم
 
 📰 {title}
 🇸🇦 {tr(title)}
 
-{geo_impact(title)}
+{impact}
+⚡️ التصنيف: {level}
 
 ⚠️ راقب السوق
 🔗 {link}
@@ -124,11 +147,11 @@ def ai_analyze(text):
                 "content": f"""
 حلل هذا التقرير المالي واطلع أهم النقاط:
 
-- نوع الحدث
-- أهم الأرقام
+- الحدث
+- الأرقام
 - التأثير
 
-واكتب ملخص عربي مختصر:
+بشكل عربي مختصر:
 
 {text[:2000]}
 """
@@ -141,14 +164,6 @@ def ai_analyze(text):
     except:
         return None
 
-# ===== STOCK =====
-async def stock(session, s):
-    try:
-        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={s}&token={FINNHUB}") as r:
-            return await r.json()
-    except:
-        return {}
-
 # ===== NEWS =====
 async def send_news(session, n):
     title, link = n["title"], n["link"]
@@ -160,22 +175,23 @@ async def send_news(session, n):
 
     await send_geo(n)
 
-    level = classify(title)
-    if level == "LOW":
+    if any(x in title.lower() for x in WEAK):
         return
 
     s = symbol(title)
     if not s or not can_send(s):
         return
 
-    st = await stock(session, s)
-    price = st.get("c", 0)
-    change = st.get("dp", 0)
+    st = await session.get(f"https://finnhub.io/api/v1/quote?symbol={s}&token={FINNHUB}")
+    data = await st.json()
+
+    price = data.get("c", 0)
+    change = data.get("dp", 0)
 
     if price == 0:
         return
 
-    msg = f"""{"🚨 فرصة" if level=="HIGH" else "🟡 متابعة"}
+    msg = f"""🟡 متابعة
 
 🏢 {s}
 
@@ -190,69 +206,36 @@ async def send_news(session, n):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC =====
-CIK_URL = "https://www.sec.gov/files/company_tickers.json"
+# ===== SEC (AI) =====
+async def send_sec(session):
+    url = "https://data.sec.gov/submissions/CIK0000320193.json"
 
-async def load_cik(session):
-    async with session.get(CIK_URL, headers=SEC_HEADERS) as r:
-        data = await r.json()
-    return {v["ticker"]: str(v["cik_str"]).zfill(10) for v in data.values()}
+    try:
+        async with session.get(url, headers=SEC_HEADERS) as r:
+            data = await r.text()
+    except:
+        return
 
-async def send_sec(session, cik_map):
-    today = time.strftime("%Y-%m-%d")
+    if "8-K" not in data:
+        return
 
-    for ticker, cik in list(cik_map.items())[:50]:
-        try:
-            async with session.get(
-                f"https://data.sec.gov/submissions/CIK{cik}.json",
-                headers=SEC_HEADERS
-            ) as r:
-                d = await r.json()
-        except:
-            continue
+    summary = ai_analyze(data)
 
-        filings = d.get("filings", {}).get("recent", {})
+    if not summary:
+        return
 
-        for i in range(len(filings.get("form", []))):
-            form = filings["form"][i]
-
-            if form not in ["8-K", "3", "4"]:
-                continue
-
-            if filings["filingDate"][i] != today:
-                continue
-
-            key = f"{ticker}_{filings['accessionNumber'][i]}"
-            if key in sent_sec:
-                continue
-
-            sent_sec.add(key)
-
-            text = str(d)[:2000]
-
-            summary = ai_analyze(text)
-            if not summary:
-                continue
-
-            msg = f"""🏛️ SEC مهم
-
-🏢 {ticker}
-📄 Form {form}
+    msg = f"""🏛️ SEC مهم
 
 {summary}
-
-🔗 https://www.sec.gov
 """
 
-            for c in CHAT_IDS:
-                await bot.send_message(chat_id=c, text=msg)
-
-            break
+    for c in CHAT_IDS:
+        await bot.send_message(chat_id=c, text=msg)
 
 # ===== SYSTEM =====
 async def startup():
     for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text="✅ البوت يعمل (v30+)")
+        await bot.send_message(chat_id=c, text="✅ البوت يعمل (v31)")
 
 async def heartbeat():
     while True:
@@ -262,29 +245,20 @@ async def heartbeat():
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v30+")
+    print("🚀 RUNNING v31")
 
     async with aiohttp.ClientSession() as session:
-        cik_map = await load_cik(session)
-
         await startup()
         asyncio.create_task(heartbeat())
 
         while True:
             try:
-                feed = []
                 for url in RSS_FEEDS:
                     f = feedparser.parse(url)
                     for e in f.entries:
-                        feed.append({"title": e.title, "link": e.link})
+                        await send_news(session, {"title": e.title, "link": e.link})
 
-                for n in feed:
-                    try:
-                        await send_news(session, n)
-                    except:
-                        pass
-
-                await send_sec(session, cik_map)
+                await send_sec(session)
 
                 await asyncio.sleep(300)
 
