@@ -1,3 +1,5 @@
+# ===== Alpha Market Intelligence v32 (Clean Decision Bot) 🚀 =====
+
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
 from deep_translator import GoogleTranslator
@@ -8,7 +10,6 @@ FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
-
 bot = Bot(token=BOT_TOKEN)
 
 SEC_HEADERS = {
@@ -21,8 +22,8 @@ RSS = [
 ]
 
 sent = set()
-last_geo = 0
 cooldown = {}
+last_geo = 0
 
 # ===== UTIL =====
 def tr(x):
@@ -68,28 +69,27 @@ def geo_impact(t):
 
 async def send_geo(n):
     global last_geo
-    s = geo_score(n["title"])
-    lvl = geo_level(s)
+    score = geo_score(n["title"])
+    lvl = geo_level(score)
 
     if not lvl or time.time() - last_geo < 1800:
         return
 
     last_geo = time.time()
 
-    msg = f"""🌍 حدث جيوسياسي
+    msg = f"""🌍 حدث مهم
 
 📰 {n["title"]}
 🇸🇦 {tr(n["title"])}
 
 {geo_impact(n["title"])}
 ⚡️ {lvl}
-🔗 {n["link"]}
 """
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== AI =====
+# ===== AI (Decision Style) =====
 def ai(text):
     try:
         r = requests.post(
@@ -102,7 +102,18 @@ def ai(text):
                 "model": "openai/gpt-4o-mini",
                 "messages": [{
                     "role": "user",
-                    "content": f"لخص أهم نقطة وتأثير السوق:\n{text[:1500]}"
+                    "content": f"""
+استخرج فقط:
+
+👤 من؟
+📊 ماذا حدث؟
+💰 الرقم؟
+⚡️ التأثير (إيجابي/سلبي/محايد)
+
+بدون شرح - 4 سطور فقط:
+
+{text[:1500]}
+"""
                 }]
             },
             timeout=15
@@ -137,7 +148,6 @@ async def send_news(session, n):
 🇸🇦 {tr(n["title"])}
 
 📊 {d['c']}$ | {round(d['dp'],2)}%
-🔗 {n["link"]}
 """
 
     for c in CHAT_IDS:
@@ -169,8 +179,13 @@ async def send_sec(session):
         except:
             continue
 
+        # فلترة ذكية
+        if not any(x in txt.lower() for x in ["share","stock","officer","ceo"]):
+            continue
+
         summary = ai(txt)
-        if not summary: return
+        if not summary:
+            return
 
         msg = f"""🏛️ SEC
 
@@ -186,11 +201,11 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("RUNNING...")
+    print("🚀 RUNNING v32")
 
     async with aiohttp.ClientSession() as session:
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت شغال")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز")
 
         while True:
             try:
