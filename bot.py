@@ -1,11 +1,10 @@
-# ===== Alpha Market Intelligence v42 (Professional Filter) 🚀 =====
+# ===== Alpha Market Intelligence v43 (Elite Stable) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
 from deep_translator import GoogleTranslator
 from datetime import datetime
 
-# ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
@@ -14,7 +13,7 @@ CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/2.0 (aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.0 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
@@ -22,7 +21,6 @@ RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
 ]
 
-# ===== STATE =====
 sent = set()
 sent_sec = set()
 cooldown = {}
@@ -32,23 +30,15 @@ active_stocks = set()
 MAX_SEC_PER_CYCLE = 2
 
 # ===== FILTERS =====
-STRONG_NEWS = [
-    "earnings","revenue","guidance","forecast",
-    "fda","approval",
-    "acquisition","merger","deal",
-    "upgrade","downgrade",
-    "beats","misses"
-]
+STRONG = ["earnings","revenue","guidance","forecast",
+          "fda","approval","acquisition","merger",
+          "deal","upgrade","downgrade","beats","misses"]
 
-WEAK_NEWS = [
-    "this year","skyrocket","surges","climbs","boom",
-    "expansion","growth","outlook","rally"
-]
+WEAK = ["this year","skyrocket","surges","climbs","boom",
+        "expansion","growth","outlook","rally"]
 
-BAD_NEWS = [
-    "announces","launches","case study","initiative",
-    "analysis","opinion","what to know"
-]
+TRASH = ["which","should you","vs","analysis","opinion",
+         "announces","launches"]
 
 # ===== UTIL =====
 def tr(x):
@@ -57,22 +47,22 @@ def tr(x):
     except:
         return x
 
-def extract_symbol(title):
-    m = re.findall(r'\(([A-Z]{1,5})\)', title)
+def extract_symbol(t):
+    m = re.findall(r'\(([A-Z]{1,5})\)', t)
     return m[0] if m else None
 
-def can_send(symbol):
+def can_send(sym):
     now = time.time()
-    if symbol in cooldown and now - cooldown[symbol] < 1800:
+    if sym in cooldown and now - cooldown[sym] < 1800:
         return False
-    cooldown[symbol] = now
+    cooldown[sym] = now
     return True
 
 # ===== GEO =====
 def geo_score(t):
     t = t.lower()
 
-    if any(x in t for x in ["warn","experts","says","analysis"]):
+    if any(x in t for x in ["warn","experts","says","analysis","hope"]):
         return 0
 
     score = 0
@@ -112,66 +102,43 @@ def ai(text):
     try:
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER}",
-                "Content-Type": "application/json"
-            },
+            headers={"Authorization": f"Bearer {OPENROUTER}"},
             json={
                 "model": "openai/gpt-4o-mini",
                 "messages": [{
                     "role": "user",
                     "content": f"""
-Form 4:
-
 👤 الاسم
-📊 شراء أو بيع أسهم
-💰 عدد الأسهم (إذا موجود)
+📊 شراء أو بيع
+💰 العدد (إن وجد)
 ⚡️ إيجابي أو سلبي
-
-بدون شرح
 
 {text[:1200]}
 """
                 }]
             },
-            timeout=15
+            timeout=10
         )
         return r.json()["choices"][0]["message"]["content"]
     except:
         return None
 
-def clean(text):
-    return "\n".join([
-        l.strip().replace("-", "")
-        for l in text.split("\n")
-        if l.strip() and "غير" not in l
-    ])
-
 # ===== NEWS =====
 async def send_news(session, n):
     title = n["title"].lower()
 
-    # ❌ حذف السيء
-    if any(x in title for x in WEAK_NEWS):
-        return
-
-    if any(x in title for x in BAD_NEWS):
-        return
-
-    # ❌ لازم يكون قوي
-    if not any(x in title for x in STRONG_NEWS):
-        return
+    if any(x in title for x in WEAK): return
+    if any(x in title for x in TRASH): return
+    if not any(x in title for x in STRONG): return
 
     key = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
-    if key in sent:
-        return
+    if key in sent: return
     sent.add(key)
 
     await send_geo(n)
 
     symbol = extract_symbol(n["title"])
-    if not symbol or not can_send(symbol):
-        return
+    if not symbol or not can_send(symbol): return
 
     active_stocks.add(symbol)
 
@@ -181,8 +148,7 @@ async def send_news(session, n):
     except:
         return
 
-    if not d.get("c"):
-        return
+    if not d.get("c"): return
 
     msg = f"""🟢 خبر قوي
 
@@ -198,8 +164,7 @@ async def send_news(session, n):
 
 # ===== SEC =====
 async def send_sec(session):
-    if not active_stocks:
-        return
+    if not active_stocks: return
 
     today = datetime.utcnow().date()
     count = 0
@@ -210,19 +175,14 @@ async def send_sec(session):
             async with session.get("https://www.sec.gov/files/company_tickers.json", headers=SEC_HEADERS) as r:
                 tickers = await r.json()
 
-            cik = None
-            for v in tickers.values():
-                if v["ticker"] == ticker:
-                    cik = str(v["cik_str"]).zfill(10)
-                    break
+            cik = next((str(v["cik_str"]).zfill(10)
+                        for v in tickers.values()
+                        if v["ticker"] == ticker), None)
 
-            if not cik:
-                continue
+            if not cik: continue
 
-            async with session.get(
-                f"https://data.sec.gov/submissions/CIK{cik}.json",
-                headers=SEC_HEADERS
-            ) as r:
+            async with session.get(f"https://data.sec.gov/submissions/CIK{cik}.json",
+                                   headers=SEC_HEADERS) as r:
                 data = await r.json()
 
         except:
@@ -231,17 +191,12 @@ async def send_sec(session):
         filings = data.get("filings", {}).get("recent", {})
 
         for i in range(len(filings.get("form", []))):
-            if filings["form"][i] != "4":
-                continue
-
-            if filings["filingDate"][i] != str(today):
-                continue
+            if filings["form"][i] != "4": continue
+            if filings["filingDate"][i] != str(today): continue
 
             acc = filings["accessionNumber"][i]
             key = f"{ticker}_{acc}"
-
-            if key in sent_sec:
-                continue
+            if key in sent_sec: continue
             sent_sec.add(key)
 
             url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc.replace('-','')}/{acc}.txt"
@@ -255,14 +210,11 @@ async def send_sec(session):
             if any(x in txt.lower() for x in ["option","award","rsu","restricted"]):
                 continue
 
-            if not any(x in txt.lower() for x in ["buy","purchase","sale","sold"]):
+            if not any(x in txt.lower() for x in ["buy","sale","purchase","sold"]):
                 continue
 
             summary = ai(txt)
-            if not summary:
-                continue
-
-            summary = clean(summary)
+            if not summary: continue
 
             msg = f"""🏛️ SEC
 
@@ -280,22 +232,19 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v42")
+    print("🚀 RUNNING v43")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v42")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v43")
 
         while True:
             try:
                 for url in RSS_FEEDS:
                     feed = feedparser.parse(url)
                     for e in feed.entries:
-                        await send_news(session, {
-                            "title": e.title,
-                            "link": e.link
-                        })
+                        await send_news(session, {"title": e.title, "link": e.link})
 
                 await send_sec(session)
 
