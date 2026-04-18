@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v41 (Pro Time Filter) 🚀 =====
+# ===== Alpha Market Intelligence v42 (Professional Filter) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
 from telegram import Bot
@@ -29,12 +29,25 @@ cooldown = {}
 last_geo = 0
 active_stocks = set()
 
-MAX_SEC_PER_CYCLE = 3
+MAX_SEC_PER_CYCLE = 2
+
+# ===== FILTERS =====
+STRONG_NEWS = [
+    "earnings","revenue","guidance","forecast",
+    "fda","approval",
+    "acquisition","merger","deal",
+    "upgrade","downgrade",
+    "beats","misses"
+]
+
+WEAK_NEWS = [
+    "this year","skyrocket","surges","climbs","boom",
+    "expansion","growth","outlook","rally"
+]
 
 BAD_NEWS = [
-    "announces","launches","case study","initiative","expands",
-    "best","top","why","report","partnership",
-    "bull case","bear case","analysis","opinion"
+    "announces","launches","case study","initiative",
+    "analysis","opinion","what to know"
 ]
 
 # ===== UTIL =====
@@ -59,18 +72,18 @@ def can_send(symbol):
 def geo_score(t):
     t = t.lower()
 
-    if any(x in t for x in ["stocks","buy","analysis","opinion"]):
+    if any(x in t for x in ["warn","experts","says","analysis"]):
         return 0
 
     score = 0
     if any(x in t for x in ["war","attack","strike","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz"]): score += 3
     if any(x in t for x in ["iran","russia","china"]): score += 2
-    if re.search(r'\d+%', t): score += 3
+
     return score
 
 def geo_level(s):
-    return "🔴 عالي" if s >= 6 else "🟡 متوسط" if s >= 3 else None
+    return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
 async def send_geo(n):
     global last_geo
@@ -108,10 +121,10 @@ def ai(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
-Form 4 insider:
+Form 4:
 
 👤 الاسم
-📊 شراء أسهم أو بيع أسهم
+📊 شراء أو بيع أسهم
 💰 عدد الأسهم (إذا موجود)
 ⚡️ إيجابي أو سلبي
 
@@ -138,7 +151,15 @@ def clean(text):
 async def send_news(session, n):
     title = n["title"].lower()
 
+    # ❌ حذف السيء
+    if any(x in title for x in WEAK_NEWS):
+        return
+
     if any(x in title for x in BAD_NEWS):
+        return
+
+    # ❌ لازم يكون قوي
+    if not any(x in title for x in STRONG_NEWS):
         return
 
     key = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
@@ -163,7 +184,7 @@ async def send_news(session, n):
     if not d.get("c"):
         return
 
-    msg = f"""🟡 خبر
+    msg = f"""🟢 خبر قوي
 
 🏢 {symbol}
 📰 {n["title"]}
@@ -213,9 +234,7 @@ async def send_sec(session):
             if filings["form"][i] != "4":
                 continue
 
-            # ✅ فلترة التاريخ (اليوم فقط)
-            filing_date = filings["filingDate"][i]
-            if filing_date != str(today):
+            if filings["filingDate"][i] != str(today):
                 continue
 
             acc = filings["accessionNumber"][i]
@@ -233,11 +252,9 @@ async def send_sec(session):
             except:
                 continue
 
-            # ❌ حذف التعويضات
             if any(x in txt.lower() for x in ["option","award","rsu","restricted"]):
                 continue
 
-            # ❌ لازم يكون فيه عملية فعلية
             if not any(x in txt.lower() for x in ["buy","purchase","sale","sold"]):
                 continue
 
@@ -263,12 +280,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v41")
+    print("🚀 RUNNING v42")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v41")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v42")
 
         while True:
             try:
