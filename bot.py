@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v45 (Arabic AI Pro) 🚀 =====
+# ===== Alpha Market Intelligence v46 (Full AI System) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -26,8 +26,6 @@ sent_sec = set()
 cooldown = {}
 last_geo = 0
 active_stocks = set()
-
-MAX_SEC_PER_CYCLE = 2
 
 # ===== FILTERS =====
 STRONG = ["earnings","revenue","guidance","forecast",
@@ -58,24 +56,13 @@ def can_send(sym):
     cooldown[sym] = now
     return True
 
-# ===== FORMAT ARABIC =====
+# ===== FORMAT =====
 def format_sentiment(sentiment, score):
     if sentiment == "bullish":
-        if score >= 85:
-            return "🟢", "إيجابي قوي جدًا 🔥"
-        elif score >= 70:
-            return "🟢", "إيجابي قوي"
-        else:
-            return "🟢", "إيجابي"
+        return "🟢", "إيجابي قوي" if score >= 70 else "إيجابي"
     elif sentiment == "bearish":
-        if score >= 85:
-            return "🔴", "سلبي قوي جدًا 🔥"
-        elif score >= 70:
-            return "🔴", "سلبي قوي"
-        else:
-            return "🔴", "سلبي"
-    else:
-        return "🟡", "محايد"
+        return "🔴", "سلبي قوي" if score >= 70 else "سلبي"
+    return "🟡", "محايد"
 
 # ===== AI SCORE =====
 def score_news(text):
@@ -88,10 +75,8 @@ def score_news(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
-قيّم الخبر التالي لسهم:
-
 أرجع JSON فقط:
-{{"score": رقم من 0 إلى 100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
+{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
 
 {text[:800]}
 """
@@ -99,17 +84,13 @@ def score_news(text):
             },
             timeout=10
         )
-        content = r.json()["choices"][0]["message"]["content"]
-        return json.loads(content)
+        return json.loads(r.json()["choices"][0]["message"]["content"])
     except:
         return None
 
 # ===== GEO =====
 def geo_score(t):
     t = t.lower()
-    if any(x in t for x in ["warn","experts","says","analysis","hope"]):
-        return 0
-
     score = 0
     if any(x in t for x in ["war","attack","strike","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz"]): score += 3
@@ -118,6 +99,35 @@ def geo_score(t):
 
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
+
+# ===== MACRO AI =====
+def macro_analysis(text):
+    try:
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER}"},
+            json={
+                "model": "openai/gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+حلل الخبر:
+
+- التأثير على القطاعات
+- الأسهم المستفيدة (3)
+- الأسهم المتضررة (2)
+
+بالعربية بشكل مختصر.
+
+{text[:800]}
+"""
+                }]
+            },
+            timeout=10
+        )
+        return r.json()["choices"][0]["message"]["content"]
+    except:
+        return "تعذر التحليل"
 
 async def send_geo(n):
     global last_geo
@@ -130,12 +140,17 @@ async def send_geo(n):
 
     last_geo = time.time()
 
-    msg = f"""🌍 حدث مهم
+    analysis = macro_analysis(n["title"])
+
+    msg = f"""🌍 حدث مهم (تحليل السوق)
 
 📰 {n["title"]}
 🇸🇦 {tr(n["title"])}
 
 ⚡️ {lvl}
+
+📊 التأثير:
+{analysis}
 """
 
     for c in CHAT_IDS:
@@ -182,131 +197,31 @@ async def send_news(session, n):
 
     msg = f"""{emoji} {sentiment_ar} ({score}/100)
 
-🏢 الشركة: {symbol}
+🏢 {symbol}
+📰 {n["title"]}
+🇸🇦 {tr(n["title"])}
 
-📰 الخبر:
-{n["title"]}
+📊 {d['c']}$ | {round(d['dp'],2)}%
 
-🇸🇦 الترجمة:
-{tr(n["title"])}
-
-📊 السعر الحالي:
-{d['c']}$ | {round(d['dp'],2)}%
-
-🧠 التحليل:
-{reason}
+🧠 {reason}
 """
 
-    # ===== SIGNAL (اختياري مضاف) =====
     if score >= 75 and sentiment == "bullish":
-        msg += "\n📢 إشارة: فرصة شراء محتملة"
+        msg += "\n📢 فرصة شراء محتملة"
     elif score >= 75 and sentiment == "bearish":
-        msg += "\n📢 إشارة: احتمال هبوط"
+        msg += "\n📢 احتمال هبوط"
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC =====
-def ai(text):
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER}"},
-            json={
-                "model": "openai/gpt-4o-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": f"""
-👤 الاسم
-📊 شراء أو بيع
-💰 العدد
-⚡️ إيجابي أو سلبي
-
-{text[:1200]}
-"""
-                }]
-            },
-            timeout=10
-        )
-        return r.json()["choices"][0]["message"]["content"]
-    except:
-        return None
-
-async def send_sec(session):
-    if not active_stocks: return
-
-    today = datetime.utcnow().date()
-    count = 0
-
-    for ticker in list(active_stocks)[:10]:
-
-        try:
-            async with session.get("https://www.sec.gov/files/company_tickers.json", headers=SEC_HEADERS) as r:
-                tickers = await r.json()
-
-            cik = next((str(v["cik_str"]).zfill(10)
-                        for v in tickers.values()
-                        if v["ticker"] == ticker), None)
-
-            if not cik: continue
-
-            async with session.get(f"https://data.sec.gov/submissions/CIK{cik}.json",
-                                   headers=SEC_HEADERS) as r:
-                data = await r.json()
-
-        except:
-            continue
-
-        filings = data.get("filings", {}).get("recent", {})
-
-        for i in range(len(filings.get("form", []))):
-            if filings["form"][i] != "4": continue
-            if filings["filingDate"][i] != str(today): continue
-
-            acc = filings["accessionNumber"][i]
-            key = f"{ticker}_{acc}"
-            if key in sent_sec: continue
-            sent_sec.add(key)
-
-            url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc.replace('-','')}/{acc}.txt"
-
-            try:
-                async with session.get(url, headers=SEC_HEADERS) as r:
-                    txt = await r.text()
-            except:
-                continue
-
-            if any(x in txt.lower() for x in ["option","award","rsu","restricted"]):
-                continue
-
-            if not any(x in txt.lower() for x in ["buy","sale","purchase","sold"]):
-                continue
-
-            summary = ai(txt)
-            if not summary: continue
-
-            msg = f"""🏛️ SEC
-
-🏢 {ticker}
-
-{summary}
-"""
-
-            for c in CHAT_IDS:
-                await bot.send_message(chat_id=c, text=msg)
-
-            count += 1
-            if count >= MAX_SEC_PER_CYCLE:
-                return
-
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v45 (ARABIC PRO)")
+    print("🚀 RUNNING v46 FULL")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v45 (عربي احترافي)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46 (Full System)")
 
         while True:
             try:
@@ -314,8 +229,6 @@ async def main():
                     feed = feedparser.parse(url)
                     for e in feed.entries:
                         await send_news(session, {"title": e.title, "link": e.link})
-
-                await send_sec(session)
 
                 await asyncio.sleep(300)
 
