@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v46.2 (US Macro Engine) 🚀 =====
+# ===== Alpha Market Intelligence v46.4 (Stable Clean) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -12,6 +12,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
+# ✅ لا نحذفه (مهم)
 SEC_HEADERS = {
     "User-Agent": "AlphaBot/3.0 (aktfaaksa@gmail.com)"
 }
@@ -102,7 +103,7 @@ def geo_score(t):
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
-# ===== MACRO JSON (US TICKERS ONLY) =====
+# ===== MACRO (FINAL FIXED) =====
 def macro_analysis(text):
     try:
         r = requests.post(
@@ -122,11 +123,10 @@ def macro_analysis(text):
 }}
 
 شروط صارمة:
-- فقط رموز أسهم أمريكية (NYSE/NASDAQ)
-- أمثلة: XOM, CVX, NVDA, AAPL, JPM
+- impact بالعربي فقط (مثال: ارتفاع النفط)
+- winners و losers = رموز أمريكية فقط
 - لا تكتب وصف
-- لا تكتب أسماء بدون ticker
-- اختر شركات كبيرة فقط
+- لا تكرر نفس السهم
 
 حلل الخبر:
 {text[:800]}
@@ -137,7 +137,19 @@ def macro_analysis(text):
         )
 
         content = r.json()["choices"][0]["message"]["content"]
-        return json.loads(content)
+        data = json.loads(content)
+
+        impact = data.get("impact", [])
+        winners = clean_tickers(data.get("winners", []))
+        losers = clean_tickers(data.get("losers", []))
+
+        losers = [l for l in losers if l not in winners]
+
+        return {
+            "impact": impact,
+            "winners": winners,
+            "losers": losers
+        }
 
     except:
         return None
@@ -158,11 +170,8 @@ async def send_geo(n):
 
     if analysis:
         impact = "\n".join([f"• {x}" for x in analysis["impact"]])
-        winners = clean_tickers(analysis["winners"])
-        losers = clean_tickers(analysis["losers"])
-
-        winners_txt = " - ".join(winners) if winners else "-"
-        losers_txt = " - ".join(losers) if losers else "-"
+        winners_txt = " - ".join(analysis["winners"])
+        losers_txt = " - ".join(analysis["losers"])
     else:
         impact = "تعذر التحليل"
         winners_txt = "-"
@@ -248,12 +257,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v46.2 (US MACRO ENGINE)")
+    print("🚀 RUNNING v46.4 (STABLE)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.2 (US Macro Engine)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.4 (Stable)")
 
         while True:
             try:
