@@ -167,7 +167,7 @@ async def send_news(session, n):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    if score < 60:
+    if score < 50:
         return
 
     try:
