@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v46.1 (Macro JSON Fixed) 🚀 =====
+# ===== Alpha Market Intelligence v46.2 (US Macro Engine) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -55,6 +55,9 @@ def can_send(sym):
     cooldown[sym] = now
     return True
 
+def clean_tickers(lst):
+    return [x for x in lst if isinstance(x, str) and x.isupper() and 1 <= len(x) <= 5]
+
 # ===== FORMAT =====
 def format_sentiment(sentiment, score):
     if sentiment == "bullish":
@@ -99,7 +102,7 @@ def geo_score(t):
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
-# ===== MACRO JSON =====
+# ===== MACRO JSON (US TICKERS ONLY) =====
 def macro_analysis(text):
     try:
         r = requests.post(
@@ -114,9 +117,16 @@ def macro_analysis(text):
 
 {{
 "impact": ["...","...","..."],
-"winners": ["...","...","..."],
-"losers": ["...","..."]
+"winners": ["TICKER","TICKER","TICKER"],
+"losers": ["TICKER","TICKER"]
 }}
+
+شروط صارمة:
+- فقط رموز أسهم أمريكية (NYSE/NASDAQ)
+- أمثلة: XOM, CVX, NVDA, AAPL, JPM
+- لا تكتب وصف
+- لا تكتب أسماء بدون ticker
+- اختر شركات كبيرة فقط
 
 حلل الخبر:
 {text[:800]}
@@ -132,6 +142,7 @@ def macro_analysis(text):
     except:
         return None
 
+# ===== SEND GEO =====
 async def send_geo(n):
     global last_geo
 
@@ -147,12 +158,15 @@ async def send_geo(n):
 
     if analysis:
         impact = "\n".join([f"• {x}" for x in analysis["impact"]])
-        winners = " - ".join(analysis["winners"])
-        losers = " - ".join(analysis["losers"])
+        winners = clean_tickers(analysis["winners"])
+        losers = clean_tickers(analysis["losers"])
+
+        winners_txt = " - ".join(winners) if winners else "-"
+        losers_txt = " - ".join(losers) if losers else "-"
     else:
         impact = "تعذر التحليل"
-        winners = "-"
-        losers = "-"
+        winners_txt = "-"
+        losers_txt = "-"
 
     msg = f"""🌍 حدث مهم (تحليل السوق)
 
@@ -165,10 +179,10 @@ async def send_geo(n):
 {impact}
 
 🎯 مستفيد:
-🟢 {winners}
+🟢 {winners_txt}
 
 ⚠️ متضرر:
-🔴 {losers}
+🔴 {losers_txt}
 """
 
     for c in CHAT_IDS:
@@ -234,12 +248,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v46.1 (JSON MACRO FIXED)")
+    print("🚀 RUNNING v46.2 (US MACRO ENGINE)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.1 (Macro JSON)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.2 (US Macro Engine)")
 
         while True:
             try:
