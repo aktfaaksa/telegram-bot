@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v44 (AI Scored) 🚀 =====
+# ===== Alpha Market Intelligence v45 (Arabic AI Pro) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -58,6 +58,25 @@ def can_send(sym):
     cooldown[sym] = now
     return True
 
+# ===== FORMAT ARABIC =====
+def format_sentiment(sentiment, score):
+    if sentiment == "bullish":
+        if score >= 85:
+            return "🟢", "إيجابي قوي جدًا 🔥"
+        elif score >= 70:
+            return "🟢", "إيجابي قوي"
+        else:
+            return "🟢", "إيجابي"
+    elif sentiment == "bearish":
+        if score >= 85:
+            return "🔴", "سلبي قوي جدًا 🔥"
+        elif score >= 70:
+            return "🔴", "سلبي قوي"
+        else:
+            return "🔴", "سلبي"
+    else:
+        return "🟡", "محايد"
+
 # ===== AI SCORE =====
 def score_news(text):
     try:
@@ -71,10 +90,9 @@ def score_news(text):
                     "content": f"""
 قيّم الخبر التالي لسهم:
 
-أرجع JSON فقط بهذا الشكل:
+أرجع JSON فقط:
 {{"score": رقم من 0 إلى 100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
 
-النص:
 {text[:800]}
 """
                 }]
@@ -89,7 +107,6 @@ def score_news(text):
 # ===== GEO =====
 def geo_score(t):
     t = t.lower()
-
     if any(x in t for x in ["warn","experts","says","analysis","hope"]):
         return 0
 
@@ -97,7 +114,6 @@ def geo_score(t):
     if any(x in t for x in ["war","attack","strike","missile"]): score += 4
     if any(x in t for x in ["oil","hormuz"]): score += 3
     if any(x in t for x in ["iran","russia","china"]): score += 2
-
     return score
 
 def geo_level(s):
@@ -144,7 +160,6 @@ async def send_news(session, n):
 
     active_stocks.add(symbol)
 
-    # ===== AI SCORE =====
     analysis = score_news(n["title"])
     if not analysis: return
 
@@ -163,23 +178,60 @@ async def send_news(session, n):
 
     if not d.get("c"): return
 
-    emoji = "🟢" if sentiment == "bullish" else "🔴" if sentiment == "bearish" else "🟡"
+    emoji, sentiment_ar = format_sentiment(sentiment, score)
 
-    msg = f"""{emoji} {sentiment.upper()} ({score}/100)
+    msg = f"""{emoji} {sentiment_ar} ({score}/100)
 
-🏢 {symbol}
-📰 {n["title"]}
-🇸🇦 {tr(n["title"])}
+🏢 الشركة: {symbol}
 
-📊 {d['c']}$ | {round(d['dp'],2)}%
+📰 الخبر:
+{n["title"]}
 
-🧠 {reason}
+🇸🇦 الترجمة:
+{tr(n["title"])}
+
+📊 السعر الحالي:
+{d['c']}$ | {round(d['dp'],2)}%
+
+🧠 التحليل:
+{reason}
 """
+
+    # ===== SIGNAL (اختياري مضاف) =====
+    if score >= 75 and sentiment == "bullish":
+        msg += "\n📢 إشارة: فرصة شراء محتملة"
+    elif score >= 75 and sentiment == "bearish":
+        msg += "\n📢 إشارة: احتمال هبوط"
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC (بدون تغيير) =====
+# ===== SEC =====
+def ai(text):
+    try:
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER}"},
+            json={
+                "model": "openai/gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+👤 الاسم
+📊 شراء أو بيع
+💰 العدد
+⚡️ إيجابي أو سلبي
+
+{text[:1200]}
+"""
+                }]
+            },
+            timeout=10
+        )
+        return r.json()["choices"][0]["message"]["content"]
+    except:
+        return None
+
 async def send_sec(session):
     if not active_stocks: return
 
@@ -249,12 +301,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v44 (AI SCORE)")
+    print("🚀 RUNNING v45 (ARABIC PRO)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v44 (AI Score)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v45 (عربي احترافي)")
 
         while True:
             try:
