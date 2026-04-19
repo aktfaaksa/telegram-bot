@@ -1,6 +1,6 @@
-# ===== Alpha Market Intelligence v43 (Elite Stable) 🚀 =====
+# ===== Alpha Market Intelligence v44 (AI Scored) 🚀 =====
 
-import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests
+import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
 from deep_translator import GoogleTranslator
 from datetime import datetime
@@ -32,13 +32,13 @@ MAX_SEC_PER_CYCLE = 2
 # ===== FILTERS =====
 STRONG = ["earnings","revenue","guidance","forecast",
           "fda","approval","acquisition","merger",
-          "deal","upgrade","downgrade","beats","misses"]
+          "deal","beats","misses"]
 
 WEAK = ["this year","skyrocket","surges","climbs","boom",
         "expansion","growth","outlook","rally"]
 
 TRASH = ["which","should you","vs","analysis","opinion",
-         "announces","launches"]
+         "announces","launches","price target","preview"]
 
 # ===== UTIL =====
 def tr(x):
@@ -57,6 +57,34 @@ def can_send(sym):
         return False
     cooldown[sym] = now
     return True
+
+# ===== AI SCORE =====
+def score_news(text):
+    try:
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER}"},
+            json={
+                "model": "openai/gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+قيّم الخبر التالي لسهم:
+
+أرجع JSON فقط بهذا الشكل:
+{{"score": رقم من 0 إلى 100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
+
+النص:
+{text[:800]}
+"""
+                }]
+            },
+            timeout=10
+        )
+        content = r.json()["choices"][0]["message"]["content"]
+        return json.loads(content)
+    except:
+        return None
 
 # ===== GEO =====
 def geo_score(t):
@@ -97,32 +125,6 @@ async def send_geo(n):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== AI =====
-def ai(text):
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER}"},
-            json={
-                "model": "openai/gpt-4o-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": f"""
-👤 الاسم
-📊 شراء أو بيع
-💰 العدد (إن وجد)
-⚡️ إيجابي أو سلبي
-
-{text[:1200]}
-"""
-                }]
-            },
-            timeout=10
-        )
-        return r.json()["choices"][0]["message"]["content"]
-    except:
-        return None
-
 # ===== NEWS =====
 async def send_news(session, n):
     title = n["title"].lower()
@@ -142,6 +144,17 @@ async def send_news(session, n):
 
     active_stocks.add(symbol)
 
+    # ===== AI SCORE =====
+    analysis = score_news(n["title"])
+    if not analysis: return
+
+    score = analysis.get("score", 0)
+    sentiment = analysis.get("sentiment", "neutral")
+    reason = analysis.get("reason", "")
+
+    if score < 60:
+        return
+
     try:
         async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
             d = await r.json()
@@ -150,19 +163,23 @@ async def send_news(session, n):
 
     if not d.get("c"): return
 
-    msg = f"""🟢 خبر قوي
+    emoji = "🟢" if sentiment == "bullish" else "🔴" if sentiment == "bearish" else "🟡"
+
+    msg = f"""{emoji} {sentiment.upper()} ({score}/100)
 
 🏢 {symbol}
 📰 {n["title"]}
 🇸🇦 {tr(n["title"])}
 
 📊 {d['c']}$ | {round(d['dp'],2)}%
+
+🧠 {reason}
 """
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
-# ===== SEC =====
+# ===== SEC (بدون تغيير) =====
 async def send_sec(session):
     if not active_stocks: return
 
@@ -232,12 +249,12 @@ async def send_sec(session):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v43")
+    print("🚀 RUNNING v44 (AI SCORE)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v43")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v44 (AI Score)")
 
         while True:
             try:
