@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v46 (Full AI System) 🚀 =====
+# ===== Alpha Market Intelligence v46.1 (Macro JSON Fixed) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -22,7 +22,6 @@ RSS_FEEDS = [
 ]
 
 sent = set()
-sent_sec = set()
 cooldown = {}
 last_geo = 0
 active_stocks = set()
@@ -100,7 +99,7 @@ def geo_score(t):
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
-# ===== MACRO AI =====
+# ===== MACRO JSON =====
 def macro_analysis(text):
     try:
         r = requests.post(
@@ -111,23 +110,27 @@ def macro_analysis(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
+أرجع JSON فقط بدون أي نص إضافي:
+
+{{
+"impact": ["...","...","..."],
+"winners": ["...","...","..."],
+"losers": ["...","..."]
+}}
+
 حلل الخبر:
-
-- التأثير على القطاعات
-- الأسهم المستفيدة (3)
-- الأسهم المتضررة (2)
-
-بالعربية بشكل مختصر.
-
 {text[:800]}
 """
                 }]
             },
             timeout=10
         )
-        return r.json()["choices"][0]["message"]["content"]
+
+        content = r.json()["choices"][0]["message"]["content"]
+        return json.loads(content)
+
     except:
-        return "تعذر التحليل"
+        return None
 
 async def send_geo(n):
     global last_geo
@@ -142,6 +145,15 @@ async def send_geo(n):
 
     analysis = macro_analysis(n["title"])
 
+    if analysis:
+        impact = "\n".join([f"• {x}" for x in analysis["impact"]])
+        winners = " - ".join(analysis["winners"])
+        losers = " - ".join(analysis["losers"])
+    else:
+        impact = "تعذر التحليل"
+        winners = "-"
+        losers = "-"
+
     msg = f"""🌍 حدث مهم (تحليل السوق)
 
 📰 {n["title"]}
@@ -150,7 +162,13 @@ async def send_geo(n):
 ⚡️ {lvl}
 
 📊 التأثير:
-{analysis}
+{impact}
+
+🎯 مستفيد:
+🟢 {winners}
+
+⚠️ متضرر:
+🔴 {losers}
 """
 
     for c in CHAT_IDS:
@@ -216,12 +234,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v46 FULL")
+    print("🚀 RUNNING v46.1 (JSON MACRO FIXED)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46 (Full System)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.1 (Macro JSON)")
 
         while True:
             try:
