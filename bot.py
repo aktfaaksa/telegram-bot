@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50.1 (Ultimate + Trading) 🚀 =====
+# ===== Alpha Market Intelligence v50.2 (Ultimate + Small Cap) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -12,7 +12,7 @@ CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.1 (aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
@@ -77,7 +77,7 @@ def score_news(text):
     except:
         return None
 
-# ===== ENTRY TIMING =====
+# ===== ENTRY =====
 def entry_timing(dp):
     if dp <= 1:
         return "🟢 مبكر"
@@ -94,7 +94,7 @@ def detect_contradiction(sentiment, dp):
         return "⚠️ خبر سلبي لكن السعر مرتفع"
     return None
 
-# ===== NEW: TARGET / STOP / CONFIDENCE =====
+# ===== TARGET / STOP / CONF =====
 def get_target(price, dp):
     if dp <= 1:
         return round(price * 1.03, 2)
@@ -119,7 +119,7 @@ async def send_msg(text):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=text)
 
-# ===== PROCESS NEWS =====
+# ===== PROCESS =====
 async def process_news(session, e):
 
     title = e.title.lower()
@@ -151,7 +151,6 @@ async def process_news(session, e):
         await send_msg(msg)
         return
 
-    # ===== NORMAL =====
     if not symbol or not can_send(symbol):
         return
 
@@ -162,9 +161,6 @@ async def process_news(session, e):
     score = analysis.get("score", 0)
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
-
-    if score < 45:
-        return
 
     try:
         async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
@@ -178,17 +174,29 @@ async def process_news(session, e):
     if not price:
         return
 
+    # ===== SMALL CAP LOGIC =====
+    is_small = price <= 20
+
+    if is_small:
+        if not (score >= 35 and sentiment == "bullish"):
+            return
+    else:
+        if score < 45:
+            return
+
     timing = entry_timing(dp)
     contradiction = detect_contradiction(sentiment, dp)
 
-    # ===== NEW CALCULATIONS =====
     target = get_target(price, dp)
     stop = get_stop(price)
     confidence = get_confidence(score)
 
     emoji = "🟢" if sentiment == "bullish" else "🔴" if sentiment == "bearish" else "🟡"
 
-    msg = f"""{emoji} {score}/100
+    # ===== SMALL CAP LABEL =====
+    tag = "🚀 SMALL CAP SIGNAL\n\n" if is_small else ""
+
+    msg = f"""{tag}{emoji} {score}/100
 
 🏢 {symbol}
 📰 {e.title}
@@ -209,6 +217,9 @@ async def process_news(session, e):
     if score >= 80 and sentiment == "bullish" and dp <= 2:
         msg += "\n🔥 إشارة قوية"
 
+    if is_small:
+        msg += "\n⚠️ مخاطرة عالية (Small Cap)"
+
     if contradiction:
         msg += f"\n{contradiction}"
 
@@ -216,12 +227,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50.1 (ULTIMATE TRADING)")
+    print("🚀 RUNNING v50.2 (SMALL CAP ENABLED)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.1 (Trading System)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.2 (Small Cap Mode)")
 
         while True:
             try:
