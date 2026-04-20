@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v48 (Trading Mode) 🚀 =====
+# ===== Alpha Market Intelligence v48.1 (Clean Signals) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -22,7 +22,10 @@ RSS_FEEDS = [
 
 sent = set()
 cooldown = {}
-last_geo = 0
+
+# ===== FILTERS =====
+CRAMER_FILTER = ["jim cramer"]
+TRASH = ["which","should you","vs","opinion","preview"]
 
 # ===== UTIL =====
 def tr(x):
@@ -85,9 +88,23 @@ def score_news(text):
 
 # ===== NEWS =====
 async def send_news(session, n):
+    title = n["title"].lower()
+
+    # ❌ حذف السبام
+    if any(x in title for x in CRAMER_FILTER):
+        return
+
+    if any(x in title for x in TRASH):
+        return
+
     symbol = extract_symbol(n["title"])
     if not symbol or not can_send(symbol):
         return
+
+    key = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
+    if key in sent:
+        return
+    sent.add(key)
 
     analysis = score_news(n["title"])
     if not analysis:
@@ -97,7 +114,8 @@ async def send_news(session, n):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    if score < 40:
+    # 🔥 فلترة أقوى
+    if score < 45:
         return
 
     try:
@@ -112,7 +130,6 @@ async def send_news(session, n):
     if not price:
         return
 
-    # ===== NEW FEATURES =====
     timing = entry_timing(dp)
     contradiction = detect_contradiction(sentiment, dp)
 
@@ -132,7 +149,8 @@ async def send_news(session, n):
 🧠 {reason}
 """
 
-    if score >= 75 and sentiment == "bullish":
+    # 🔥 إشارة قوية محسّنة
+    if score >= 80 and sentiment == "bullish" and dp <= 2:
         msg += "\n🔥 إشارة قوية"
 
     if contradiction:
@@ -143,12 +161,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v48 (TRADING MODE)")
+    print("🚀 RUNNING v48.1 (CLEAN MODE)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v48 (Trading Mode)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v48.1 (Clean Signals)")
 
         while True:
             try:
