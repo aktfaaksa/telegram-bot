@@ -1,14 +1,20 @@
-# ===== Alpha Market Intelligence v51 DEBUG 🚀 =====
+# ===== Alpha Market Intelligence v51 (Railway Ready + Debug) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
+# ===== CONFIG (Railway) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 
-CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
+if not BOT_TOKEN or not FINNHUB or not OPENROUTER:
+    raise ValueError("❌ تأكد من Environment Variables في Railway")
+
+# 👇 حط ID حقك هنا
+CHAT_IDS = [6315087880]
+
 bot = Bot(token=BOT_TOKEN)
 
 HEADERS = {
@@ -26,6 +32,7 @@ cooldown = {}
 
 TRASH = ["which","should you","vs","opinion","preview"]
 
+# ===== GEOPOLITICAL =====
 GEOPOLITICAL_EVENTS = {
     "oil": ["oil","opec","crude","energy"],
     "war": ["war","attack","missile","conflict"],
@@ -82,7 +89,7 @@ def score_news(text):
         print("AI ERROR")
         return None
 
-# ===== SAFE GET =====
+# ===== SAFE REQUEST =====
 async def safe_get(session, url):
     for _ in range(2):
         try:
@@ -98,8 +105,8 @@ async def send_msg(text):
     for c in CHAT_IDS:
         try:
             await bot.send_message(chat_id=c, text=text)
-        except:
-            print("TELEGRAM ERROR")
+        except Exception as e:
+            print("TELEGRAM ERROR:", e)
 
 # ===== SIGNAL =====
 async def generate_signal(session, e, symbol, geo):
@@ -134,7 +141,7 @@ async def generate_signal(session, e, symbol, geo):
         print("SKIP: no price")
         return
 
-    # 🔥 فلترة مخففة للتجربة
+    # 🔥 فلترة مخففة
     if score < 35:
         print("SKIP: low score")
         return
@@ -143,7 +150,7 @@ async def generate_signal(session, e, symbol, geo):
         print("SKIP: low volume")
         return
 
-    # GEO BOOST
+    # 🌍 GEO BOOST
     if geo:
         score += 10
 
@@ -185,7 +192,7 @@ async def process_news(session, e):
 
     print("SYMBOL:", symbol, "| GEO:", geo)
 
-    # لو ما فيه سهم لكن فيه جيوسياسي
+    # 🌍 جيوسياسي بدون سهم
     if not symbol and geo:
         for sym in SECTOR_MAP.get(geo, []):
             await generate_signal(session, e, sym, geo)
@@ -202,21 +209,23 @@ async def main():
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
 
-        await send_msg("🧪 DEBUG MODE شغال")
+        await send_msg("🧪 DEBUG MODE شغال (Railway)")
 
         while True:
             try:
+                print("\n🔥 LOOP START")
+
                 for url in RSS_FEEDS:
                     print("\nFEED:", url)
                     feed = feedparser.parse(url)
 
-                    for e in feed.entries[:5]:  # 🔥 فقط 5 أخبار للتجربة
+                    for e in feed.entries[:5]:
                         await process_news(session, e)
 
-                await asyncio.sleep(120)
+                await asyncio.sleep(60)
 
             except Exception as e:
                 print("ERROR:", e)
-                await asyncio.sleep(30)
+                await asyncio.sleep(20)
 
 asyncio.run(main())
