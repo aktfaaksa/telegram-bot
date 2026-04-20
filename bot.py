@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v47.1 (Context Aware) 🚀 =====
+# ===== Alpha Market Intelligence v47.2 (Context + Energy Fix) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -95,15 +95,22 @@ def geo_level(s):
 def smart_sector_map(text):
     t = text.lower()
 
-    # 🟢 Risk ON (سوق إيجابي)
+    # 🟢 Risk ON
     if any(x in t for x in ["risk","optimism","rally","confidence","recovery"]):
         return ["إقبال على المخاطرة", "تحسن السوق"], ["NVDA","AAPL","TSLA"], ["TLT"]
 
-    # 🛢️ طاقة
-    if any(x in t for x in ["oil","energy","opec"]):
-        return ["ارتفاع النفط"], ["XOM","CVX"], ["DAL","AAL"]
+    # 🛢️ طاقة (محسن)
+    if "oil" in t or "energy" in t:
 
-    # ⚔️ حرب (بدون risk-on)
+        if any(x in t for x in ["stall","drop","slow","decline"]):
+            return ["ضعف الإنتاج", "تقلب سوق الطاقة"], ["XOM"], ["DAL"]
+
+        if any(x in t for x in ["surge","rise","jump","increase"]):
+            return ["ارتفاع النفط"], ["XOM","CVX"], ["DAL","AAL"]
+
+        return ["تقلب في قطاع الطاقة"], ["XOM","CVX"], ["DAL","AAL"]
+
+    # ⚔️ حرب
     if any(x in t for x in ["war","attack","military"]) and not any(x in t for x in ["risk","optimism"]):
         return ["توتر جيوسياسي"], ["LMT","RTX"], ["DAL","AAL"]
 
@@ -252,12 +259,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v47.1 (CONTEXT AWARE)")
+    print("🚀 RUNNING v47.2 (ENERGY FIXED)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v47.1 (Context Aware)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v47.2 (Energy Fixed)")
 
         while True:
             try:
