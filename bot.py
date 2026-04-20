@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v47 (Pro Smart System) 🚀 =====
+# ===== Alpha Market Intelligence v47.1 (Context Aware) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,6 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-# ✅ مهم
 SEC_HEADERS = {
     "User-Agent": "AlphaBot/3.0 (aktfaaksa@gmail.com)"
 }
@@ -30,7 +29,7 @@ STRONG = [
     "earnings","revenue","guidance","forecast",
     "fda","approval","acquisition","merger",
     "deal","beats","misses",
-    "war","oil","inflation","fed","rates","economy","ai","chip"
+    "war","oil","inflation","fed","rates","economy","ai","chip","risk"
 ]
 
 TRASH = ["which","should you","vs","opinion"]
@@ -92,24 +91,29 @@ def geo_score(t):
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
-# ===== SMART SECTOR SYSTEM =====
+# ===== SMART CONTEXT SYSTEM =====
 def smart_sector_map(text):
     t = text.lower()
 
+    # 🟢 Risk ON (سوق إيجابي)
+    if any(x in t for x in ["risk","optimism","rally","confidence","recovery"]):
+        return ["إقبال على المخاطرة", "تحسن السوق"], ["NVDA","AAPL","TSLA"], ["TLT"]
+
+    # 🛢️ طاقة
     if any(x in t for x in ["oil","energy","opec"]):
         return ["ارتفاع النفط"], ["XOM","CVX"], ["DAL","AAL"]
 
-    if any(x in t for x in ["war","attack","military"]):
+    # ⚔️ حرب (بدون risk-on)
+    if any(x in t for x in ["war","attack","military"]) and not any(x in t for x in ["risk","optimism"]):
         return ["توتر جيوسياسي"], ["LMT","RTX"], ["DAL","AAL"]
 
+    # 💻 تقنية
     if any(x in t for x in ["ai","chip","technology"]):
         return ["نمو قطاع التقنية"], ["NVDA","MSFT"], ["INTC"]
 
+    # 🏦 بنوك
     if any(x in t for x in ["bank","fed","rates"]):
         return ["تحرك الفائدة"], ["JPM","BAC"], ["ARKK"]
-
-    if any(x in t for x in ["airline","travel"]):
-        return ["ضغط على الطيران"], [], ["DAL","AAL"]
 
     return None
 
@@ -248,12 +252,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v47 (SMART SYSTEM)")
+    print("🚀 RUNNING v47.1 (CONTEXT AWARE)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v47 (Smart Pro)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v47.1 (Context Aware)")
 
         while True:
             try:
