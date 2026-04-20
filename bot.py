@@ -1,24 +1,19 @@
-# ===== Alpha Market Intelligence v51 (Railway Ready + Debug) 🚀 =====
+# ===== Alpha Market Intelligence v50.3 (RSI UPGRADE) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
-# ===== CONFIG (Railway) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
+ALPHA = os.getenv("ALPHA_VANTAGE_KEY")
 
-if not BOT_TOKEN or not FINNHUB or not OPENROUTER:
-    raise ValueError("❌ تأكد من Environment Variables في Railway")
-
-# 👇 حط ID حقك هنا
-CHAT_IDS = [6315087880]
-
+CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-HEADERS = {
-    "User-Agent": "AlphaBot/5.1 (aktfaaksa@gmail.com)"
+SEC_HEADERS = {
+    "User-Agent": "AlphaBot/5.3 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
@@ -27,49 +22,55 @@ RSS_FEEDS = [
     "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&output=atom"
 ]
 
-sent_cache = {}
+sent = set()
 cooldown = {}
 
+CRAMER_FILTER = ["jim cramer"]
+ANALYST_FILTER = ["maintains","price target","rating","upgrade","downgrade"]
 TRASH = ["which","should you","vs","opinion","preview"]
 
-# ===== GEOPOLITICAL =====
-GEOPOLITICAL_EVENTS = {
-    "oil": ["oil","opec","crude","energy"],
-    "war": ["war","attack","missile","conflict"],
-    "china": ["china","taiwan"]
-}
+KEYWORDS = [
+    "earnings","results","guidance",
+    "acquisition","merger","bankruptcy",
+    "deal","agreement","fda"
+]
 
-SECTOR_MAP = {
-    "oil": ["XOM","CVX"],
-    "war": ["LMT","RTX"],
-    "china": ["AAPL","TSLA"]
-}
+# ===== RSI =====
+async def get_rsi(symbol):
+    if not ALPHA:
+        return None
+    url = f"https://www.alphavantage.co/query?function=RSI&symbol={symbol}&interval=5min&time_period=14&series_type=close&apikey={ALPHA}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as r:
+                data = await r.json()
+                rsi_data = data.get("Technical Analysis: RSI", {})
+                if not rsi_data:
+                    return None
+                latest = list(rsi_data.values())[0]
+                return float(latest["RSI"])
+    except:
+        return None
 
 # ===== UTIL =====
-def translate(text):
+def tr(x):
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(text)
+        return GoogleTranslator(source='auto', target='ar').translate(x)
     except:
-        return ""
+        return x
 
 def extract_symbol(t):
     m = re.findall(r'\(([A-Z]{1,5})\)', t)
     return m[0] if m else None
 
-def is_duplicate(key):
+def can_send(sym):
     now = time.time()
-    if key in sent_cache and now - sent_cache[key] < 600:
-        return True
-    sent_cache[key] = now
-    return False
+    if sym in cooldown and now - cooldown[sym] < 900:
+        return False
+    cooldown[sym] = now
+    return True
 
-def detect_geo(title):
-    for event, words in GEOPOLITICAL_EVENTS.items():
-        if any(w in title for w in words):
-            return event
-    return None
-
-# ===== AI =====
+# ===== AI SCORE =====
 def score_news(text):
     try:
         r = requests.post(
@@ -79,153 +80,172 @@ def score_news(text):
                 "model": "openai/gpt-4o-mini",
                 "messages": [{
                     "role": "user",
-                    "content": f"JSON فقط: score + sentiment + reason\n{text[:300]}"
+                    "content": f"""
+أرجع JSON فقط:
+{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
+
+{text[:800]}
+"""
                 }]
             },
-            timeout=6
+            timeout=10
         )
         return json.loads(r.json()["choices"][0]["message"]["content"])
     except:
-        print("AI ERROR")
         return None
 
-# ===== SAFE REQUEST =====
-async def safe_get(session, url):
-    for _ in range(2):
-        try:
-            async with session.get(url) as r:
-                return await r.json()
-        except:
-            await asyncio.sleep(1)
-    print("API FAIL:", url)
+# ===== ENTRY =====
+def entry_timing(dp):
+    if dp <= 1:
+        return "🟢 مبكر"
+    elif dp <= 3:
+        return "🟡 متوسط"
+    else:
+        return "🔴 متأخر"
+
+def detect_contradiction(sentiment, dp):
+    if sentiment == "bullish" and dp < 0:
+        return "⚠️ خبر إيجابي لكن السعر نازل"
+    if sentiment == "bearish" and dp > 0:
+        return "⚠️ خبر سلبي لكن السعر مرتفع"
     return None
 
-# ===== SEND =====
+def get_target(price, dp):
+    if dp <= 1:
+        return round(price * 1.03, 2)
+    elif dp <= 3:
+        return round(price * 1.02, 2)
+    else:
+        return round(price * 1.01, 2)
+
+def get_stop(price):
+    return round(price * 0.97, 2)
+
+def get_confidence(score):
+    if score >= 85:
+        return "🔥 عالي"
+    elif score >= 70:
+        return "🟡 متوسط"
+    else:
+        return "⚪ ضعيف"
+
 async def send_msg(text):
     for c in CHAT_IDS:
-        try:
-            await bot.send_message(chat_id=c, text=text)
-        except Exception as e:
-            print("TELEGRAM ERROR:", e)
+        await bot.send_message(chat_id=c, text=text)
 
-# ===== SIGNAL =====
-async def generate_signal(session, e, symbol, geo):
+# ===== PROCESS =====
+async def process_news(session, e):
 
-    print(f"\n--- PROCESS {symbol} ---")
+    title = e.title.lower()
+
+    if any(x in title for x in CRAMER_FILTER): return
+    if any(x in title for x in ANALYST_FILTER): return
+    if any(x in title for x in TRASH): return
+
+    key = hashlib.md5((e.title + e.link).encode()).hexdigest()
+    if key in sent: return
+    sent.add(key)
+
+    symbol = extract_symbol(e.title)
+
+    if not symbol or not can_send(symbol):
+        return
 
     analysis = score_news(e.title)
     if not analysis:
-        print("SKIP: no AI")
         return
 
     score = analysis.get("score", 0)
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    print("AI:", score, sentiment)
-
-    data = await safe_get(session,
-        f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}"
-    )
-
-    if not data:
-        print("SKIP: no market data")
+    try:
+        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
+            d = await r.json()
+    except:
         return
 
-    price = data.get("c")
-    volume = data.get("v", 0)
-
-    print("MARKET:", price, volume)
+    price = d.get("c")
+    dp = d.get("dp", 0)
 
     if not price:
-        print("SKIP: no price")
         return
 
-    # 🔥 فلترة مخففة
-    if score < 35:
-        print("SKIP: low score")
+    # ===== RSI ADD =====
+    rsi = await get_rsi(symbol)
+
+    # ===== SMART FILTER =====
+    if not (
+        score >= 60 and
+        sentiment == "bullish" and
+        (rsi is None or rsi < 65)
+    ):
         return
 
-    if volume < 100000:
-        print("SKIP: low volume")
-        return
+    is_small = price <= 20
 
-    # 🌍 GEO BOOST
-    if geo:
-        score += 10
+    timing = entry_timing(dp)
+    contradiction = detect_contradiction(sentiment, dp)
 
-    target = round(price * 1.03, 2)
-    stop = round(price * 0.97, 2)
+    target = get_target(price, dp)
+    stop = get_stop(price)
+    confidence = get_confidence(score)
 
-    msg = f"""🚀 إشارة (DEBUG)
+    emoji = "🟢"
+
+    tag = "🚀 SMALL CAP SIGNAL\n\n" if is_small else ""
+
+    msg = f"""{tag}{emoji} {score}/100
 
 🏢 {symbol}
 📰 {e.title}
+🇸🇦 {tr(e.title)}
 
-📊 {price}$ | Vol:{volume}
-📊 Score: {score}
+📊 {price}$ | {round(dp,2)}%
+
+📉 RSI: {round(rsi,2) if rsi else "N/A"}
+
+⚡ توقيت الدخول:
+{timing}
+
+🎯 الهدف: {target}$
+🛑 وقف الخسارة: {stop}$
+📊 الثقة: {confidence}
 
 🧠 {reason}
 """
 
+    if score >= 80 and dp <= 2:
+        msg += "\n🔥 إشارة قوية"
+
+    if is_small:
+        msg += "\n⚠️ مخاطرة عالية (Small Cap)"
+
+    if contradiction:
+        msg += f"\n{contradiction}"
+
     await send_msg(msg)
-    print("SENT ✅")
-
-# ===== PROCESS =====
-async def process_news(session, e):
-
-    print("\nNEWS:", e.title)
-
-    title = e.title.lower()
-
-    if any(x in title for x in TRASH):
-        print("SKIP: trash")
-        return
-
-    key = hashlib.md5((e.title + e.link).encode()).hexdigest()
-    if is_duplicate(key):
-        print("SKIP: duplicate")
-        return
-
-    symbol = extract_symbol(e.title)
-    geo = detect_geo(title)
-
-    print("SYMBOL:", symbol, "| GEO:", geo)
-
-    # 🌍 جيوسياسي بدون سهم
-    if not symbol and geo:
-        for sym in SECTOR_MAP.get(geo, []):
-            await generate_signal(session, e, sym, geo)
-        return
-
-    if not symbol:
-        print("SKIP: no symbol")
-        return
-
-    await generate_signal(session, e, symbol, geo)
 
 # ===== MAIN =====
 async def main():
+    print("🚀 RUNNING v50.3 (RSI ENABLED)")
 
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
+    async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
-        await send_msg("🧪 DEBUG MODE شغال (Railway)")
+        for c in CHAT_IDS:
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.3 (RSI Mode)")
 
         while True:
             try:
-                print("\n🔥 LOOP START")
-
                 for url in RSS_FEEDS:
-                    print("\nFEED:", url)
                     feed = feedparser.parse(url)
-
-                    for e in feed.entries[:5]:
+                    for e in feed.entries:
                         await process_news(session, e)
 
-                await asyncio.sleep(60)
+                await asyncio.sleep(120)
 
             except Exception as e:
                 print("ERROR:", e)
-                await asyncio.sleep(20)
+                await asyncio.sleep(60)
 
 asyncio.run(main())
