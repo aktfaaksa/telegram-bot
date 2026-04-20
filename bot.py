@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50.5 (ELITE MODE) 🚀 =====
+# ===== Alpha Market Intelligence v50.6 (PRO MODE) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -12,7 +12,7 @@ ALPHA = os.getenv("ALPHA_VANTAGE_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.5 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.6 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -27,13 +27,13 @@ CRAMER_FILTER = ["jim cramer"]
 ANALYST_FILTER = ["maintains","price target","rating","upgrade","downgrade"]
 TRASH = ["which","should you","vs","opinion","preview"]
 
-# 🔥 فلتر المستثمرين (نخبوي)
 INVESTOR_FILTER = [
-    "david einhorn",
-    "hedge fund",
-    "likes this stock",
-    "buying this stock",
-    "bullish"
+    "david einhorn","hedge fund","likes this stock",
+    "buying this stock","bullish"
+]
+
+WEAK_NEWS = [
+    "overlooked","growth stock","why","to buy now"
 ]
 
 # ===== RSI =====
@@ -130,7 +130,8 @@ async def process_news(session, e):
     if any(x in title for x in CRAMER_FILTER): return
     if any(x in title for x in ANALYST_FILTER): return
     if any(x in title for x in TRASH): return
-    if any(x in title for x in INVESTOR_FILTER): return  # 🔥 جديد
+    if any(x in title for x in INVESTOR_FILTER): return
+    if any(x in title for x in WEAK_NEWS): return
 
     key = hashlib.md5((e.title + e.link).encode()).hexdigest()
     if key in sent: return
@@ -148,7 +149,6 @@ async def process_news(session, e):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    # 🔥 فلتر قوي
     if score < 70 or sentiment != "bullish":
         return
 
@@ -164,12 +164,18 @@ async def process_news(session, e):
     if not price:
         return
 
+    # ===== NO LATE ENTRY =====
+    if dp > 3:
+        return
+
     # ===== VOLUME =====
     current_vol, avg_vol = await get_volume_data(session, symbol)
 
-    if current_vol and avg_vol:
-        if current_vol < avg_vol * 1.5:
-            return  # 🔥 فلتر أقوى
+    if not current_vol or not avg_vol:
+        return
+
+    if current_vol < avg_vol * 1.8:
+        return
 
     # ===== RSI =====
     rsi = None
@@ -177,14 +183,14 @@ async def process_news(session, e):
         rsi = await get_rsi(symbol)
 
     if rsi and rsi > 70:
-        return  # 🔴 متشبع شراء
+        return
 
     # ===== OUTPUT =====
     timing = entry_timing(dp)
     target = get_target(price)
     stop = get_stop(price)
 
-    msg = f"""🔥 ELITE SIGNAL
+    msg = f"""💀 PRO SIGNAL
 
 🟢 {score}/100
 
@@ -193,7 +199,7 @@ async def process_news(session, e):
 🇸🇦 {tr(e.title)}
 
 📊 {price}$ | {round(dp,2)}%
-📊 Volume: {"🔥 عالي" if current_vol and avg_vol and current_vol > avg_vol else "عادي"}
+📊 Volume: 🔥 عالي
 
 📉 RSI: {round(rsi,2) if rsi else "N/A"}
 
@@ -205,18 +211,18 @@ async def process_news(session, e):
 """
 
     if score >= 85:
-        msg += "\n🚀 إشارة نارية"
+        msg += "\n🚀 إشارة نارية جدًا"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50.5 (ELITE MODE)")
+    print("🚀 RUNNING v50.6 (PRO MODE)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.5 (ELITE MODE)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.6 (PRO MODE)")
 
         while True:
             try:
