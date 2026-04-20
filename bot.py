@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v46.6 (Stable + Fallback) 🚀 =====
+# ===== Alpha Market Intelligence v47 (Pro Smart System) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-# ✅ مهم لا نحذفه
+# ✅ مهم
 SEC_HEADERS = {
     "User-Agent": "AlphaBot/3.0 (aktfaaksa@gmail.com)"
 }
@@ -30,7 +30,7 @@ STRONG = [
     "earnings","revenue","guidance","forecast",
     "fda","approval","acquisition","merger",
     "deal","beats","misses",
-    "war","oil","inflation","fed","rates","economy"
+    "war","oil","inflation","fed","rates","economy","ai","chip"
 ]
 
 TRASH = ["which","should you","vs","opinion"]
@@ -68,7 +68,7 @@ def score_news(text):
                     "role": "user",
                     "content": f"""
 أرجع JSON فقط:
-{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral"}}
+{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
 
 {text[:800]}
 """
@@ -92,7 +92,28 @@ def geo_score(t):
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
-# ===== MACRO (FIXED + FALLBACK) =====
+# ===== SMART SECTOR SYSTEM =====
+def smart_sector_map(text):
+    t = text.lower()
+
+    if any(x in t for x in ["oil","energy","opec"]):
+        return ["ارتفاع النفط"], ["XOM","CVX"], ["DAL","AAL"]
+
+    if any(x in t for x in ["war","attack","military"]):
+        return ["توتر جيوسياسي"], ["LMT","RTX"], ["DAL","AAL"]
+
+    if any(x in t for x in ["ai","chip","technology"]):
+        return ["نمو قطاع التقنية"], ["NVDA","MSFT"], ["INTC"]
+
+    if any(x in t for x in ["bank","fed","rates"]):
+        return ["تحرك الفائدة"], ["JPM","BAC"], ["ARKK"]
+
+    if any(x in t for x in ["airline","travel"]):
+        return ["ضغط على الطيران"], [], ["DAL","AAL"]
+
+    return None
+
+# ===== MACRO =====
 def macro_analysis(text):
     try:
         r = requests.post(
@@ -128,20 +149,16 @@ tickers أمريكية فقط
         losers = [l for l in clean_tickers(data.get("losers", [])) if l not in winners]
 
         if not impact:
-            impact = ["تحليل غير متوفر"]
+            impact = ["تحليل عام"]
 
         return impact, winners, losers
 
     except:
-        text_low = text.lower()
+        smart = smart_sector_map(text)
+        if smart:
+            return smart
 
-        if "oil" in text_low:
-            return ["ارتفاع النفط", "ضغط على الطيران"], ["XOM","CVX"], ["DAL","AAL"]
-
-        if "fed" in text_low or "rates" in text_low:
-            return ["ارتفاع الفائدة"], ["JPM","BAC"], ["NVDA","TSLA"]
-
-        return ["تحليل غير متوفر"], [], []
+        return ["خبر عام بدون تأثير مباشر"], [], []
 
 # ===== SEND GEO =====
 async def send_geo(n):
@@ -159,10 +176,6 @@ async def send_geo(n):
 
     impact, winners, losers = macro_analysis(n["title"])
 
-    impact_txt = "\n".join([f"• {x}" for x in impact]) if impact else "• تحليل غير متوفر"
-    winners_txt = " - ".join(winners) if winners else "لا يوجد"
-    losers_txt = " - ".join(losers) if losers else "لا يوجد"
-
     msg = f"""🌍 حدث مهم (تحليل السوق)
 
 📰 {n["title"]}
@@ -171,13 +184,13 @@ async def send_geo(n):
 ⚡️ {lvl}
 
 📊 التأثير:
-{impact_txt}
+{chr(10).join([f"• {x}" for x in impact])}
 
 🎯 مستفيد:
-🟢 {winners_txt}
+🟢 {" - ".join(winners) if winners else "لا يوجد"}
 
 ⚠️ متضرر:
-🔴 {losers_txt}
+🔴 {" - ".join(losers) if losers else "لا يوجد"}
 """
 
     for c in CHAT_IDS:
@@ -206,8 +219,9 @@ async def send_news(session, n):
 
     score = analysis.get("score", 0)
     sentiment = analysis.get("sentiment", "neutral")
+    reason = analysis.get("reason", "")
 
-    if score < 50:
+    if score < 40:
         return
 
     try:
@@ -225,6 +239,8 @@ async def send_news(session, n):
 🇸🇦 {tr(n["title"])}
 
 📊 {d['c']}$ | {round(d['dp'],2)}%
+
+🧠 {reason}
 """
 
     for c in CHAT_IDS:
@@ -232,12 +248,12 @@ async def send_news(session, n):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v46.6 (FINAL STABLE)")
+    print("🚀 RUNNING v47 (SMART SYSTEM)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.6 (Final)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v47 (Smart Pro)")
 
         while True:
             try:
