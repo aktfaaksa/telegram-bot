@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v48.1 (Clean Signals) 🚀 =====
+# ===== Alpha Market Intelligence v50 (Ultimate System) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -12,12 +12,13 @@ CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.0 (aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/5.0 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&output=atom"
 ]
 
 sent = set()
@@ -25,7 +26,16 @@ cooldown = {}
 
 # ===== FILTERS =====
 CRAMER_FILTER = ["jim cramer"]
+ANALYST_FILTER = [
+    "maintains","price target","rating","upgrade","downgrade"
+]
 TRASH = ["which","should you","vs","opinion","preview"]
+
+KEYWORDS = [
+    "earnings","results","guidance",
+    "acquisition","merger","bankruptcy",
+    "deal","agreement","fda"
+]
 
 # ===== UTIL =====
 def tr(x):
@@ -44,23 +54,6 @@ def can_send(sym):
         return False
     cooldown[sym] = now
     return True
-
-# ===== ENTRY TIMING =====
-def entry_timing(dp):
-    if dp <= 1:
-        return "🟢 مبكر"
-    elif dp <= 3:
-        return "🟡 متوسط"
-    else:
-        return "🔴 متأخر"
-
-# ===== CONTRADICTION =====
-def detect_contradiction(sentiment, dp):
-    if sentiment == "bullish" and dp < 0:
-        return "⚠️ خبر إيجابي لكن السعر نازل"
-    if sentiment == "bearish" and dp > 0:
-        return "⚠️ خبر سلبي لكن السعر مرتفع"
-    return None
 
 # ===== AI SCORE =====
 def score_news(text):
@@ -86,27 +79,66 @@ def score_news(text):
     except:
         return None
 
-# ===== NEWS =====
-async def send_news(session, n):
-    title = n["title"].lower()
+# ===== ENTRY TIMING =====
+def entry_timing(dp):
+    if dp <= 1:
+        return "🟢 مبكر"
+    elif dp <= 3:
+        return "🟡 متوسط"
+    else:
+        return "🔴 متأخر"
 
-    # ❌ حذف السبام
-    if any(x in title for x in CRAMER_FILTER):
+# ===== CONTRADICTION =====
+def detect_contradiction(sentiment, dp):
+    if sentiment == "bullish" and dp < 0:
+        return "⚠️ خبر إيجابي لكن السعر نازل"
+    if sentiment == "bearish" and dp > 0:
+        return "⚠️ خبر سلبي لكن السعر مرتفع"
+    return None
+
+# ===== SEND =====
+async def send_msg(text):
+    for c in CHAT_IDS:
+        await bot.send_message(chat_id=c, text=text)
+
+# ===== PROCESS NEWS =====
+async def process_news(session, e):
+
+    title = e.title.lower()
+
+    # ❌ فلترة السبام
+    if any(x in title for x in CRAMER_FILTER): return
+    if any(x in title for x in ANALYST_FILTER): return
+    if any(x in title for x in TRASH): return
+
+    key = hashlib.md5((e.title + e.link).encode()).hexdigest()
+    if key in sent: return
+    sent.add(key)
+
+    symbol = extract_symbol(e.title)
+
+    # ===== SEC MODE =====
+    if "sec.gov" in e.link:
+        if not any(k in title for k in KEYWORDS):
+            return
+
+        msg = f"""🔥 خبر رسمي (SEC)
+
+📰 {e.title}
+🇸🇦 {tr(e.title)}
+
+🏢 {symbol if symbol else "غير محدد"}
+
+🔗 {e.link}
+"""
+        await send_msg(msg)
         return
 
-    if any(x in title for x in TRASH):
-        return
-
-    symbol = extract_symbol(n["title"])
+    # ===== NORMAL NEWS =====
     if not symbol or not can_send(symbol):
         return
 
-    key = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
-    if key in sent:
-        return
-    sent.add(key)
-
-    analysis = score_news(n["title"])
+    analysis = score_news(e.title)
     if not analysis:
         return
 
@@ -114,7 +146,6 @@ async def send_news(session, n):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    # 🔥 فلترة أقوى
     if score < 45:
         return
 
@@ -138,8 +169,8 @@ async def send_news(session, n):
     msg = f"""{emoji} {score}/100
 
 🏢 {symbol}
-📰 {n["title"]}
-🇸🇦 {tr(n["title"])}
+📰 {e.title}
+🇸🇦 {tr(e.title)}
 
 📊 {price}$ | {round(dp,2)}%
 
@@ -149,31 +180,29 @@ async def send_news(session, n):
 🧠 {reason}
 """
 
-    # 🔥 إشارة قوية محسّنة
     if score >= 80 and sentiment == "bullish" and dp <= 2:
         msg += "\n🔥 إشارة قوية"
 
     if contradiction:
         msg += f"\n{contradiction}"
 
-    for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text=msg)
+    await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v48.1 (CLEAN MODE)")
+    print("🚀 RUNNING v50 (ULTIMATE SYSTEM)")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v48.1 (Clean Signals)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50 (Ultimate)")
 
         while True:
             try:
                 for url in RSS_FEEDS:
                     feed = feedparser.parse(url)
                     for e in feed.entries:
-                        await send_news(session, {"title": e.title, "link": e.link})
+                        await process_news(session, e)
 
                 await asyncio.sleep(180)
 
