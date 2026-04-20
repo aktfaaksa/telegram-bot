@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50.2 (Ultimate + Small Cap) 🚀 =====
+# ===== Alpha Market Intelligence v51 (Pro) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,8 +11,8 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"
+HEADERS = {
+    "User-Agent": "AlphaBot/5.1 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
@@ -21,39 +21,55 @@ RSS_FEEDS = [
     "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&output=atom"
 ]
 
-sent = set()
+sent_cache = {}
 cooldown = {}
 
 # ===== FILTERS =====
-CRAMER_FILTER = ["jim cramer"]
-ANALYST_FILTER = ["maintains","price target","rating","upgrade","downgrade"]
 TRASH = ["which","should you","vs","opinion","preview"]
+KEYWORDS = ["earnings","acquisition","merger","bankruptcy","guidance","fda"]
 
-KEYWORDS = [
-    "earnings","results","guidance",
-    "acquisition","merger","bankruptcy",
-    "deal","agreement","fda"
-]
+# ===== GEOPOLITICAL =====
+GEOPOLITICAL_EVENTS = {
+    "oil": ["oil","opec","crude","energy"],
+    "war": ["war","attack","missile","conflict"],
+    "sanctions": ["sanctions","ban","restriction"],
+    "china": ["china","taiwan","trade war"]
+}
+
+SECTOR_MAP = {
+    "oil": ["XOM","CVX","OXY"],
+    "war": ["LMT","RTX","NOC"],
+    "china": ["AAPL","TSLA","NVDA"],
+}
 
 # ===== UTIL =====
-def tr(x):
+def translate(text, score):
+    if score < 70:
+        return ""
     try:
-        return GoogleTranslator(source='auto', target='ar').translate(x)
+        return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
-        return x
+        return ""
 
 def extract_symbol(t):
     m = re.findall(r'\(([A-Z]{1,5})\)', t)
     return m[0] if m else None
 
+def is_duplicate(key):
+    now = time.time()
+    if key in sent_cache and now - sent_cache[key] < 1800:
+        return True
+    sent_cache[key] = now
+    return False
+
 def can_send(sym):
     now = time.time()
-    if sym in cooldown and now - cooldown[sym] < 900:
+    if sym in cooldown and now - cooldown[sym] < 600:
         return False
     cooldown[sym] = now
     return True
 
-# ===== AI SCORE =====
+# ===== AI =====
 def score_news(text):
     try:
         r = requests.post(
@@ -63,96 +79,68 @@ def score_news(text):
                 "model": "openai/gpt-4o-mini",
                 "messages": [{
                     "role": "user",
-                    "content": f"""
-أرجع JSON فقط:
-{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
-
-{text[:800]}
-"""
+                    "content": f"JSON فقط: score 0-100 + sentiment + reason\n{text[:500]}"
                 }]
             },
-            timeout=10
+            timeout=8
         )
         return json.loads(r.json()["choices"][0]["message"]["content"])
     except:
         return None
 
-# ===== ENTRY =====
-def entry_timing(dp):
-    if dp <= 1:
-        return "🟢 مبكر"
-    elif dp <= 3:
-        return "🟡 متوسط"
-    else:
-        return "🔴 متأخر"
-
-# ===== CONTRADICTION =====
-def detect_contradiction(sentiment, dp):
-    if sentiment == "bullish" and dp < 0:
-        return "⚠️ خبر إيجابي لكن السعر نازل"
-    if sentiment == "bearish" and dp > 0:
-        return "⚠️ خبر سلبي لكن السعر مرتفع"
+# ===== SAFE REQUEST =====
+async def safe_get(session, url):
+    for _ in range(3):
+        try:
+            async with session.get(url) as r:
+                return await r.json()
+        except:
+            await asyncio.sleep(1)
     return None
 
-# ===== TARGET / STOP / CONF =====
-def get_target(price, dp):
-    if dp <= 1:
-        return round(price * 1.03, 2)
-    elif dp <= 3:
-        return round(price * 1.02, 2)
-    else:
-        return round(price * 1.01, 2)
-
-def get_stop(price):
-    return round(price * 0.97, 2)
-
-def get_confidence(score):
-    if score >= 85:
-        return "🔥 عالي"
-    elif score >= 70:
-        return "🟡 متوسط"
-    else:
-        return "⚪ ضعيف"
+# ===== GEO DETECT =====
+def detect_geo(title):
+    for event, words in GEOPOLITICAL_EVENTS.items():
+        if any(w in title for w in words):
+            return event
+    return None
 
 # ===== SEND =====
 async def send_msg(text):
     for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text=text)
+        try:
+            await bot.send_message(chat_id=c, text=text)
+        except:
+            pass
 
 # ===== PROCESS =====
 async def process_news(session, e):
 
     title = e.title.lower()
 
-    if any(x in title for x in CRAMER_FILTER): return
-    if any(x in title for x in ANALYST_FILTER): return
-    if any(x in title for x in TRASH): return
+    if any(x in title for x in TRASH):
+        return
 
     key = hashlib.md5((e.title + e.link).encode()).hexdigest()
-    if key in sent: return
-    sent.add(key)
+    if is_duplicate(key):
+        return
 
     symbol = extract_symbol(e.title)
+    geo = detect_geo(title)
 
-    # ===== SEC =====
-    if "sec.gov" in e.link:
-        if not any(k in title for k in KEYWORDS):
-            return
-
-        msg = f"""🔥 خبر رسمي (SEC)
-
-📰 {e.title}
-🇸🇦 {tr(e.title)}
-
-🏢 {symbol if symbol else "غير محدد"}
-
-🔗 {e.link}
-"""
-        await send_msg(msg)
+    # ===== GEO WITHOUT SYMBOL =====
+    if not symbol and geo:
+        for sym in SECTOR_MAP.get(geo, []):
+            await generate_signal(session, e, sym, geo)
         return
 
     if not symbol or not can_send(symbol):
         return
+
+    await generate_signal(session, e, symbol, geo)
+
+# ===== SIGNAL =====
+async def generate_signal(session, e, symbol, geo):
 
     analysis = score_news(e.title)
     if not analysis:
@@ -162,77 +150,75 @@ async def process_news(session, e):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    try:
-        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
-            d = await r.json()
-    except:
+    data = await safe_get(session,
+        f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}"
+    )
+
+    profile = await safe_get(session,
+        f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol}&token={FINNHUB}"
+    )
+
+    if not data or not profile:
         return
 
-    price = d.get("c")
-    dp = d.get("dp", 0)
+    price = data.get("c")
+    dp = data.get("dp", 0)
+    volume = data.get("v", 0)
+    market_cap = profile.get("marketCapitalization", 0)
 
-    if not price:
+    if not price or volume < 300000 or price < 1:
         return
 
-    # ===== SMALL CAP LOGIC =====
-    is_small = price <= 20
+    is_small = market_cap < 2_000_000_000
+
+    # ===== GEO BOOST =====
+    if geo:
+        score += 15
 
     if is_small:
-        if not (score >= 35 and sentiment == "bullish"):
+        if score < 55 or sentiment != "bullish":
             return
     else:
-        if score < 45:
+        if score < 60:
             return
 
-    timing = entry_timing(dp)
-    contradiction = detect_contradiction(sentiment, dp)
+    target = round(price * 1.03, 2)
+    stop = round(price * 0.97, 2)
 
-    target = get_target(price, dp)
-    stop = get_stop(price)
-    confidence = get_confidence(score)
+    arabic = translate(e.title, score)
 
-    emoji = "🟢" if sentiment == "bullish" else "🔴" if sentiment == "bearish" else "🟡"
+    market_mode = f"🌍 {geo.upper()} BULLISH\n\n" if geo else ""
 
-    # ===== SMALL CAP LABEL =====
-    tag = "🚀 SMALL CAP SIGNAL\n\n" if is_small else ""
-
-    msg = f"""{tag}{emoji} {score}/100
+    msg = f"""{market_mode}🚀 إشارة تداول
 
 🏢 {symbol}
 📰 {e.title}
-🇸🇦 {tr(e.title)}
+🇸🇦 {arabic}
 
 📊 {price}$ | {round(dp,2)}%
-
-⚡ توقيت الدخول:
-{timing}
+📦 حجم: {volume}
 
 🎯 الهدف: {target}$
-🛑 وقف الخسارة: {stop}$
-📊 الثقة: {confidence}
+🛑 وقف: {stop}$
 
+📊 سكـور: {score}
 🧠 {reason}
 """
 
-    if score >= 80 and sentiment == "bullish" and dp <= 2:
+    if score >= 85 and dp < 2:
         msg += "\n🔥 إشارة قوية"
 
     if is_small:
-        msg += "\n⚠️ مخاطرة عالية (Small Cap)"
-
-    if contradiction:
-        msg += f"\n{contradiction}"
+        msg += "\n⚠️ Small Cap"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50.2 (SMALL CAP ENABLED)")
 
-    async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
 
-        for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.2 (Small Cap Mode)")
+        await send_msg("✅ Alpha v51 جاهز")
 
         while True:
             try:
