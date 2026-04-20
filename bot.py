@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v47.2 (Context + Energy Fix) 🚀 =====
+# ===== Alpha Market Intelligence v48 (Trading Mode) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -24,16 +24,6 @@ sent = set()
 cooldown = {}
 last_geo = 0
 
-# ===== FILTERS =====
-STRONG = [
-    "earnings","revenue","guidance","forecast",
-    "fda","approval","acquisition","merger",
-    "deal","beats","misses",
-    "war","oil","inflation","fed","rates","economy","ai","chip","risk"
-]
-
-TRASH = ["which","should you","vs","opinion"]
-
 # ===== UTIL =====
 def tr(x):
     try:
@@ -52,8 +42,22 @@ def can_send(sym):
     cooldown[sym] = now
     return True
 
-def clean_tickers(lst):
-    return [x for x in lst if isinstance(x, str) and x.isupper() and 1 <= len(x) <= 5]
+# ===== ENTRY TIMING =====
+def entry_timing(dp):
+    if dp <= 1:
+        return "🟢 مبكر"
+    elif dp <= 3:
+        return "🟡 متوسط"
+    else:
+        return "🔴 متأخر"
+
+# ===== CONTRADICTION =====
+def detect_contradiction(sentiment, dp):
+    if sentiment == "bullish" and dp < 0:
+        return "⚠️ خبر إيجابي لكن السعر نازل"
+    if sentiment == "bearish" and dp > 0:
+        return "⚠️ خبر سلبي لكن السعر مرتفع"
+    return None
 
 # ===== AI SCORE =====
 def score_news(text):
@@ -79,147 +83,8 @@ def score_news(text):
     except:
         return None
 
-# ===== GEO =====
-def geo_score(t):
-    t = t.lower()
-    score = 0
-    if any(x in t for x in ["war","attack","strike","missile"]): score += 4
-    if any(x in t for x in ["oil","hormuz"]): score += 3
-    if any(x in t for x in ["iran","russia","china"]): score += 2
-    return score
-
-def geo_level(s):
-    return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
-
-# ===== SMART CONTEXT SYSTEM =====
-def smart_sector_map(text):
-    t = text.lower()
-
-    # 🟢 Risk ON
-    if any(x in t for x in ["risk","optimism","rally","confidence","recovery"]):
-        return ["إقبال على المخاطرة", "تحسن السوق"], ["NVDA","AAPL","TSLA"], ["TLT"]
-
-    # 🛢️ طاقة (محسن)
-    if "oil" in t or "energy" in t:
-
-        if any(x in t for x in ["stall","drop","slow","decline"]):
-            return ["ضعف الإنتاج", "تقلب سوق الطاقة"], ["XOM"], ["DAL"]
-
-        if any(x in t for x in ["surge","rise","jump","increase"]):
-            return ["ارتفاع النفط"], ["XOM","CVX"], ["DAL","AAL"]
-
-        return ["تقلب في قطاع الطاقة"], ["XOM","CVX"], ["DAL","AAL"]
-
-    # ⚔️ حرب
-    if any(x in t for x in ["war","attack","military"]) and not any(x in t for x in ["risk","optimism"]):
-        return ["توتر جيوسياسي"], ["LMT","RTX"], ["DAL","AAL"]
-
-    # 💻 تقنية
-    if any(x in t for x in ["ai","chip","technology"]):
-        return ["نمو قطاع التقنية"], ["NVDA","MSFT"], ["INTC"]
-
-    # 🏦 بنوك
-    if any(x in t for x in ["bank","fed","rates"]):
-        return ["تحرك الفائدة"], ["JPM","BAC"], ["ARKK"]
-
-    return None
-
-# ===== MACRO =====
-def macro_analysis(text):
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER}"},
-            json={
-                "model": "openai/gpt-4o-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": f"""
-أرجع JSON فقط:
-
-{{
-"impact": ["...","...","..."],
-"winners": ["TICKER","TICKER","TICKER"],
-"losers": ["TICKER","TICKER"]
-}}
-
-impact بالعربي فقط
-tickers أمريكية فقط
-
-{text[:800]}
-"""
-                }]
-            },
-            timeout=10
-        )
-
-        data = json.loads(r.json()["choices"][0]["message"]["content"])
-
-        impact = data.get("impact", [])
-        winners = clean_tickers(data.get("winners", []))
-        losers = [l for l in clean_tickers(data.get("losers", [])) if l not in winners]
-
-        if not impact:
-            impact = ["تحليل عام"]
-
-        return impact, winners, losers
-
-    except:
-        smart = smart_sector_map(text)
-        if smart:
-            return smart
-
-        return ["خبر عام بدون تأثير مباشر"], [], []
-
-# ===== SEND GEO =====
-async def send_geo(n):
-    global last_geo
-
-    lvl = geo_level(geo_score(n["title"]))
-    if not lvl:
-        return
-
-    cooldown_time = 300 if lvl == "🔴 عالي" else 900
-    if time.time() - last_geo < cooldown_time:
-        return
-
-    last_geo = time.time()
-
-    impact, winners, losers = macro_analysis(n["title"])
-
-    msg = f"""🌍 حدث مهم (تحليل السوق)
-
-📰 {n["title"]}
-🇸🇦 {tr(n["title"])}
-
-⚡️ {lvl}
-
-📊 التأثير:
-{chr(10).join([f"• {x}" for x in impact])}
-
-🎯 مستفيد:
-🟢 {" - ".join(winners) if winners else "لا يوجد"}
-
-⚠️ متضرر:
-🔴 {" - ".join(losers) if losers else "لا يوجد"}
-"""
-
-    for c in CHAT_IDS:
-        await bot.send_message(chat_id=c, text=msg)
-
 # ===== NEWS =====
 async def send_news(session, n):
-    title = n["title"].lower()
-
-    if any(x in title for x in TRASH): return
-    if not any(x in title for x in STRONG): return
-
-    key = hashlib.md5((n["title"] + n["link"]).encode()).hexdigest()
-    if key in sent: return
-    sent.add(key)
-
-    await send_geo(n)
-
     symbol = extract_symbol(n["title"])
     if not symbol or not can_send(symbol):
         return
@@ -241,6 +106,16 @@ async def send_news(session, n):
     except:
         return
 
+    price = d.get("c")
+    dp = d.get("dp", 0)
+
+    if not price:
+        return
+
+    # ===== NEW FEATURES =====
+    timing = entry_timing(dp)
+    contradiction = detect_contradiction(sentiment, dp)
+
     emoji = "🟢" if sentiment == "bullish" else "🔴" if sentiment == "bearish" else "🟡"
 
     msg = f"""{emoji} {score}/100
@@ -249,22 +124,31 @@ async def send_news(session, n):
 📰 {n["title"]}
 🇸🇦 {tr(n["title"])}
 
-📊 {d['c']}$ | {round(d['dp'],2)}%
+📊 {price}$ | {round(dp,2)}%
+
+⚡ توقيت الدخول:
+{timing}
 
 🧠 {reason}
 """
+
+    if score >= 75 and sentiment == "bullish":
+        msg += "\n🔥 إشارة قوية"
+
+    if contradiction:
+        msg += f"\n{contradiction}"
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v47.2 (ENERGY FIXED)")
+    print("🚀 RUNNING v48 (TRADING MODE)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v47.2 (Energy Fixed)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v48 (Trading Mode)")
 
         while True:
             try:
