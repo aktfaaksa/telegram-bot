@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50.3 (RSI UPGRADE) 🚀 =====
+# ===== Alpha Market Intelligence v50.4 (VOLUME + RSI) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -12,9 +12,7 @@ ALPHA = os.getenv("ALPHA_VANTAGE_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.3 (aktfaaksa@gmail.com)"
-}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.4 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -28,12 +26,6 @@ cooldown = {}
 CRAMER_FILTER = ["jim cramer"]
 ANALYST_FILTER = ["maintains","price target","rating","upgrade","downgrade"]
 TRASH = ["which","should you","vs","opinion","preview"]
-
-KEYWORDS = [
-    "earnings","results","guidance",
-    "acquisition","merger","bankruptcy",
-    "deal","agreement","fda"
-]
 
 # ===== RSI =====
 async def get_rsi(symbol):
@@ -51,6 +43,21 @@ async def get_rsi(symbol):
                 return float(latest["RSI"])
     except:
         return None
+
+# ===== VOLUME =====
+async def get_volume_data(session, symbol):
+    try:
+        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=20&token={FINNHUB}"
+        async with session.get(url) as r:
+            data = await r.json()
+            volumes = data.get("v", [])
+            if not volumes or len(volumes) < 5:
+                return None, None
+            current_volume = volumes[-1]
+            avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
+            return current_volume, avg_volume
+    except:
+        return None, None
 
 # ===== UTIL =====
 def tr(x):
@@ -70,7 +77,7 @@ def can_send(sym):
     cooldown[sym] = now
     return True
 
-# ===== AI SCORE =====
+# ===== AI =====
 def score_news(text):
     try:
         r = requests.post(
@@ -94,40 +101,12 @@ def score_news(text):
     except:
         return None
 
-# ===== ENTRY =====
+# ===== HELPERS =====
 def entry_timing(dp):
-    if dp <= 1:
-        return "🟢 مبكر"
-    elif dp <= 3:
-        return "🟡 متوسط"
-    else:
-        return "🔴 متأخر"
+    return "🟢 مبكر" if dp <= 1 else "🟡 متوسط" if dp <= 3 else "🔴 متأخر"
 
-def detect_contradiction(sentiment, dp):
-    if sentiment == "bullish" and dp < 0:
-        return "⚠️ خبر إيجابي لكن السعر نازل"
-    if sentiment == "bearish" and dp > 0:
-        return "⚠️ خبر سلبي لكن السعر مرتفع"
-    return None
-
-def get_target(price, dp):
-    if dp <= 1:
-        return round(price * 1.03, 2)
-    elif dp <= 3:
-        return round(price * 1.02, 2)
-    else:
-        return round(price * 1.01, 2)
-
-def get_stop(price):
-    return round(price * 0.97, 2)
-
-def get_confidence(score):
-    if score >= 85:
-        return "🔥 عالي"
-    elif score >= 70:
-        return "🟡 متوسط"
-    else:
-        return "⚪ ضعيف"
+def get_target(price): return round(price * 1.03, 2)
+def get_stop(price): return round(price * 0.97, 2)
 
 async def send_msg(text):
     for c in CHAT_IDS:
@@ -147,7 +126,6 @@ async def process_news(session, e):
     sent.add(key)
 
     symbol = extract_symbol(e.title)
-
     if not symbol or not can_send(symbol):
         return
 
@@ -159,6 +137,10 @@ async def process_news(session, e):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
+    if score < 60 or sentiment != "bullish":
+        return
+
+    # ===== PRICE =====
     try:
         async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
             d = await r.json()
@@ -167,73 +149,56 @@ async def process_news(session, e):
 
     price = d.get("c")
     dp = d.get("dp", 0)
-
     if not price:
         return
 
-    # ===== RSI ADD =====
-    rsi = await get_rsi(symbol)
+    # ===== VOLUME CHECK =====
+    current_vol, avg_vol = await get_volume_data(session, symbol)
 
-    # ===== SMART FILTER =====
-    if not (
-        score >= 60 and
-        sentiment == "bullish" and
-        (rsi is None or rsi < 65)
-    ):
-        return
+    if current_vol and avg_vol:
+        if current_vol < avg_vol * 1.2:
+            return  # ما فيه سيولة كافية ❌
 
-    is_small = price <= 20
+    # ===== RSI (اختياري) =====
+    rsi = None
+    if score >= 75:
+        rsi = await get_rsi(symbol)
 
     timing = entry_timing(dp)
-    contradiction = detect_contradiction(sentiment, dp)
-
-    target = get_target(price, dp)
+    target = get_target(price)
     stop = get_stop(price)
-    confidence = get_confidence(score)
 
-    emoji = "🟢"
-
-    tag = "🚀 SMALL CAP SIGNAL\n\n" if is_small else ""
-
-    msg = f"""{tag}{emoji} {score}/100
+    msg = f"""🟢 {score}/100
 
 🏢 {symbol}
 📰 {e.title}
 🇸🇦 {tr(e.title)}
 
 📊 {price}$ | {round(dp,2)}%
+📊 Volume: {"🔥 عالي" if current_vol and avg_vol and current_vol > avg_vol else "عادي"}
 
 📉 RSI: {round(rsi,2) if rsi else "N/A"}
 
-⚡ توقيت الدخول:
-{timing}
-
+⚡ توقيت الدخول: {timing}
 🎯 الهدف: {target}$
 🛑 وقف الخسارة: {stop}$
-📊 الثقة: {confidence}
 
 🧠 {reason}
 """
 
-    if score >= 80 and dp <= 2:
+    if score >= 80:
         msg += "\n🔥 إشارة قوية"
-
-    if is_small:
-        msg += "\n⚠️ مخاطرة عالية (Small Cap)"
-
-    if contradiction:
-        msg += f"\n{contradiction}"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50.3 (RSI ENABLED)")
+    print("🚀 RUNNING v50.4 (SMART MODE)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.3 (RSI Mode)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.4 (Volume + RSI)")
 
         while True:
             try:
