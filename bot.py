@@ -1,9 +1,8 @@
-# ===== Alpha Market Intelligence v46.4 (Stable Clean) 🚀 =====
+# ===== Alpha Market Intelligence v46.5 (Balanced Flow) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
 from deep_translator import GoogleTranslator
-from datetime import datetime
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
@@ -12,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-# ✅ لا نحذفه (مهم)
+# ✅ مهم لا نحذفه
 SEC_HEADERS = {
     "User-Agent": "AlphaBot/3.0 (aktfaaksa@gmail.com)"
 }
@@ -25,23 +24,22 @@ RSS_FEEDS = [
 sent = set()
 cooldown = {}
 last_geo = 0
-active_stocks = set()
 
-# ===== FILTERS =====
-STRONG = ["earnings","revenue","guidance","forecast",
-          "fda","approval","acquisition","merger",
-          "deal","beats","misses"]
+# ===== FILTERS (موسعة) =====
+STRONG = [
+    "earnings","revenue","guidance","forecast",
+    "fda","approval","acquisition","merger",
+    "deal","beats","misses",
+    "war","oil","inflation","fed","rates","economy"
+]
 
-WEAK = ["this year","skyrocket","surges","climbs","boom",
-        "expansion","growth","outlook","rally"]
-
-TRASH = ["which","should you","vs","analysis","opinion",
-         "announces","launches","price target","preview"]
+WEAK = ["skyrocket","boom","rally"]
+TRASH = ["which","should you","vs","opinion"]
 
 # ===== UTIL =====
 def tr(x):
     try:
-        return x if len(x) > 300 else GoogleTranslator(source='auto', target='ar').translate(x)
+        return GoogleTranslator(source='auto', target='ar').translate(x)
     except:
         return x
 
@@ -51,21 +49,13 @@ def extract_symbol(t):
 
 def can_send(sym):
     now = time.time()
-    if sym in cooldown and now - cooldown[sym] < 1800:
+    if sym in cooldown and now - cooldown[sym] < 900:
         return False
     cooldown[sym] = now
     return True
 
 def clean_tickers(lst):
     return [x for x in lst if isinstance(x, str) and x.isupper() and 1 <= len(x) <= 5]
-
-# ===== FORMAT =====
-def format_sentiment(sentiment, score):
-    if sentiment == "bullish":
-        return "🟢", "إيجابي قوي" if score >= 70 else "إيجابي"
-    elif sentiment == "bearish":
-        return "🔴", "سلبي قوي" if score >= 70 else "سلبي"
-    return "🟡", "محايد"
 
 # ===== AI SCORE =====
 def score_news(text):
@@ -103,7 +93,7 @@ def geo_score(t):
 def geo_level(s):
     return "🔴 عالي" if s >= 5 else "🟡 متوسط" if s >= 3 else None
 
-# ===== MACRO (FINAL FIXED) =====
+# ===== MACRO =====
 def macro_analysis(text):
     try:
         r = requests.post(
@@ -114,7 +104,7 @@ def macro_analysis(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
-أرجع JSON فقط بدون أي نص إضافي:
+أرجع JSON فقط:
 
 {{
 "impact": ["...","...","..."],
@@ -122,13 +112,9 @@ def macro_analysis(text):
 "losers": ["TICKER","TICKER"]
 }}
 
-شروط صارمة:
-- impact بالعربي فقط (مثال: ارتفاع النفط)
-- winners و losers = رموز أمريكية فقط
-- لا تكتب وصف
-- لا تكرر نفس السهم
+impact بالعربي فقط
+winners/losers = tickers أمريكية
 
-حلل الخبر:
 {text[:800]}
 """
                 }]
@@ -136,46 +122,32 @@ def macro_analysis(text):
             timeout=10
         )
 
-        content = r.json()["choices"][0]["message"]["content"]
-        data = json.loads(content)
-
+        data = json.loads(r.json()["choices"][0]["message"]["content"])
         impact = data.get("impact", [])
         winners = clean_tickers(data.get("winners", []))
-        losers = clean_tickers(data.get("losers", []))
+        losers = [l for l in clean_tickers(data.get("losers", [])) if l not in winners]
 
-        losers = [l for l in losers if l not in winners]
-
-        return {
-            "impact": impact,
-            "winners": winners,
-            "losers": losers
-        }
+        return impact, winners, losers
 
     except:
-        return None
+        return [], [], []
 
 # ===== SEND GEO =====
 async def send_geo(n):
     global last_geo
 
-    score = geo_score(n["title"])
-    lvl = geo_level(score)
+    lvl = geo_level(geo_score(n["title"]))
+    if not lvl:
+        return
 
-    if not lvl or time.time() - last_geo < 1800:
+    # 🔥 كولداون ذكي
+    cooldown_time = 300 if lvl == "🔴 عالي" else 900
+    if time.time() - last_geo < cooldown_time:
         return
 
     last_geo = time.time()
 
-    analysis = macro_analysis(n["title"])
-
-    if analysis:
-        impact = "\n".join([f"• {x}" for x in analysis["impact"]])
-        winners_txt = " - ".join(analysis["winners"])
-        losers_txt = " - ".join(analysis["losers"])
-    else:
-        impact = "تعذر التحليل"
-        winners_txt = "-"
-        losers_txt = "-"
+    impact, winners, losers = macro_analysis(n["title"])
 
     msg = f"""🌍 حدث مهم (تحليل السوق)
 
@@ -185,13 +157,13 @@ async def send_geo(n):
 ⚡️ {lvl}
 
 📊 التأثير:
-{impact}
+{chr(10).join([f"• {x}" for x in impact])}
 
 🎯 مستفيد:
-🟢 {winners_txt}
+🟢 {" - ".join(winners)}
 
 ⚠️ متضرر:
-🔴 {losers_txt}
+🔴 {" - ".join(losers)}
 """
 
     for c in CHAT_IDS:
@@ -201,7 +173,6 @@ async def send_geo(n):
 async def send_news(session, n):
     title = n["title"].lower()
 
-    if any(x in title for x in WEAK): return
     if any(x in title for x in TRASH): return
     if not any(x in title for x in STRONG): return
 
@@ -212,16 +183,15 @@ async def send_news(session, n):
     await send_geo(n)
 
     symbol = extract_symbol(n["title"])
-    if not symbol or not can_send(symbol): return
-
-    active_stocks.add(symbol)
+    if not symbol or not can_send(symbol):
+        return
 
     analysis = score_news(n["title"])
-    if not analysis: return
+    if not analysis:
+        return
 
-    score = analysis.get("score", 0)
-    sentiment = analysis.get("sentiment", "neutral")
-    reason = analysis.get("reason", "")
+    score = analysis["score"]
+    sentiment = analysis["sentiment"]
 
     if score < 50:
         return
@@ -232,37 +202,26 @@ async def send_news(session, n):
     except:
         return
 
-    if not d.get("c"): return
-
-    emoji, sentiment_ar = format_sentiment(sentiment, score)
-
-    msg = f"""{emoji} {sentiment_ar} ({score}/100)
+    msg = f"""{'🟢' if sentiment=='bullish' else '🔴'} {score}/100
 
 🏢 {symbol}
 📰 {n["title"]}
 🇸🇦 {tr(n["title"])}
 
 📊 {d['c']}$ | {round(d['dp'],2)}%
-
-🧠 {reason}
 """
-
-    if score >= 75 and sentiment == "bullish":
-        msg += "\n📢 فرصة شراء محتملة"
-    elif score >= 75 and sentiment == "bearish":
-        msg += "\n📢 احتمال هبوط"
 
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v46.4 (STABLE)")
+    print("🚀 RUNNING v46.5 (BALANCED)")
 
     async with aiohttp.ClientSession() as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.4 (Stable)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v46.5 (Balanced)")
 
         while True:
             try:
@@ -271,7 +230,7 @@ async def main():
                     for e in feed.entries:
                         await send_news(session, {"title": e.title, "link": e.link})
 
-                await asyncio.sleep(300)
+                await asyncio.sleep(180)  # أسرع
 
             except Exception as e:
                 print("ERROR:", e)
