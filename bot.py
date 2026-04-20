@@ -179,7 +179,7 @@ async def generate_signal(session, e, symbol, geo):
         if score < 55 or sentiment != "bullish":
             return
     else:
-        if score < 60:
+        if score < 40:
             return
 
     target = round(price * 1.03, 2)
