@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50 (Ultimate System) 🚀 =====
+# ===== Alpha Market Intelligence v50.1 (Ultimate + Trading) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -12,7 +12,7 @@ CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.0 (aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/5.1 (aktfaaksa@gmail.com)"
 }
 
 RSS_FEEDS = [
@@ -26,9 +26,7 @@ cooldown = {}
 
 # ===== FILTERS =====
 CRAMER_FILTER = ["jim cramer"]
-ANALYST_FILTER = [
-    "maintains","price target","rating","upgrade","downgrade"
-]
+ANALYST_FILTER = ["maintains","price target","rating","upgrade","downgrade"]
 TRASH = ["which","should you","vs","opinion","preview"]
 
 KEYWORDS = [
@@ -96,6 +94,26 @@ def detect_contradiction(sentiment, dp):
         return "⚠️ خبر سلبي لكن السعر مرتفع"
     return None
 
+# ===== NEW: TARGET / STOP / CONFIDENCE =====
+def get_target(price, dp):
+    if dp <= 1:
+        return round(price * 1.03, 2)
+    elif dp <= 3:
+        return round(price * 1.02, 2)
+    else:
+        return round(price * 1.01, 2)
+
+def get_stop(price):
+    return round(price * 0.97, 2)
+
+def get_confidence(score):
+    if score >= 85:
+        return "🔥 عالي"
+    elif score >= 70:
+        return "🟡 متوسط"
+    else:
+        return "⚪ ضعيف"
+
 # ===== SEND =====
 async def send_msg(text):
     for c in CHAT_IDS:
@@ -106,7 +124,6 @@ async def process_news(session, e):
 
     title = e.title.lower()
 
-    # ❌ فلترة السبام
     if any(x in title for x in CRAMER_FILTER): return
     if any(x in title for x in ANALYST_FILTER): return
     if any(x in title for x in TRASH): return
@@ -117,7 +134,7 @@ async def process_news(session, e):
 
     symbol = extract_symbol(e.title)
 
-    # ===== SEC MODE =====
+    # ===== SEC =====
     if "sec.gov" in e.link:
         if not any(k in title for k in KEYWORDS):
             return
@@ -134,7 +151,7 @@ async def process_news(session, e):
         await send_msg(msg)
         return
 
-    # ===== NORMAL NEWS =====
+    # ===== NORMAL =====
     if not symbol or not can_send(symbol):
         return
 
@@ -164,6 +181,11 @@ async def process_news(session, e):
     timing = entry_timing(dp)
     contradiction = detect_contradiction(sentiment, dp)
 
+    # ===== NEW CALCULATIONS =====
+    target = get_target(price, dp)
+    stop = get_stop(price)
+    confidence = get_confidence(score)
+
     emoji = "🟢" if sentiment == "bullish" else "🔴" if sentiment == "bearish" else "🟡"
 
     msg = f"""{emoji} {score}/100
@@ -176,6 +198,10 @@ async def process_news(session, e):
 
 ⚡ توقيت الدخول:
 {timing}
+
+🎯 الهدف: {target}$
+🛑 وقف الخسارة: {stop}$
+📊 الثقة: {confidence}
 
 🧠 {reason}
 """
@@ -190,12 +216,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50 (ULTIMATE SYSTEM)")
+    print("🚀 RUNNING v50.1 (ULTIMATE TRADING)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50 (Ultimate)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.1 (Trading System)")
 
         while True:
             try:
