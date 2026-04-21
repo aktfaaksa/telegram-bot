@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v51.0 (SMART MOMENTUM BREAKOUT) 🚀 =====
+# ===== Alpha Market Intelligence v51.1 (MULTI-LEVEL MOMENTUM) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.10 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.11 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -36,7 +36,7 @@ WEAK_NEWS = [
     "best stock","to invest","top stock"
 ]
 
-# ===== MOMENTUM BREAKOUT =====
+# ===== MULTI-LEVEL MOMENTUM =====
 async def detect_breakout(session, symbol):
     try:
         url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=30&token={FINNHUB}"
@@ -45,16 +45,22 @@ async def detect_breakout(session, symbol):
             closes = data.get("c", [])
 
             if len(closes) < 10:
-                return False
+                return None
 
             last = closes[-1]
             prev = closes[-5]
 
             change = ((last - prev) / prev) * 100
 
-            return change > 2.5  # 🔥 حركة قوية
+            if change > 3:
+                return "strong"
+            elif change > 1.5:
+                return "weak"
+            else:
+                return None
+
     except:
-        return False
+        return None
 
 # ===== VOLUME =====
 async def get_volume_data(session, symbol):
@@ -182,12 +188,13 @@ async def process_news(session, e):
         if current_vol < avg_vol * 1.5:
             return
 
-    # ===== BREAKOUT (NEW) =====
+    # ===== MOMENTUM BREAKOUT =====
     breakout = await detect_breakout(session, symbol)
 
-    # 🔥 تحسين التقييم
-    if breakout:
+    if breakout == "strong":
         score += 20
+    elif breakout == "weak":
+        score += 10
     else:
         score -= 5
 
@@ -198,6 +205,8 @@ async def process_news(session, e):
     timing = entry_timing(dp)
     target = get_target(price)
     stop = get_stop(price)
+
+    breakout_text = "🚀 قوي" if breakout == "strong" else "🟡 ضعيف" if breakout == "weak" else "❌ لا"
 
     msg = f"""💥 SMART SIGNAL
 
@@ -210,7 +219,7 @@ async def process_news(session, e):
 📊 {price}$ | {round(dp,2)}%
 📊 Volume: 🔥 عالي
 
-💥 Momentum Breakout: {"✅ نعم" if breakout else "❌ لا"}
+💥 Momentum: {breakout_text}
 
 ⚡ توقيت الدخول: {timing}
 🎯 الهدف: {target}$
@@ -219,8 +228,8 @@ async def process_news(session, e):
 🧠 {reason}
 """
 
-    if breakout:
-        msg += "\n🚀 حركة قوية (Momentum)"
+    if breakout == "strong":
+        msg += "\n🚀 حركة قوية جدًا"
 
     if score >= 80:
         msg += "\n🔥 إشارة قوية"
@@ -229,12 +238,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v51.0 (SMART MOMENTUM BREAKOUT)")
+    print("🚀 RUNNING v51.1 (MULTI-LEVEL MOMENTUM)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.0 (Momentum Mode)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.1 (Multi-Level Momentum)")
 
         while True:
             try:
