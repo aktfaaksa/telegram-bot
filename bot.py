@@ -1,9 +1,9 @@
-# ===== Alpha Hybrid Market Intelligence (Live Feed) 🚀 =====
+# ===== Alpha Market Intelligence v2.0 (Clean + Smart) 🚀 =====
 
-import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
+import asyncio, aiohttp, feedparser, hashlib, os, re, requests, json
 from telegram import Bot
 
-# ===== API KEYS (مهم - لا يتغير) =====
+# ===== API =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
@@ -15,14 +15,20 @@ bot = Bot(token=BOT_TOKEN)
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.reuters.com/markets/us/rss"
 ]
 
 sent = set()
 
-# ===== FILTERS =====
+# ===== FILTERS (🔥 مهم جدًا) =====
+CRAMER_FILTER = ["jim cramer", "cramer", "mad money"]
+
+TRASH_FILTER = [
+    "likes this stock", "should you buy", "top stock",
+    "why this stock", "opinion", "analysis", "preview"
+]
+
 WEAK_NEWS = [
-    "what makes", "why ", "undervalued",
-    "best stock", "to invest", "top stock",
     "earnings transcript", "conference call",
     "q1", "q2", "q3", "q4"
 ]
@@ -32,8 +38,8 @@ def extract_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
 
-# ===== AI تحليل =====
-def score_news(text):
+# ===== AI تحليل متقدم =====
+def analyze_news(text):
     try:
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -43,10 +49,15 @@ def score_news(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
-حلل هذا الخبر وأرجع JSON فقط:
-{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "شرح عربي مختصر"}}
+حلل الخبر وارجع JSON فقط:
+{{
+"type": "market أو stock أو risk",
+"impact": "high أو medium أو low",
+"direction": "bullish أو bearish أو neutral",
+"summary": "شرح عربي واضح ومختصر"
+}}
 
-{text[:500]}
+{text[:600]}
 """
                 }]
             },
@@ -61,7 +72,7 @@ async def send_msg(text):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=text)
 
-# ===== LIVE FEED =====
+# ===== LIVE SYSTEM =====
 async def live_feed():
 
     entries = []
@@ -70,7 +81,7 @@ async def live_feed():
         feed = feedparser.parse(url)
         entries.extend(feed.entries)
 
-    news, signals, risks = [], [], []
+    market_news, signals, risks = [], [], []
 
     for e in entries:
 
@@ -81,61 +92,68 @@ async def live_feed():
 
         title = e.title.lower()
 
-        # فلترة
+        # ===== فلترة قوية =====
+        if any(x in title for x in CRAMER_FILTER):
+            continue
+
+        if any(x in title for x in TRASH_FILTER):
+            continue
+
         if any(x in title for x in WEAK_NEWS):
             continue
 
-        analysis = score_news(e.title)
+        analysis = analyze_news(e.title)
         if not analysis:
             continue
 
-        score = analysis.get("score", 0)
-        sentiment = analysis.get("sentiment", "")
-        reason = analysis.get("reason", "")
+        impact = analysis.get("impact")
+        direction = analysis.get("direction")
+        summary = analysis.get("summary")
+        typ = analysis.get("type")
 
-        if score < 70:
+        # فقط الأخبار القوية
+        if impact != "high":
             continue
 
         symbol = extract_symbol(e.title)
 
-        # تصنيف
-        if sentiment == "bearish":
-            risks.append(f"🚨 {reason}")
+        # ===== التصنيف الذكي =====
+        if typ == "risk" or direction == "bearish":
+            risks.append(f"🚨 {summary}")
 
-        elif symbol:
-            signals.append(f"🎯 {symbol} - {reason}")
+        elif typ == "stock" and symbol:
+            signals.append(f"🎯 {symbol} - {summary}")
 
-        else:
-            news.append(f"📰 {reason}")
+        elif typ == "market":
+            market_news.append(f"📰 {summary}")
 
     # تحديد العدد
-    news = news[:5]
+    market_news = market_news[:4]
     signals = signals[:3]
     risks = risks[:3]
 
-    # بناء الرسالة
-    msg = "📡 تحديث السوق (Live)\n\n"
+    # ===== بناء الرسالة =====
+    msg = "📡 تحديث السوق الذكي (Live)\n\n"
 
-    if news:
-        msg += "🟢 أخبار مهمة:\n" + "\n".join(news) + "\n\n"
+    if market_news:
+        msg += "🟢 السوق:\n" + "\n".join(market_news) + "\n\n"
 
     if signals:
-        msg += "🎯 فرص:\n" + "\n".join(signals) + "\n\n"
+        msg += "🎯 فرص قوية:\n" + "\n".join(signals) + "\n\n"
 
     if risks:
-        msg += "🚨 تحذيرات:\n" + "\n".join(risks) + "\n\n"
+        msg += "🚨 مخاطر:\n" + "\n".join(risks) + "\n\n"
 
-    if not news and not signals and not risks:
-        msg += "⚪ السوق هادئ حالياً"
+    if not market_news and not signals and not risks:
+        msg += "⚪ لا يوجد أخبار مؤثرة حالياً"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 تشغيل البوت (Live Market Feed)")
+    print("🚀 تشغيل v2.0 (Smart Clean Feed)")
 
-    # رسالة بداية
-    await send_msg("✅ البوت شغال (Live Feed كل 5 دقائق)")
+    await send_msg("✅ البوت شغال v2.0 (فلترة ذكية + بدون ضوضاء)")
 
     while True:
         try:
