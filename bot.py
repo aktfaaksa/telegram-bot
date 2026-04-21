@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50.8 (SMART BREAKOUT) 🚀 =====
+# ===== Alpha Market Intelligence v50.9 (BALANCED BREAKOUT) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.8 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.9 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -184,6 +184,15 @@ async def process_news(session, e):
     # ===== BREAKOUT =====
     breakout = await detect_breakout(session, symbol)
 
+    # 🔥 تعديل ذكي
+    if breakout:
+        score += 15
+    else:
+        score -= 10
+
+    if score < 60:
+        return
+
     # ===== OUTPUT =====
     timing = entry_timing(dp)
     target = get_target(price)
@@ -219,12 +228,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50.8 (SMART BREAKOUT)")
+    print("🚀 RUNNING v50.9 (BALANCED BREAKOUT)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.8 (Smart Breakout)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.9 (Balanced Breakout)")
 
         while True:
             try:
