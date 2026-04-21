@@ -1,11 +1,10 @@
-# ===== Alpha Market Intelligence v2.0 (Clean + Smart) 🚀 =====
+# ===== Alpha Market Intelligence v2.1 (PRO EVENT + TREND) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, requests, json
 from telegram import Bot
 
 # ===== API =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
@@ -20,7 +19,7 @@ RSS_FEEDS = [
 
 sent = set()
 
-# ===== FILTERS (🔥 مهم جدًا) =====
+# ===== FILTERS =====
 CRAMER_FILTER = ["jim cramer", "cramer", "mad money"]
 
 TRASH_FILTER = [
@@ -33,12 +32,20 @@ WEAK_NEWS = [
     "q1", "q2", "q3", "q4"
 ]
 
+# 🔥 فلتر الأحداث الحقيقي
+EVENT_KEYWORDS = [
+    "announces", "approval", "acquires",
+    "merger", "deal", "partnership",
+    "reports", "beats", "misses",
+    "raises", "cuts", "launches"
+]
+
 # ===== استخراج رمز السهم =====
 def extract_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
 
-# ===== AI تحليل متقدم =====
+# ===== AI تحليل =====
 def analyze_news(text):
     try:
         r = requests.post(
@@ -54,7 +61,7 @@ def analyze_news(text):
 "type": "market أو stock أو risk",
 "impact": "high أو medium أو low",
 "direction": "bullish أو bearish أو neutral",
-"summary": "شرح عربي واضح ومختصر"
+"summary": "شرح عربي مختصر بناءً على الخبر فقط بدون تحليل أو توقع"
 }}
 
 {text[:600]}
@@ -83,6 +90,9 @@ async def live_feed():
 
     market_news, signals, risks = [], [], []
 
+    bullish = 0
+    bearish = 0
+
     for e in entries:
 
         key = hashlib.md5((e.title + e.link).encode()).hexdigest()
@@ -92,7 +102,7 @@ async def live_feed():
 
         title = e.title.lower()
 
-        # ===== فلترة قوية =====
+        # ===== فلترة =====
         if any(x in title for x in CRAMER_FILTER):
             continue
 
@@ -100,6 +110,13 @@ async def live_feed():
             continue
 
         if any(x in title for x in WEAK_NEWS):
+            continue
+
+        # 🔥 فلتر الأحداث فقط
+        if not any(word in title for word in EVENT_KEYWORDS):
+            continue
+
+        if len(title) < 25:
             continue
 
         analysis = analyze_news(e.title)
@@ -117,7 +134,13 @@ async def live_feed():
 
         symbol = extract_symbol(e.title)
 
-        # ===== التصنيف الذكي =====
+        # ===== حساب الاتجاه =====
+        if direction == "bullish":
+            bullish += 1
+        elif direction == "bearish":
+            bearish += 1
+
+        # ===== التصنيف =====
         if typ == "risk" or direction == "bearish":
             risks.append(f"🚨 {summary}")
 
@@ -127,33 +150,48 @@ async def live_feed():
         elif typ == "market":
             market_news.append(f"📰 {summary}")
 
-    # تحديد العدد
+    # ===== تحديد الاتجاه =====
+    if bullish > bearish:
+        market_trend = "🟢 صاعد"
+    elif bearish > bullish:
+        market_trend = "🔴 هابط"
+    else:
+        market_trend = "🟡 متذبذب"
+
+    # ===== Market Score =====
+    total = bullish + bearish
+    if total == 0:
+        score = 50
+    else:
+        score = int((bullish / total) * 100)
+
+    # ===== تقليل العدد =====
     market_news = market_news[:4]
     signals = signals[:3]
     risks = risks[:3]
 
     # ===== بناء الرسالة =====
-    msg = "📡 تحديث السوق الذكي (Live)\n\n"
+    msg = f"📡 تحديث السوق الاحترافي\n\n📊 الاتجاه: {market_trend}\n📊 قوة السوق: {score}/100\n\n"
 
     if market_news:
         msg += "🟢 السوق:\n" + "\n".join(market_news) + "\n\n"
 
     if signals:
-        msg += "🎯 فرص قوية:\n" + "\n".join(signals) + "\n\n"
+        msg += "🎯 فرص:\n" + "\n".join(signals) + "\n\n"
 
     if risks:
         msg += "🚨 مخاطر:\n" + "\n".join(risks) + "\n\n"
 
     if not market_news and not signals and not risks:
-        msg += "⚪ لا يوجد أخبار مؤثرة حالياً"
+        msg += "⚪ لا يوجد أحداث مؤثرة حالياً"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 تشغيل v2.0 (Smart Clean Feed)")
+    print("🚀 تشغيل v2.1 (PRO SYSTEM)")
 
-    await send_msg("✅ البوت شغال v2.0 (فلترة ذكية + بدون ضوضاء)")
+    await send_msg("✅ البوت شغال v2.1 (احترافي + اتجاه السوق + فلترة أحداث)")
 
     while True:
         try:
