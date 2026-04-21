@@ -171,18 +171,16 @@ async def process_news(session, e):
     # ===== VOLUME =====
     current_vol, avg_vol = await get_volume_data(session, symbol)
 
-    if not current_vol or not avg_vol:
-        return
-
-    if current_vol < avg_vol * 1.8:
-        return
-
+    if current_vol and avg_vol:
+    if current_vol < avg_vol * 1.3:
+        return  # فلتر معقول 👍
+    
     # ===== RSI =====
     rsi = None
-    if score >= 75:
+    if score >= 70:
         rsi = await get_rsi(symbol)
 
-    if rsi and rsi > 70:
+    if rsi and rsi > 75:
         return
 
     # ===== OUTPUT =====
