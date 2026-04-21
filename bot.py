@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v51.2 (HYBRID MOMENTUM) 🚀 =====
+# ===== Alpha Market Intelligence v51.3 (MOMENTUM ONLY) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.12 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.13 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -49,15 +49,12 @@ async def detect_breakout(session, symbol):
 
             last = closes[-1]
 
-            # حركة قصيرة (سريعة)
             prev_short = closes[-5]
             change_short = ((last - prev_short) / prev_short) * 100
 
-            # حركة أطول (التقاط الانفجار)
             prev_long = closes[-20]
             change_long = ((last - prev_long) / prev_long) * 100
 
-            # ===== القرار =====
             if change_short > 2:
                 return "strong"
             elif change_long > 5:
@@ -198,27 +195,20 @@ async def process_news(session, e):
         if current_vol < avg_vol * 1.5:
             return
 
-    # ===== HYBRID MOMENTUM =====
+    # ===== MOMENTUM (شرط أساسي) =====
     breakout = await detect_breakout(session, symbol)
 
-    if breakout == "strong":
-        score += 20
-    elif breakout == "weak":
-        score += 10
-    else:
-        score -= 5
-
-    if score < 60:
-        return
+    if breakout is None:
+        return  # ❌ لا حركة = لا إرسال
 
     # ===== OUTPUT =====
     timing = entry_timing(dp)
     target = get_target(price)
     stop = get_stop(price)
 
-    breakout_text = "🚀 قوي" if breakout == "strong" else "🟡 ضعيف" if breakout == "weak" else "❌ لا"
+    breakout_text = "🚀 قوي" if breakout == "strong" else "🟡 ضعيف"
 
-    msg = f"""💥 SMART SIGNAL
+    msg = f"""💀 MOMENTUM SIGNAL
 
 🟢 {score}/100
 
@@ -248,12 +238,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v51.2 (HYBRID MOMENTUM)")
+    print("🚀 RUNNING v51.3 (MOMENTUM ONLY)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.2 (Hybrid Momentum)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.3 (Momentum Only)")
 
         while True:
             try:
