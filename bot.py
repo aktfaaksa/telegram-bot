@@ -1,13 +1,14 @@
-# ===== Alpha Market Intelligence v2.3 (Event + Translation) 🚀 =====
+# ===== Alpha Market Intelligence v2.4 (AUTO SYMBOL + TRANSLATION) 🚀 =====
 
-import asyncio, aiohttp, feedparser, hashlib, os, re
+import asyncio, aiohttp, feedparser, hashlib, os, re, requests
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
 # ===== API =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
+OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 
+CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
 # ===== RSS =====
@@ -53,10 +54,43 @@ def tr(text):
     except:
         return text
 
-# ===== استخراج السهم =====
+# ===== استخراج الرمز (🔥 تلقائي) =====
 def extract_symbol(text):
+
+    # 1. من (TSLA)
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
-    return m[0] if m else None
+    if m:
+        return m[0]
+
+    # 2. AI
+    try:
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER}"},
+            json={
+                "model": "openai/gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+استخرج رمز السهم فقط (Ticker) من النص التالي.
+إذا لا يوجد، اكتب NONE فقط.
+
+{text}
+"""
+                }]
+            },
+            timeout=5
+        )
+
+        reply = r.json()["choices"][0]["message"]["content"].strip().upper()
+
+        if reply == "NONE" or len(reply) > 5:
+            return None
+
+        return reply
+
+    except:
+        return None
 
 # ===== إرسال =====
 async def send_msg(text):
@@ -106,11 +140,7 @@ async def live_feed():
             continue
 
         symbol = extract_symbol(e.title)
-
-        # ترجمة
         translated = tr(e.title)
-
-        formatted = f"📰 {e.title}\n🇸🇦 {translated}"
 
         # ===== تصنيف =====
         if any(x in title for x in ["drops", "falls", "declines", "cut", "risk"]):
@@ -121,11 +151,11 @@ async def live_feed():
             if symbol:
                 signals.append(f"🎯 {symbol}\n{e.title}\n🇸🇦 {translated}")
             else:
-                market_news.append(formatted)
+                market_news.append(f"📰 {e.title}\n🇸🇦 {translated}")
             bullish += 1
 
         else:
-            market_news.append(formatted)
+            market_news.append(f"📰 {e.title}\n🇸🇦 {translated}")
 
     # ===== الاتجاه =====
     if bullish > bearish:
@@ -144,7 +174,7 @@ async def live_feed():
     risks = risks[:3]
 
     # ===== الرسالة =====
-    msg = f"📡 تحديث السوق (Live)\n\n📊 الاتجاه: {trend}\n📊 القوة: {score}/100\n\n"
+    msg = f"📡 تحديث السوق (Auto AI)\n\n📊 الاتجاه: {trend}\n📊 القوة: {score}/100\n\n"
 
     if market_news:
         msg += "🟢 السوق:\n" + "\n\n".join(market_news) + "\n\n"
@@ -156,21 +186,20 @@ async def live_feed():
         msg += "🚨 مخاطر:\n" + "\n\n".join(risks) + "\n\n"
 
     if not market_news and not signals and not risks:
-        msg += "⚪ لا يوجد أحداث حقيقية حالياً"
+        msg += "⚪ لا يوجد أحداث حالياً"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 تشغيل v2.3 (Event + Translation)")
+    print("🚀 تشغيل v2.4 (AUTO SYMBOL AI)")
 
-    await send_msg("✅ البوت شغال v2.3 (ترجمة + نظام احترافي)")
+    await send_msg("✅ البوت شغال v2.4 (Auto Symbol + AI + ترجمة)")
 
     while True:
         try:
             await live_feed()
-            await asyncio.sleep(300)  # كل 5 دقائق
-
+            await asyncio.sleep(300)
         except Exception as e:
             print("ERROR:", e)
             await asyncio.sleep(60)
