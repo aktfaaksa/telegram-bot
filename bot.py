@@ -1,13 +1,13 @@
-# ===== Alpha Market Intelligence v2.2 (EVENT-DRIVEN PRO) 🚀 =====
+# ===== Alpha Market Intelligence v2.3 (Event + Translation) 🚀 =====
 
-import asyncio, aiohttp, feedparser, hashlib, os, re, requests, json
+import asyncio, aiohttp, feedparser, hashlib, os, re
 from telegram import Bot
+from deep_translator import GoogleTranslator
 
 # ===== API =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENROUTER = os.getenv("OPENROUTER_API_KEY")
-
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
+
 bot = Bot(token=BOT_TOKEN)
 
 # ===== RSS =====
@@ -32,7 +32,6 @@ WEAK_NEWS = [
     "q1", "q2", "q3", "q4"
 ]
 
-# 🔥 فلتر الأحداث
 EVENT_KEYWORDS = [
     "announces", "approval", "acquires",
     "merger", "deal", "partnership",
@@ -40,7 +39,6 @@ EVENT_KEYWORDS = [
     "raises", "cuts", "launches"
 ]
 
-# 💀 فلتر التوقعات (الأهم)
 PREDICTION_FILTER = [
     "expects", "forecast", "predict",
     "could", "may", "might",
@@ -48,7 +46,14 @@ PREDICTION_FILTER = [
     "price target", "outlook"
 ]
 
-# ===== استخراج رمز السهم =====
+# ===== ترجمة =====
+def tr(text):
+    try:
+        return GoogleTranslator(source='auto', target='ar').translate(text)
+    except:
+        return text
+
+# ===== استخراج السهم =====
 def extract_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
@@ -81,7 +86,7 @@ async def live_feed():
 
         title = e.title.lower()
 
-        # ===== فلترة قوية =====
+        # ===== فلترة =====
         if any(x in title for x in CRAMER_FILTER):
             continue
 
@@ -94,7 +99,6 @@ async def live_feed():
         if any(x in title for x in PREDICTION_FILTER):
             continue
 
-        # 🔥 أحداث فقط
         if not any(word in title for word in EVENT_KEYWORDS):
             continue
 
@@ -103,20 +107,25 @@ async def live_feed():
 
         symbol = extract_symbol(e.title)
 
-        # ===== تصنيف بسيط بدون AI (نقاء أعلى) =====
+        # ترجمة
+        translated = tr(e.title)
+
+        formatted = f"📰 {e.title}\n🇸🇦 {translated}"
+
+        # ===== تصنيف =====
         if any(x in title for x in ["drops", "falls", "declines", "cut", "risk"]):
-            risks.append(f"🚨 {e.title}")
+            risks.append(f"🚨 {e.title}\n🇸🇦 {translated}")
             bearish += 1
 
         elif any(x in title for x in ["surges", "rises", "gains", "beats", "deal", "acquires"]):
             if symbol:
-                signals.append(f"🎯 {symbol} - {e.title}")
+                signals.append(f"🎯 {symbol}\n{e.title}\n🇸🇦 {translated}")
             else:
-                market_news.append(f"📰 {e.title}")
+                market_news.append(formatted)
             bullish += 1
 
         else:
-            market_news.append(f"📰 {e.title}")
+            market_news.append(formatted)
 
     # ===== الاتجاه =====
     if bullish > bearish:
@@ -135,16 +144,16 @@ async def live_feed():
     risks = risks[:3]
 
     # ===== الرسالة =====
-    msg = f"📡 تحديث السوق (EVENT-DRIVEN)\n\n📊 الاتجاه: {trend}\n📊 القوة: {score}/100\n\n"
+    msg = f"📡 تحديث السوق (Live)\n\n📊 الاتجاه: {trend}\n📊 القوة: {score}/100\n\n"
 
     if market_news:
-        msg += "🟢 السوق:\n" + "\n".join(market_news) + "\n\n"
+        msg += "🟢 السوق:\n" + "\n\n".join(market_news) + "\n\n"
 
     if signals:
-        msg += "🎯 فرص:\n" + "\n".join(signals) + "\n\n"
+        msg += "🎯 فرص:\n" + "\n\n".join(signals) + "\n\n"
 
     if risks:
-        msg += "🚨 مخاطر:\n" + "\n".join(risks) + "\n\n"
+        msg += "🚨 مخاطر:\n" + "\n\n".join(risks) + "\n\n"
 
     if not market_news and not signals and not risks:
         msg += "⚪ لا يوجد أحداث حقيقية حالياً"
@@ -153,9 +162,9 @@ async def live_feed():
 
 # ===== MAIN =====
 async def main():
-    print("🚀 تشغيل v2.2 (EVENT-DRIVEN CLEAN)")
+    print("🚀 تشغيل v2.3 (Event + Translation)")
 
-    await send_msg("✅ البوت شغال v2.2 (Event-Driven Clean System)")
+    await send_msg("✅ البوت شغال v2.3 (ترجمة + نظام احترافي)")
 
     while True:
         try:
