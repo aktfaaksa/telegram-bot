@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v50.7 (BALANCED PRO) 🚀 =====
+# ===== Alpha Market Intelligence v50.8 (SMART BREAKOUT) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -7,12 +7,11 @@ from deep_translator import GoogleTranslator
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
-ALPHA = os.getenv("ALPHA_VANTAGE_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.7 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.8 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -33,25 +32,28 @@ INVESTOR_FILTER = [
 ]
 
 WEAK_NEWS = [
-    "overlooked","growth stock","why","to buy now"
+    "what makes","why ","undervalued",
+    "best stock","to invest","top stock"
 ]
 
-# ===== RSI =====
-async def get_rsi(symbol):
-    if not ALPHA:
-        return None
-    url = f"https://www.alphavantage.co/query?function=RSI&symbol={symbol}&interval=5min&time_period=14&series_type=close&apikey={ALPHA}"
+# ===== BREAKOUT =====
+async def detect_breakout(session, symbol):
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as r:
-                data = await r.json()
-                rsi_data = data.get("Technical Analysis: RSI", {})
-                if not rsi_data:
-                    return None
-                latest = list(rsi_data.values())[0]
-                return float(latest["RSI"])
+        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=20&token={FINNHUB}"
+        async with session.get(url) as r:
+            data = await r.json()
+            highs = data.get("h", [])
+            closes = data.get("c", [])
+
+            if len(highs) < 5:
+                return False
+
+            recent_high = max(highs[:-1])
+            current_price = closes[-1]
+
+            return current_price > recent_high
     except:
-        return None
+        return False
 
 # ===== VOLUME =====
 async def get_volume_data(session, symbol):
@@ -60,11 +62,14 @@ async def get_volume_data(session, symbol):
         async with session.get(url) as r:
             data = await r.json()
             volumes = data.get("v", [])
+
             if not volumes or len(volumes) < 5:
                 return None, None
-            current_volume = volumes[-1]
-            avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
-            return current_volume, avg_volume
+
+            current = volumes[-1]
+            avg = sum(volumes[:-1]) / len(volumes[:-1])
+
+            return current, avg
     except:
         return None, None
 
@@ -131,6 +136,7 @@ async def process_news(session, e):
     if any(x in title for x in ANALYST_FILTER): return
     if any(x in title for x in TRASH): return
     if any(x in title for x in INVESTOR_FILTER): return
+    if any(x in title for x in WEAK_NEWS): return
 
     key = hashlib.md5((e.title + e.link).encode()).hexdigest()
     if key in sent: return
@@ -148,11 +154,7 @@ async def process_news(session, e):
     sentiment = analysis.get("sentiment", "neutral")
     reason = analysis.get("reason", "")
 
-    # تخفيف الأخبار الضعيفة بدل حذفها
-    if any(x in title for x in WEAK_NEWS):
-        score -= 10
-
-    if score < 60 or sentiment != "bullish":
+    if score < 65 or sentiment != "bullish":
         return
 
     # ===== PRICE =====
@@ -164,37 +166,30 @@ async def process_news(session, e):
 
     price = d.get("c")
     dp = d.get("dp", 0)
+
     if not price:
         return
 
-    # لا دخول متأخر جدًا
-    if dp > 4:
+    # ===== NO LATE =====
+    if dp > 2.5:
         return
 
     # ===== VOLUME =====
     current_vol, avg_vol = await get_volume_data(session, symbol)
 
     if current_vol and avg_vol:
-        if current_vol < avg_vol * 1.3:
+        if current_vol < avg_vol * 1.5:
             return
 
-    # ===== RSI =====
-    rsi = None
-    if score >= 70:
-        rsi = await get_rsi(symbol)
-
-    if rsi:
-        if rsi > 80:
-            return
-        elif rsi > 70:
-            score -= 10
+    # ===== BREAKOUT =====
+    breakout = await detect_breakout(session, symbol)
 
     # ===== OUTPUT =====
     timing = entry_timing(dp)
     target = get_target(price)
     stop = get_stop(price)
 
-    msg = f"""🟢 SIGNAL
+    msg = f"""💥 SMART SIGNAL
 
 🟢 {score}/100
 
@@ -203,9 +198,9 @@ async def process_news(session, e):
 🇸🇦 {tr(e.title)}
 
 📊 {price}$ | {round(dp,2)}%
-📊 Volume: {"🔥 عالي" if current_vol and avg_vol and current_vol > avg_vol else "عادي"}
+📊 Volume: 🔥 عالي
 
-📉 RSI: {round(rsi,2) if rsi else "N/A"}
+💥 Breakout: {"✅ نعم" if breakout else "❌ لا"}
 
 ⚡ توقيت الدخول: {timing}
 🎯 الهدف: {target}$
@@ -214,6 +209,9 @@ async def process_news(session, e):
 🧠 {reason}
 """
 
+    if breakout:
+        msg += "\n🚀 اختراق قوي"
+
     if score >= 80:
         msg += "\n🔥 إشارة قوية"
 
@@ -221,12 +219,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v50.7 (BALANCED PRO)")
+    print("🚀 RUNNING v50.8 (SMART BREAKOUT)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.7 (Balanced Pro)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v50.8 (Smart Breakout)")
 
         while True:
             try:
