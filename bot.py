@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v51.3 (MOMENTUM ONLY) 🚀 =====
+# ===== Alpha Market Intelligence v51.4 (BALANCED MOMENTUM PRO) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.13 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.14 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -195,20 +195,25 @@ async def process_news(session, e):
         if current_vol < avg_vol * 1.5:
             return
 
-    # ===== MOMENTUM (شرط أساسي) =====
+    # ===== BALANCED MOMENTUM =====
     breakout = await detect_breakout(session, symbol)
 
-    if breakout is None:
-        return  # ❌ لا حركة = لا إرسال
+    if breakout == "strong":
+        score += 20
+    elif breakout == "weak":
+        score += 10
+    else:
+        if score < 75:
+            return  # يسمح فقط للأخبار القوية بدون حركة
 
     # ===== OUTPUT =====
     timing = entry_timing(dp)
     target = get_target(price)
     stop = get_stop(price)
 
-    breakout_text = "🚀 قوي" if breakout == "strong" else "🟡 ضعيف"
+    breakout_text = "🚀 قوي" if breakout == "strong" else "🟡 ضعيف" if breakout == "weak" else "❌ لا"
 
-    msg = f"""💀 MOMENTUM SIGNAL
+    msg = f"""💥 BALANCED SIGNAL
 
 🟢 {score}/100
 
@@ -231,19 +236,19 @@ async def process_news(session, e):
     if breakout == "strong":
         msg += "\n🚀 حركة قوية جدًا"
 
-    if score >= 80:
-        msg += "\n🔥 إشارة قوية"
+    if score >= 85:
+        msg += "\n🔥 إشارة قوية جدًا"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v51.3 (MOMENTUM ONLY)")
+    print("🚀 RUNNING v51.4 (BALANCED MOMENTUM PRO)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.3 (Momentum Only)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.4 (Balanced Momentum Pro)")
 
         while True:
             try:
