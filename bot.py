@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v51.1 (MULTI-LEVEL MOMENTUM) 🚀 =====
+# ===== Alpha Market Intelligence v51.2 (HYBRID MOMENTUM) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
@@ -11,7 +11,7 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.11 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.12 (aktfaaksa@gmail.com)"}
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
@@ -36,25 +36,35 @@ WEAK_NEWS = [
     "best stock","to invest","top stock"
 ]
 
-# ===== MULTI-LEVEL MOMENTUM =====
+# ===== HYBRID MOMENTUM =====
 async def detect_breakout(session, symbol):
     try:
-        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=30&token={FINNHUB}"
+        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=60&token={FINNHUB}"
         async with session.get(url) as r:
             data = await r.json()
             closes = data.get("c", [])
 
-            if len(closes) < 10:
+            if len(closes) < 20:
                 return None
 
             last = closes[-1]
-            prev = closes[-5]
 
-            change = ((last - prev) / prev) * 100
+            # حركة قصيرة (سريعة)
+            prev_short = closes[-5]
+            change_short = ((last - prev_short) / prev_short) * 100
 
-            if change > 3:
+            # حركة أطول (التقاط الانفجار)
+            prev_long = closes[-20]
+            change_long = ((last - prev_long) / prev_long) * 100
+
+            # ===== القرار =====
+            if change_short > 2:
                 return "strong"
-            elif change > 1.5:
+            elif change_long > 5:
+                return "strong"
+            elif change_short > 1:
+                return "weak"
+            elif change_long > 3:
                 return "weak"
             else:
                 return None
@@ -188,7 +198,7 @@ async def process_news(session, e):
         if current_vol < avg_vol * 1.5:
             return
 
-    # ===== MOMENTUM BREAKOUT =====
+    # ===== HYBRID MOMENTUM =====
     breakout = await detect_breakout(session, symbol)
 
     if breakout == "strong":
@@ -238,12 +248,12 @@ async def process_news(session, e):
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v51.1 (MULTI-LEVEL MOMENTUM)")
+    print("🚀 RUNNING v51.2 (HYBRID MOMENTUM)")
 
     async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
 
         for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.1 (Multi-Level Momentum)")
+            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.2 (Hybrid Momentum)")
 
         while True:
             try:
