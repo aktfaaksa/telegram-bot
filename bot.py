@@ -1,9 +1,9 @@
-# ===== Alpha Market Intelligence v51.4 (BALANCED MOMENTUM PRO) 🚀 =====
+# ===== Alpha Hybrid Market Intelligence (Live Feed) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, time, requests, json
 from telegram import Bot
-from deep_translator import GoogleTranslator
 
+# ===== API KEYS (مهم - لا يتغير) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB = os.getenv("FINNHUB_API_KEY")
 OPENROUTER = os.getenv("OPENROUTER_API_KEY")
@@ -11,101 +11,28 @@ OPENROUTER = os.getenv("OPENROUTER_API_KEY")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.14 (aktfaaksa@gmail.com)"}
-
+# ===== RSS =====
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
-    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&output=atom"
 ]
 
 sent = set()
-cooldown = {}
 
-CRAMER_FILTER = ["jim cramer"]
-ANALYST_FILTER = ["maintains","price target","rating","upgrade","downgrade"]
-TRASH = ["which","should you","vs","opinion","preview"]
-
-INVESTOR_FILTER = [
-    "david einhorn","hedge fund","likes this stock",
-    "buying this stock"
-]
-
+# ===== FILTERS =====
 WEAK_NEWS = [
-    "what makes","why ","undervalued",
-    "best stock","to invest","top stock"
+    "what makes", "why ", "undervalued",
+    "best stock", "to invest", "top stock",
+    "earnings transcript", "conference call",
+    "q1", "q2", "q3", "q4"
 ]
 
-# ===== HYBRID MOMENTUM =====
-async def detect_breakout(session, symbol):
-    try:
-        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=60&token={FINNHUB}"
-        async with session.get(url) as r:
-            data = await r.json()
-            closes = data.get("c", [])
-
-            if len(closes) < 20:
-                return None
-
-            last = closes[-1]
-
-            prev_short = closes[-5]
-            change_short = ((last - prev_short) / prev_short) * 100
-
-            prev_long = closes[-20]
-            change_long = ((last - prev_long) / prev_long) * 100
-
-            if change_short > 2:
-                return "strong"
-            elif change_long > 5:
-                return "strong"
-            elif change_short > 1:
-                return "weak"
-            elif change_long > 3:
-                return "weak"
-            else:
-                return None
-
-    except:
-        return None
-
-# ===== VOLUME =====
-async def get_volume_data(session, symbol):
-    try:
-        url = f"https://finnhub.io/api/v1/stock/candle?symbol={symbol}&resolution=5&count=20&token={FINNHUB}"
-        async with session.get(url) as r:
-            data = await r.json()
-            volumes = data.get("v", [])
-
-            if not volumes or len(volumes) < 5:
-                return None, None
-
-            current = volumes[-1]
-            avg = sum(volumes[:-1]) / len(volumes[:-1])
-
-            return current, avg
-    except:
-        return None, None
-
-# ===== UTIL =====
-def tr(x):
-    try:
-        return GoogleTranslator(source='auto', target='ar').translate(x)
-    except:
-        return x
-
-def extract_symbol(t):
-    m = re.findall(r'\(([A-Z]{1,5})\)', t)
+# ===== استخراج رمز السهم =====
+def extract_symbol(text):
+    m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
 
-def can_send(sym):
-    now = time.time()
-    if sym in cooldown and now - cooldown[sym] < 900:
-        return False
-    cooldown[sym] = now
-    return True
-
-# ===== AI =====
+# ===== AI تحليل =====
 def score_news(text):
     try:
         r = requests.post(
@@ -116,10 +43,10 @@ def score_news(text):
                 "messages": [{
                     "role": "user",
                     "content": f"""
-أرجع JSON فقط:
-{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "سبب مختصر"}}
+حلل هذا الخبر وأرجع JSON فقط:
+{{"score": 0-100, "sentiment": "bullish أو bearish أو neutral", "reason": "شرح عربي مختصر"}}
 
-{text[:800]}
+{text[:500]}
 """
                 }]
             },
@@ -129,138 +56,94 @@ def score_news(text):
     except:
         return None
 
-# ===== HELPERS =====
-def entry_timing(dp):
-    return "🟢 مبكر" if dp <= 1 else "🟡 متوسط" if dp <= 3 else "🔴 متأخر"
-
-def get_target(price): return round(price * 1.03, 2)
-def get_stop(price): return round(price * 0.97, 2)
-
+# ===== إرسال =====
 async def send_msg(text):
     for c in CHAT_IDS:
         await bot.send_message(chat_id=c, text=text)
 
-# ===== PROCESS =====
-async def process_news(session, e):
+# ===== LIVE FEED =====
+async def live_feed():
 
-    title = e.title.lower()
+    entries = []
 
-    # ===== FILTERS =====
-    if any(x in title for x in CRAMER_FILTER): return
-    if any(x in title for x in ANALYST_FILTER): return
-    if any(x in title for x in TRASH): return
-    if any(x in title for x in INVESTOR_FILTER): return
-    if any(x in title for x in WEAK_NEWS): return
+    for url in RSS_FEEDS:
+        feed = feedparser.parse(url)
+        entries.extend(feed.entries)
 
-    key = hashlib.md5((e.title + e.link).encode()).hexdigest()
-    if key in sent: return
-    sent.add(key)
+    news, signals, risks = [], [], []
 
-    symbol = extract_symbol(e.title)
-    if not symbol or not can_send(symbol):
-        return
+    for e in entries:
 
-    analysis = score_news(e.title)
-    if not analysis:
-        return
+        key = hashlib.md5((e.title + e.link).encode()).hexdigest()
+        if key in sent:
+            continue
+        sent.add(key)
 
-    score = analysis.get("score", 0)
-    sentiment = analysis.get("sentiment", "neutral")
-    reason = analysis.get("reason", "")
+        title = e.title.lower()
 
-    if score < 65 or sentiment != "bullish":
-        return
+        # فلترة
+        if any(x in title for x in WEAK_NEWS):
+            continue
 
-    # ===== PRICE =====
-    try:
-        async with session.get(f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB}") as r:
-            d = await r.json()
-    except:
-        return
+        analysis = score_news(e.title)
+        if not analysis:
+            continue
 
-    price = d.get("c")
-    dp = d.get("dp", 0)
+        score = analysis.get("score", 0)
+        sentiment = analysis.get("sentiment", "")
+        reason = analysis.get("reason", "")
 
-    if not price:
-        return
+        if score < 70:
+            continue
 
-    # ===== NO LATE =====
-    if dp > 2.5:
-        return
+        symbol = extract_symbol(e.title)
 
-    # ===== VOLUME =====
-    current_vol, avg_vol = await get_volume_data(session, symbol)
+        # تصنيف
+        if sentiment == "bearish":
+            risks.append(f"🚨 {reason}")
 
-    if current_vol and avg_vol:
-        if current_vol < avg_vol * 1.5:
-            return
+        elif symbol:
+            signals.append(f"🎯 {symbol} - {reason}")
 
-    # ===== BALANCED MOMENTUM =====
-    breakout = await detect_breakout(session, symbol)
+        else:
+            news.append(f"📰 {reason}")
 
-    if breakout == "strong":
-        score += 20
-    elif breakout == "weak":
-        score += 10
-    else:
-        if score < 75:
-            return  # يسمح فقط للأخبار القوية بدون حركة
+    # تحديد العدد
+    news = news[:5]
+    signals = signals[:3]
+    risks = risks[:3]
 
-    # ===== OUTPUT =====
-    timing = entry_timing(dp)
-    target = get_target(price)
-    stop = get_stop(price)
+    # بناء الرسالة
+    msg = "📡 تحديث السوق (Live)\n\n"
 
-    breakout_text = "🚀 قوي" if breakout == "strong" else "🟡 ضعيف" if breakout == "weak" else "❌ لا"
+    if news:
+        msg += "🟢 أخبار مهمة:\n" + "\n".join(news) + "\n\n"
 
-    msg = f"""💥 BALANCED SIGNAL
+    if signals:
+        msg += "🎯 فرص:\n" + "\n".join(signals) + "\n\n"
 
-🟢 {score}/100
+    if risks:
+        msg += "🚨 تحذيرات:\n" + "\n".join(risks) + "\n\n"
 
-🏢 {symbol}
-📰 {e.title}
-🇸🇦 {tr(e.title)}
-
-📊 {price}$ | {round(dp,2)}%
-📊 Volume: 🔥 عالي
-
-💥 Momentum: {breakout_text}
-
-⚡ توقيت الدخول: {timing}
-🎯 الهدف: {target}$
-🛑 وقف الخسارة: {stop}$
-
-🧠 {reason}
-"""
-
-    if breakout == "strong":
-        msg += "\n🚀 حركة قوية جدًا"
-
-    if score >= 85:
-        msg += "\n🔥 إشارة قوية جدًا"
+    if not news and not signals and not risks:
+        msg += "⚪ السوق هادئ حالياً"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 RUNNING v51.4 (BALANCED MOMENTUM PRO)")
+    print("🚀 تشغيل البوت (Live Market Feed)")
 
-    async with aiohttp.ClientSession(headers=SEC_HEADERS) as session:
+    # رسالة بداية
+    await send_msg("✅ البوت شغال (Live Feed كل 5 دقائق)")
 
-        for c in CHAT_IDS:
-            await bot.send_message(chat_id=c, text="✅ البوت جاهز v51.4 (Balanced Momentum Pro)")
+    while True:
+        try:
+            await live_feed()
+            await asyncio.sleep(300)  # كل 5 دقائق
 
-        while True:
-            try:
-                for url in RSS_FEEDS:
-                    feed = feedparser.parse(url)
-                    for e in feed.entries:
-                        await process_news(session, e)
-
-                await asyncio.sleep(120)
-
-            except Exception as e:
-                print("ERROR:", e)
-                await asyncio.sleep(60)
+        except Exception as e:
+            print("ERROR:", e)
+            await asyncio.sleep(60)
 
 asyncio.run(main())
