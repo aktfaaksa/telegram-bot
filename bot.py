@@ -1,4 +1,4 @@
-# ===== Alpha Market Intelligence v2.1 (PRO EVENT + TREND) 🚀 =====
+# ===== Alpha Market Intelligence v2.2 (EVENT-DRIVEN PRO) 🚀 =====
 
 import asyncio, aiohttp, feedparser, hashlib, os, re, requests, json
 from telegram import Bot
@@ -32,7 +32,7 @@ WEAK_NEWS = [
     "q1", "q2", "q3", "q4"
 ]
 
-# 🔥 فلتر الأحداث الحقيقي
+# 🔥 فلتر الأحداث
 EVENT_KEYWORDS = [
     "announces", "approval", "acquires",
     "merger", "deal", "partnership",
@@ -40,39 +40,18 @@ EVENT_KEYWORDS = [
     "raises", "cuts", "launches"
 ]
 
+# 💀 فلتر التوقعات (الأهم)
+PREDICTION_FILTER = [
+    "expects", "forecast", "predict",
+    "could", "may", "might",
+    "analyst", "analysts",
+    "price target", "outlook"
+]
+
 # ===== استخراج رمز السهم =====
 def extract_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
-
-# ===== AI تحليل =====
-def analyze_news(text):
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER}"},
-            json={
-                "model": "openai/gpt-4o-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": f"""
-حلل الخبر وارجع JSON فقط:
-{{
-"type": "market أو stock أو risk",
-"impact": "high أو medium أو low",
-"direction": "bullish أو bearish أو neutral",
-"summary": "شرح عربي مختصر بناءً على الخبر فقط بدون تحليل أو توقع"
-}}
-
-{text[:600]}
-"""
-                }]
-            },
-            timeout=10
-        )
-        return json.loads(r.json()["choices"][0]["message"]["content"])
-    except:
-        return None
 
 # ===== إرسال =====
 async def send_msg(text):
@@ -102,7 +81,7 @@ async def live_feed():
 
         title = e.title.lower()
 
-        # ===== فلترة =====
+        # ===== فلترة قوية =====
         if any(x in title for x in CRAMER_FILTER):
             continue
 
@@ -112,66 +91,51 @@ async def live_feed():
         if any(x in title for x in WEAK_NEWS):
             continue
 
-        # 🔥 فلتر الأحداث فقط
+        if any(x in title for x in PREDICTION_FILTER):
+            continue
+
+        # 🔥 أحداث فقط
         if not any(word in title for word in EVENT_KEYWORDS):
             continue
 
         if len(title) < 25:
             continue
 
-        analysis = analyze_news(e.title)
-        if not analysis:
-            continue
-
-        impact = analysis.get("impact")
-        direction = analysis.get("direction")
-        summary = analysis.get("summary")
-        typ = analysis.get("type")
-
-        # فقط الأخبار القوية
-        if impact != "high":
-            continue
-
         symbol = extract_symbol(e.title)
 
-        # ===== حساب الاتجاه =====
-        if direction == "bullish":
-            bullish += 1
-        elif direction == "bearish":
+        # ===== تصنيف بسيط بدون AI (نقاء أعلى) =====
+        if any(x in title for x in ["drops", "falls", "declines", "cut", "risk"]):
+            risks.append(f"🚨 {e.title}")
             bearish += 1
 
-        # ===== التصنيف =====
-        if typ == "risk" or direction == "bearish":
-            risks.append(f"🚨 {summary}")
+        elif any(x in title for x in ["surges", "rises", "gains", "beats", "deal", "acquires"]):
+            if symbol:
+                signals.append(f"🎯 {symbol} - {e.title}")
+            else:
+                market_news.append(f"📰 {e.title}")
+            bullish += 1
 
-        elif typ == "stock" and symbol:
-            signals.append(f"🎯 {symbol} - {summary}")
+        else:
+            market_news.append(f"📰 {e.title}")
 
-        elif typ == "market":
-            market_news.append(f"📰 {summary}")
-
-    # ===== تحديد الاتجاه =====
+    # ===== الاتجاه =====
     if bullish > bearish:
-        market_trend = "🟢 صاعد"
+        trend = "🟢 صاعد"
     elif bearish > bullish:
-        market_trend = "🔴 هابط"
+        trend = "🔴 هابط"
     else:
-        market_trend = "🟡 متذبذب"
+        trend = "🟡 متذبذب"
 
-    # ===== Market Score =====
     total = bullish + bearish
-    if total == 0:
-        score = 50
-    else:
-        score = int((bullish / total) * 100)
+    score = int((bullish / total) * 100) if total > 0 else 50
 
-    # ===== تقليل العدد =====
+    # ===== تقليل =====
     market_news = market_news[:4]
     signals = signals[:3]
     risks = risks[:3]
 
-    # ===== بناء الرسالة =====
-    msg = f"📡 تحديث السوق الاحترافي\n\n📊 الاتجاه: {market_trend}\n📊 قوة السوق: {score}/100\n\n"
+    # ===== الرسالة =====
+    msg = f"📡 تحديث السوق (EVENT-DRIVEN)\n\n📊 الاتجاه: {trend}\n📊 القوة: {score}/100\n\n"
 
     if market_news:
         msg += "🟢 السوق:\n" + "\n".join(market_news) + "\n\n"
@@ -183,15 +147,15 @@ async def live_feed():
         msg += "🚨 مخاطر:\n" + "\n".join(risks) + "\n\n"
 
     if not market_news and not signals and not risks:
-        msg += "⚪ لا يوجد أحداث مؤثرة حالياً"
+        msg += "⚪ لا يوجد أحداث حقيقية حالياً"
 
     await send_msg(msg)
 
 # ===== MAIN =====
 async def main():
-    print("🚀 تشغيل v2.1 (PRO SYSTEM)")
+    print("🚀 تشغيل v2.2 (EVENT-DRIVEN CLEAN)")
 
-    await send_msg("✅ البوت شغال v2.1 (احترافي + اتجاه السوق + فلترة أحداث)")
+    await send_msg("✅ البوت شغال v2.2 (Event-Driven Clean System)")
 
     while True:
         try:
