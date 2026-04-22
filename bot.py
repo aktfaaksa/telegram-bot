@@ -1,7 +1,6 @@
-# ===== Alpha Market Radar (SEC + RSS) 🚀 =====
+# ===== Alpha Market Radar FINAL 🚀 =====
 
 import asyncio
-import aiohttp
 import feedparser
 import os
 import re
@@ -14,7 +13,11 @@ CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 
 bot = Bot(token=BOT_TOKEN)
 
-# ===== RSS SOURCES =====
+# ===== SETTINGS =====
+MAX_NEWS = 15
+USE_TRANSLATION = True
+
+# ===== RSS =====
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -28,56 +31,63 @@ SEC_HEADERS = {
     "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"
 }
 
-# ===== LIMIT =====
-MAX_NEWS = 15
-
 # ===== MEMORY =====
 sent = set()
 
-# ===== STRONG NEWS FILTER =====
+# ===== BLOCK (REMOVE SPAM) =====
+BLOCK_KEYWORDS = [
+    "price target", "raises target", "cuts target",
+    "analyst", "should you buy", "opinion",
+    "earnings call", "conference call",
+    "transcript", "preview",
+    "market wrap", "stocks rise", "stocks fall"
+]
+
+# ===== STRONG NEWS =====
 STRONG_KEYWORDS = [
-    "earnings", "reports", "beats", "misses",
+    "reports earnings", "beats earnings", "misses earnings",
     "merger", "acquisition", "acquires",
-    "deal", "partnership",
-    "approval", "fda",
-    "guidance", "raises", "cuts",
-    "trial", "phase 1", "phase 2", "phase 3",
-    "clinical", "study", "results",
-    "successful", "positive results"
+    "announces deal", "partnership",
+    "fda approval", "approved",
+    "phase 2 results", "phase 3 results",
+    "positive results", "successful trial"
 ]
 
 # ===== FILTER =====
 def is_strong_news(title):
     t = title.lower()
 
-    if not any(word in t for word in STRONG_KEYWORDS):
+    if any(x in t for x in BLOCK_KEYWORDS):
         return False
 
-    if any(x in t for x in ["transcript", "conference call", "preview"]):
-        return False
+    if any(word in t for word in STRONG_KEYWORDS):
+        return True
 
-    return True
+    return False
 
 # ===== CLASSIFY =====
 def classify_news(title):
     t = title.lower()
 
-    if any(x in t for x in ["beats", "surges", "rises", "gains", "acquires", "deal", "approval", "positive"]):
+    if any(x in t for x in ["beats", "positive", "acquires", "approval", "surges"]):
         return "🚀 إيجابي"
 
-    if any(x in t for x in ["misses", "falls", "drops", "cuts", "lawsuit", "investigation"]):
+    if any(x in t for x in ["misses", "drops", "cuts", "lawsuit"]):
         return "⚠️ سلبي"
 
     return "📊 عادي"
 
 # ===== TRANSLATION =====
 def tr(text):
+    if not USE_TRANSLATION:
+        return ""
+
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
-        return text
+        return ""
 
-# ===== SYMBOL EXTRACTION =====
+# ===== SYMBOL =====
 def extract_symbol(text):
     match = re.findall(r'\(([A-Z]{1,5})\)', text)
     if match:
@@ -101,16 +111,14 @@ async def send_msg(text):
 # ===== FETCH RSS =====
 async def fetch_rss():
     entries = []
-
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
         entries.extend(feed.entries)
-
     return entries
 
 # ===== FETCH SEC =====
 def fetch_sec():
-    feed = feedparser.parse(SEC_RSS)
+    feed = feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS)
     return feed.entries[:20]
 
 # ===== MAIN =====
@@ -119,7 +127,7 @@ async def run_cycle():
 
     total_sent = 0
 
-    # ===== SEC FIRST =====
+    # ===== SEC =====
     sec_entries = fetch_sec()
 
     for e in sec_entries:
@@ -176,23 +184,24 @@ async def run_cycle():
 
 🏷️ {symbol}
 {news_type}
-📢 {title}
-🇸🇦 {translated}
-"""
+📢 {title}"""
+
+        if translated:
+            msg += f"\n🇸🇦 {translated}"
 
         await send_msg(msg)
         total_sent += 1
 
 # ===== LOOP =====
 async def main():
-    print("🚀 Alpha Market Radar Started")
+    print("🚀 Alpha Market Radar FINAL")
 
-    await send_msg("✅ Bot Started - Strong News Only")
+    await send_msg("🚀 البوت شغال\nSEC + RSS\nStrong News Only 🎯")
 
     while True:
         try:
             await run_cycle()
-            await asyncio.sleep(300)  # 5 دقائق
+            await asyncio.sleep(300)
         except Exception as e:
             print("ERROR:", e)
             await asyncio.sleep(60)
