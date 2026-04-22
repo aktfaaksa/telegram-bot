@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar FINAL 🚀 =====
+# ===== Alpha Market Radar FINAL PRO 🚀 =====
 
 import asyncio
 import feedparser
@@ -34,19 +34,21 @@ SEC_HEADERS = {
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK (REMOVE SPAM) =====
+# ===== BLOCK SPAM =====
 BLOCK_KEYWORDS = [
     "price target", "raises target", "cuts target",
     "analyst", "should you buy", "opinion",
     "earnings call", "conference call",
     "transcript", "preview",
-    "market wrap", "stocks rise", "stocks fall"
+    "market wrap", "stocks rise", "stocks fall",
+    "would", "could", "may", "might",
+    "forecast", "outlook", "expects"
 ]
 
 # ===== STRONG NEWS =====
 STRONG_KEYWORDS = [
     "reports earnings", "beats earnings", "misses earnings",
-    "merger", "acquisition", "acquires",
+    "to acquire", "acquires", "to merge",
     "announces deal", "partnership",
     "fda approval", "approved",
     "phase 2 results", "phase 3 results",
@@ -69,7 +71,7 @@ def is_strong_news(title):
 def classify_news(title):
     t = title.lower()
 
-    if any(x in t for x in ["beats", "positive", "acquires", "approval", "surges"]):
+    if any(x in t for x in ["beats", "positive", "acquires", "approval"]):
         return "🚀 إيجابي"
 
     if any(x in t for x in ["misses", "drops", "cuts", "lawsuit"]):
@@ -92,13 +94,13 @@ def extract_symbol(text):
     match = re.findall(r'\(([A-Z]{1,5})\)', text)
     if match:
         return match[0]
-    return "N/A"
+    return None
 
 def extract_sec_symbol(title):
     match = re.findall(r'\((.*?)\)', title)
     if match:
         return match[0]
-    return "SEC"
+    return None
 
 # ===== SEND =====
 async def send_msg(text):
@@ -128,9 +130,8 @@ async def run_cycle():
     total_sent = 0
 
     # ===== SEC =====
-    sec_entries = fetch_sec()
+    for e in fetch_sec():
 
-    for e in sec_entries:
         if total_sent >= MAX_NEWS:
             return
 
@@ -143,9 +144,12 @@ async def run_cycle():
         if not is_strong_news(title):
             continue
 
+        symbol = extract_sec_symbol(title)
+        if not symbol:
+            continue  # ❌ skip if no ticker
+
         sent.add(key)
 
-        symbol = extract_sec_symbol(title)
         news_type = classify_news(title)
 
         msg = f"""🚨 SEC
@@ -159,9 +163,8 @@ async def run_cycle():
         total_sent += 1
 
     # ===== RSS =====
-    rss_entries = await fetch_rss()
+    for e in await fetch_rss():
 
-    for e in rss_entries:
         if total_sent >= MAX_NEWS:
             return
 
@@ -174,9 +177,12 @@ async def run_cycle():
         if not is_strong_news(title):
             continue
 
+        symbol = extract_symbol(title)
+        if not symbol:
+            continue  # ❌ skip if no ticker
+
         sent.add(key)
 
-        symbol = extract_symbol(title)
         news_type = classify_news(title)
         translated = tr(title)
 
@@ -194,9 +200,9 @@ async def run_cycle():
 
 # ===== LOOP =====
 async def main():
-    print("🚀 Alpha Market Radar FINAL")
+    print("🚀 Alpha Market Radar PRO")
 
-    await send_msg("🚀 البوت شغال\nSEC + RSS\nStrong News Only 🎯")
+    await send_msg("🚀 البوت شغال\nSEC + RSS\nNo Spam • Actionable Only 🎯")
 
     while True:
         try:
