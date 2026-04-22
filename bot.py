@@ -1,9 +1,10 @@
-# ===== Alpha Market Radar FINAL PRO 🚀 =====
+# ===== Alpha Market Radar REAL-TIME 🚀 =====
 
 import asyncio
 import feedparser
 import os
 import re
+from datetime import datetime, timezone
 from telegram import Bot
 from deep_translator import GoogleTranslator
 
@@ -44,7 +45,13 @@ BLOCK_KEYWORDS = [
     "forecast", "outlook", "expects"
 ]
 
-# ===== STRONG EVENTS =====
+# ===== PRE-EVENT BLOCK =====
+PRE_EVENT_BLOCK = [
+    "ahead of", "before", "anticipation",
+    "expected", "set to", "upcoming"
+]
+
+# ===== EVENTS =====
 STRONG_KEYWORDS = [
     "beats earnings", "misses earnings", "reports earnings",
     "acquires", "to acquire", "merger",
@@ -58,9 +65,22 @@ MEDIUM_KEYWORDS = [
     "deal", "partnership", "guidance"
 ]
 
+# ===== DATE FILTER =====
+def is_today(entry):
+    try:
+        published = entry.published_parsed
+        news_time = datetime(*published[:6], tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return news_time.date() == now.date()
+    except:
+        return False
+
 # ===== FILTER =====
 def is_valid_news(title):
     t = title.lower()
+
+    if any(x in t for x in PRE_EVENT_BLOCK):
+        return False
 
     if any(x in t for x in BLOCK_KEYWORDS):
         return False
@@ -73,7 +93,7 @@ def is_valid_news(title):
 
     return False
 
-# ===== IMPACT LEVEL =====
+# ===== IMPACT =====
 def get_impact(title):
     t = title.lower()
 
@@ -138,7 +158,7 @@ def fetch_sec():
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running PRO mode...")
+    print("📡 Running REAL-TIME mode...")
 
     total_sent = 0
 
@@ -147,6 +167,9 @@ async def run_cycle():
 
         if total_sent >= MAX_NEWS:
             return
+
+        if not is_today(e):
+            continue
 
         key = e.link
         if key in sent:
@@ -180,6 +203,9 @@ async def run_cycle():
         if total_sent >= MAX_NEWS:
             return
 
+        if not is_today(e):
+            continue
+
         key = e.link
         if key in sent:
             continue
@@ -211,13 +237,13 @@ async def run_cycle():
         total_sent += 1
 
     if total_sent == 0:
-        print("No strong news")
+        print("No real-time news")
 
 # ===== LOOP =====
 async def main():
-    print("🚀 Alpha Market Radar PRO")
+    print("🚀 Alpha Market Radar REAL-TIME")
 
-    await send_msg("🚀 البوت شغال (PRO)\nSEC + RSS\nHigh Impact Only 🔥")
+    await send_msg("🚀 البوت شغال (REAL-TIME)\nOnly Today News ⚡")
 
     while True:
         try:
