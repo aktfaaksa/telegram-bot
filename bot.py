@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar BALANCED 🚀 =====
+# ===== Alpha Market Radar FINAL PRO 🚀 =====
 
 import asyncio
 import feedparser
@@ -34,46 +34,56 @@ SEC_HEADERS = {
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK (نمنع السبام) =====
+# ===== BLOCK SPAM =====
 BLOCK_KEYWORDS = [
-    "price target", "analyst", "opinion",
-    "should you buy", "forecast", "outlook",
+    "price target", "raises target", "cuts target",
+    "analyst", "rating", "upgrade", "downgrade",
+    "should you buy", "opinion",
     "conference call", "transcript",
-    "market wrap", "stocks rise", "stocks fall"
+    "market wrap", "stocks rise", "stocks fall",
+    "forecast", "outlook", "expects"
 ]
 
-# ===== NEWS LEVELS =====
+# ===== STRONG EVENTS =====
 STRONG_KEYWORDS = [
-    "beats earnings", "misses earnings",
+    "beats earnings", "misses earnings", "reports earnings",
     "acquires", "to acquire", "merger",
     "fda approval", "approved",
-    "phase 3 results", "positive results"
+    "phase 3 results", "positive results",
+    "successful trial"
 ]
 
 MEDIUM_KEYWORDS = [
-    "reports earnings", "guidance",
     "phase 2", "trial", "study",
-    "deal", "partnership",
-    "raises", "cuts"
+    "deal", "partnership", "guidance"
 ]
 
 # ===== FILTER =====
 def is_valid_news(title):
     t = title.lower()
 
-    # ❌ حذف السبام
     if any(x in t for x in BLOCK_KEYWORDS):
         return False
 
-    # ✅ خبر قوي
     if any(x in t for x in STRONG_KEYWORDS):
         return True
 
-    # ✅ خبر متوسط
     if any(x in t for x in MEDIUM_KEYWORDS):
         return True
 
     return False
+
+# ===== IMPACT LEVEL =====
+def get_impact(title):
+    t = title.lower()
+
+    if "phase 3" in t or "acquires" in t or "merger" in t:
+        return "🔥🔥🔥 عالي"
+
+    if "beats" in t or "approval" in t:
+        return "🔥🔥 قوي"
+
+    return "🔥 متوسط"
 
 # ===== CLASSIFY =====
 def classify_news(title):
@@ -100,15 +110,11 @@ def tr(text):
 # ===== SYMBOL =====
 def extract_symbol(text):
     match = re.findall(r'\(([A-Z]{1,5})\)', text)
-    if match:
-        return match[0]
-    return None
+    return match[0] if match else None
 
 def extract_sec_symbol(title):
     match = re.findall(r'\((.*?)\)', title)
-    if match:
-        return match[0]
-    return None
+    return match[0] if match else None
 
 # ===== SEND =====
 async def send_msg(text):
@@ -132,7 +138,7 @@ def fetch_sec():
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running balanced mode...")
+    print("📡 Running PRO mode...")
 
     total_sent = 0
 
@@ -161,6 +167,7 @@ async def run_cycle():
 
 🏷️ {symbol}
 {classify_news(title)}
+{get_impact(title)}
 📄 {title}
 """
 
@@ -194,6 +201,7 @@ async def run_cycle():
 
 🏷️ {symbol}
 {classify_news(title)}
+{get_impact(title)}
 📢 {title}"""
 
         if translated:
@@ -203,13 +211,13 @@ async def run_cycle():
         total_sent += 1
 
     if total_sent == 0:
-        print("No valid news this cycle")
+        print("No strong news")
 
 # ===== LOOP =====
 async def main():
-    print("🚀 Alpha Market Radar BALANCED")
+    print("🚀 Alpha Market Radar PRO")
 
-    await send_msg("🚀 البوت شغال (Balanced Mode)\nSEC + RSS\nNo Spam + More Opportunities 📊")
+    await send_msg("🚀 البوت شغال (PRO)\nSEC + RSS\nHigh Impact Only 🔥")
 
     while True:
         try:
