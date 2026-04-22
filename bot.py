@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar FINAL PRO 🚀 =====
+# ===== Alpha Market Radar BALANCED 🚀 =====
 
 import asyncio
 import feedparser
@@ -34,35 +34,43 @@ SEC_HEADERS = {
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK SPAM =====
+# ===== BLOCK (نمنع السبام) =====
 BLOCK_KEYWORDS = [
-    "price target", "raises target", "cuts target",
-    "analyst", "should you buy", "opinion",
-    "earnings call", "conference call",
-    "transcript", "preview",
-    "market wrap", "stocks rise", "stocks fall",
-    "would", "could", "may", "might",
-    "forecast", "outlook", "expects"
+    "price target", "analyst", "opinion",
+    "should you buy", "forecast", "outlook",
+    "conference call", "transcript",
+    "market wrap", "stocks rise", "stocks fall"
 ]
 
-# ===== STRONG NEWS =====
+# ===== NEWS LEVELS =====
 STRONG_KEYWORDS = [
-    "reports earnings", "beats earnings", "misses earnings",
-    "to acquire", "acquires", "to merge",
-    "announces deal", "partnership",
+    "beats earnings", "misses earnings",
+    "acquires", "to acquire", "merger",
     "fda approval", "approved",
-    "phase 2 results", "phase 3 results",
-    "positive results", "successful trial"
+    "phase 3 results", "positive results"
+]
+
+MEDIUM_KEYWORDS = [
+    "reports earnings", "guidance",
+    "phase 2", "trial", "study",
+    "deal", "partnership",
+    "raises", "cuts"
 ]
 
 # ===== FILTER =====
-def is_strong_news(title):
+def is_valid_news(title):
     t = title.lower()
 
+    # ❌ حذف السبام
     if any(x in t for x in BLOCK_KEYWORDS):
         return False
 
-    if any(word in t for word in STRONG_KEYWORDS):
+    # ✅ خبر قوي
+    if any(x in t for x in STRONG_KEYWORDS):
+        return True
+
+    # ✅ خبر متوسط
+    if any(x in t for x in MEDIUM_KEYWORDS):
         return True
 
     return False
@@ -110,7 +118,7 @@ async def send_msg(text):
         except:
             pass
 
-# ===== FETCH RSS =====
+# ===== FETCH =====
 async def fetch_rss():
     entries = []
     for url in RSS_FEEDS:
@@ -118,14 +126,13 @@ async def fetch_rss():
         entries.extend(feed.entries)
     return entries
 
-# ===== FETCH SEC =====
 def fetch_sec():
     feed = feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS)
     return feed.entries[:20]
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running...")
+    print("📡 Running balanced mode...")
 
     total_sent = 0
 
@@ -141,21 +148,19 @@ async def run_cycle():
 
         title = e.title
 
-        if not is_strong_news(title):
+        if not is_valid_news(title):
             continue
 
         symbol = extract_sec_symbol(title)
         if not symbol:
-            continue  # ❌ skip if no ticker
+            continue
 
         sent.add(key)
-
-        news_type = classify_news(title)
 
         msg = f"""🚨 SEC
 
 🏷️ {symbol}
-{news_type}
+{classify_news(title)}
 📄 {title}
 """
 
@@ -174,22 +179,21 @@ async def run_cycle():
 
         title = e.title
 
-        if not is_strong_news(title):
+        if not is_valid_news(title):
             continue
 
         symbol = extract_symbol(title)
         if not symbol:
-            continue  # ❌ skip if no ticker
+            continue
 
         sent.add(key)
 
-        news_type = classify_news(title)
         translated = tr(title)
 
         msg = f"""📰 NEWS
 
 🏷️ {symbol}
-{news_type}
+{classify_news(title)}
 📢 {title}"""
 
         if translated:
@@ -198,11 +202,14 @@ async def run_cycle():
         await send_msg(msg)
         total_sent += 1
 
+    if total_sent == 0:
+        print("No valid news this cycle")
+
 # ===== LOOP =====
 async def main():
-    print("🚀 Alpha Market Radar PRO")
+    print("🚀 Alpha Market Radar BALANCED")
 
-    await send_msg("🚀 البوت شغال\nSEC + RSS\nNo Spam • Actionable Only 🎯")
+    await send_msg("🚀 البوت شغال (Balanced Mode)\nSEC + RSS\nNo Spam + More Opportunities 📊")
 
     while True:
         try:
