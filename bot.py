@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar PRO SEC AI 🚀 =====
+# ===== Alpha Market Radar FINAL PRO 🚀 =====
 
 import asyncio
 import feedparser
@@ -15,31 +15,117 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 bot = Bot(token=BOT_TOKEN)
 
+# ===== SETTINGS =====
+MAX_NEWS = 15
+
+# ===== SOURCES =====
+RSS_FEEDS = [
+    "https://finance.yahoo.com/rss/",
+    "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.reuters.com/markets/us/rss"
+]
+
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
+# 🔥 الإيميل مضاف هنا
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.2 (your@email.com)"
+    "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com) Python Requests"
 }
 
 sent = set()
 
-# ===== ترجمة =====
+# ===== TRANSLATION =====
 def tr(text):
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return ""
 
-# ===== استخراج نص من 8-K =====
+# ===== DATE (اليوم فقط) =====
+def is_today(entry):
+    try:
+        t = entry.get("published_parsed") or entry.get("updated_parsed")
+        if not t:
+            return False
+        dt = datetime(*t[:6], tzinfo=timezone.utc)
+        return dt.date() == datetime.now(timezone.utc).date()
+    except:
+        return False
+
+# ===== SYMBOL =====
+def get_symbol(text):
+    m = re.findall(r'\(([A-Z]{1,5})\)', text)
+    return m[0] if m else None
+
+# ===== RSS FILTER =====
+def is_valid(title):
+    t = title.lower()
+
+    if any(x in t for x in [
+        "analyst", "price target", "upgrade", "downgrade",
+        "opinion", "strategist",
+        "war", "iran", "israel", "gaza",
+        "election", "president"
+    ]):
+        return False
+
+    if not any(k in t for k in [
+        "earnings", "revenue", "profit",
+        "acquire", "merger", "deal",
+        "bankruptcy", "chapter 11",
+        "split", "dividend",
+        "fda", "approval",
+        "guidance", "results"
+    ]):
+        return False
+
+    return True
+
+# ===== CLASSIFY =====
+def classify(title):
+    t = title.lower()
+    if any(x in t for x in ["beat", "growth", "profit"]):
+        return "🚀 إيجابي"
+    if any(x in t for x in ["drop", "bankruptcy", "warning"]):
+        return "⚠️ سلبي"
+    return "📊 عادي"
+
+# ===== IMPACT =====
+def impact(title):
+    t = title.lower()
+    if any(x in t for x in ["bankruptcy", "merger"]):
+        return "🔥🔥🔥 عالي"
+    if any(x in t for x in ["earnings", "approval"]):
+        return "🔥🔥 قوي"
+    return "🔥 متوسط"
+
+# ===== SEC HELPERS =====
+def get_company(title):
+    try:
+        return title.split(" - ")[1].split("(")[0].strip()
+    except:
+        return "Unknown"
+
+# 🔥 قراءة الملف الحقيقي بدل index
 def read_8k(url):
     try:
         res = requests.get(url, headers=SEC_HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
 
-        # ناخذ أول نص واضح
-        text = soup.get_text(" ", strip=True)
+        for link in soup.find_all("a"):
+            href = link.get("href", "")
 
-        return text[:1500]  # أول 1500 حرف
+            if ".htm" in href and "index" not in href:
+                real_url = "https://www.sec.gov" + href
+
+                res2 = requests.get(real_url, headers=SEC_HEADERS, timeout=10)
+                soup2 = BeautifulSoup(res2.text, "html.parser")
+
+                text = soup2.get_text(" ", strip=True)
+                return text[:2000]
+
+        return ""
+
     except:
         return ""
 
@@ -54,20 +140,13 @@ def analyze(text):
     if "earnings" in t or "results" in t:
         return "📊 Earnings"
     if "agreement" in t or "deal" in t:
-        return "📢 Deal / Agreement"
+        return "📢 Deal"
     if "delist" in t:
         return "🚫 Delisting"
 
-    return "📄 Other Filing"
+    return "📄 Other"
 
-# ===== استخراج الشركة =====
-def get_company(title):
-    try:
-        return title.split(" - ")[1].split("(")[0].strip()
-    except:
-        return "Unknown"
-
-# ===== إرسال =====
+# ===== SEND =====
 async def send(msg):
     for cid in CHAT_IDS:
         try:
@@ -75,19 +154,27 @@ async def send(msg):
         except:
             pass
 
-# ===== جلب SEC =====
+# ===== FETCH =====
+async def fetch_rss():
+    data = []
+    for url in RSS_FEEDS:
+        feed = feedparser.parse(url)
+        data.extend(feed.entries)
+    return data
+
 def fetch_sec():
     return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:20]
 
-# ===== تشغيل =====
+# ===== MAIN =====
 async def run_cycle():
-    print("📡 Running SEC AI...")
+    print("📡 Running FINAL PRO...")
 
     count = 0
 
+    # ===== SEC =====
     for e in fetch_sec():
 
-        if count >= 15:
+        if count >= MAX_NEWS:
             return
 
         if e.link in sent:
@@ -100,26 +187,18 @@ async def run_cycle():
 
         company = get_company(e.title)
 
-        # 🔥 قراءة الملف
         content = read_8k(e.link)
-
-        # 🔥 تحليل
         event = analyze(content)
-
-        # 🔥 ترجمة
-        ar_event = tr(event)
-        ar_summary = tr(content[:200])
 
         msg = f"""🚨 SEC SMART
 
 🏢 {company}
 {event}
-🇸🇦 {ar_event}
 
 🧠 Summary:
 {content[:200]}
 
-🇸🇦 {ar_summary}
+🇸🇦 {tr(content[:200])}
 
 🔗 {e.link}
 """
@@ -127,16 +206,55 @@ async def run_cycle():
         await send(msg)
         count += 1
 
+    # ===== RSS =====
+    for e in await fetch_rss():
+
+        if count >= MAX_NEWS:
+            return
+
+        if e.link in sent:
+            continue
+
+        if not is_today(e):
+            continue
+
+        title = e.title
+
+        if not is_valid(title):
+            continue
+
+        sym = get_symbol(title)
+        if not sym:
+            continue
+
+        sent.add(e.link)
+
+        msg = f"""📰 NEWS
+
+🏷️ {sym}
+{classify(title)}
+{impact(title)}
+📢 {title}
+
+🇸🇦 {tr(title)}
+"""
+
+        await send(msg)
+        count += 1
+
+    if count == 0:
+        print("No news")
+
 # ===== LOOP =====
 async def main():
-    await send("🚀 SEC AI BOT LIVE\nReads + Understands + Translates 🔥")
+    await send("🚀 FINAL PRO BOT LIVE\nSEC + Translation + Real Parsing 🔥")
 
     while True:
         try:
             await run_cycle()
             await asyncio.sleep(300)
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
             await asyncio.sleep(60)
 
 # ===== START =====
