@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar FINAL CLEAN 🚀 =====
+# ===== Alpha Market Radar FINAL STABLE 🚀 =====
 
 import asyncio
 import feedparser
@@ -27,21 +27,7 @@ RSS_FEEDS = [
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 SEC_HEADERS = {"User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"}
 
-# ===== MEMORY =====
 sent = set()
-
-# ===== BLOCK =====
-BLOCK = [
-    "price target", "analyst", "upgrade", "downgrade",
-    "opinion", "should you buy"
-]
-
-GLOBAL_BLOCK = [
-    "war", "iran", "israel", "gaza",
-    "europe", "asia", "global",
-    "economy", "strategist", "government",
-    "president", "icc", "trial"
-]
 
 # ===== DATE (اليوم فقط) =====
 def is_today(entry):
@@ -49,8 +35,8 @@ def is_today(entry):
         t = entry.get("published_parsed") or entry.get("updated_parsed")
         if not t:
             return False
-        news_time = datetime(*t[:6], tzinfo=timezone.utc)
-        return news_time.date() == datetime.now(timezone.utc).date()
+        dt = datetime(*t[:6], tzinfo=timezone.utc)
+        return dt.date() == datetime.now(timezone.utc).date()
     except:
         return False
 
@@ -63,15 +49,16 @@ def get_symbol(text):
 def is_valid(title):
     t = title.lower()
 
-    # ❌ تحليل / رأي
-    if any(x in t for x in BLOCK):
+    # منع التحليل والسياسة
+    if any(x in t for x in [
+        "analyst", "price target", "upgrade", "downgrade",
+        "opinion", "strategist", "government",
+        "war", "iran", "israel", "gaza",
+        "election", "president"
+    ]):
         return False
 
-    # ❌ سياسة / اقتصاد عام
-    if any(x in t for x in GLOBAL_BLOCK):
-        return False
-
-    # ❌ لازم حدث حقيقي
+    # لازم حدث مالي
     if not any(k in t for k in [
         "earnings", "revenue", "profit",
         "acquire", "merger", "deal",
@@ -87,25 +74,19 @@ def is_valid(title):
 # ===== CLASSIFY =====
 def classify(title):
     t = title.lower()
-
     if any(x in t for x in ["beat", "growth", "profit"]):
         return "🚀 إيجابي"
-
     if any(x in t for x in ["drop", "bankruptcy", "warning"]):
         return "⚠️ سلبي"
-
     return "📊 عادي"
 
 # ===== IMPACT =====
 def impact(title):
     t = title.lower()
-
     if any(x in t for x in ["bankruptcy", "merger"]):
         return "🔥🔥🔥 عالي"
-
     if any(x in t for x in ["earnings", "approval"]):
         return "🔥🔥 قوي"
-
     return "🔥 متوسط"
 
 # ===== TRANSLATE =====
@@ -117,6 +98,31 @@ def tr(text):
     except:
         return ""
 
+# ===== SEC HELPERS =====
+def fetch_sec():
+    return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:30]
+
+def parse_company(title):
+    # مثال: 8-K - COMPANY NAME (000xxxx)
+    try:
+        return title.split(" - ")[1].split("(")[0].strip()
+    except:
+        return "Unknown"
+
+def analyze_8k(title):
+    t = title.lower()
+
+    if "bankruptcy" in t:
+        return "⚠️ إفلاس"
+    if "merger" in t or "acquisition" in t:
+        return "🤝 اندماج"
+    if "earnings" in t:
+        return "📊 نتائج مالية"
+    if "delist" in t:
+        return "🚫 شطب"
+
+    return "📄 حدث مهم"
+
 # ===== SEND =====
 async def send(msg):
     for cid in CHAT_IDS:
@@ -125,20 +131,17 @@ async def send(msg):
         except:
             pass
 
-# ===== FETCH =====
+# ===== FETCH RSS =====
 async def fetch_rss():
-    data = []
+    all_entries = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        data.extend(feed.entries)
-    return data
-
-def fetch_sec():
-    return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:30]
+        all_entries.extend(feed.entries)
+    return all_entries
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running FINAL CLEAN...")
+    print("📡 Running FINAL STABLE...")
 
     count = 0
 
@@ -156,7 +159,13 @@ async def run_cycle():
 
         sent.add(e.link)
 
-        msg = f"""🚨 SEC 8-K
+        company = parse_company(e.title)
+        event = analyze_8k(e.title)
+
+        msg = f"""🚨 SEC
+
+🏢 {company}
+{event}
 
 📄 {e.title}
 """
@@ -182,8 +191,6 @@ async def run_cycle():
             continue
 
         sym = get_symbol(title)
-
-        # ❌ بدون ticker = تجاهل
         if not sym:
             continue
 
@@ -204,11 +211,11 @@ async def run_cycle():
         count += 1
 
     if count == 0:
-        print("No clean news")
+        print("No valid news")
 
 # ===== LOOP =====
 async def main():
-    await send("🚀 BOT LIVE (FINAL CLEAN)\nOnly Companies + Real Events 🎯")
+    await send("🚀 BOT LIVE (FINAL STABLE)\nClean + SEC Smart + Real-Time 🔥")
 
     while True:
         try:
