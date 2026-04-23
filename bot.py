@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar SMART 🚀 =====
+# ===== Alpha Market Radar SMART FIXED 🚀 =====
 
 import asyncio
 import feedparser
@@ -35,28 +35,27 @@ sent = set()
 # ===== BLOCK =====
 BLOCK = [
     "price target", "analyst", "rating", "upgrade", "downgrade",
-    "opinion", "forecast", "outlook", "should you buy",
+    "opinion", "should you buy",
     "conference call", "transcript"
 ]
 
+# ===== PRE BLOCK (خففناها) =====
 PRE_BLOCK = [
-    "ahead of", "expected", "anticipation", "upcoming"
+    "ahead of",
+    "anticipation"
 ]
 
-# ===== SMART KEYWORDS =====
+# ===== KEYWORDS (موسعة 🔥) =====
 KEYWORDS = [
-    # Earnings
-    "earnings", "quarterly", "results", "revenue",
+    "earnings", "results", "revenue", "profit",
+    "guidance", "forecast",
 
-    # Deals
     "acquires", "acquisition", "merger",
-    "deal", "agreement", "partnership",
+    "deal", "agreement", "partnership", "contract",
 
-    # Pharma
     "phase", "trial", "clinical", "fda", "approval",
 
-    # Market reaction
-    "surges", "jumps", "soars", "growth"
+    "surges", "jumps", "growth", "expands", "launch"
 ]
 
 # ===== DATE FILTER =====
@@ -80,7 +79,7 @@ def is_valid(title):
 
     score = sum(1 for k in KEYWORDS if k in t)
 
-    return score >= 2  # 🔥 السر هنا
+    return score >= 1  # 🔥 أهم تعديل
 
 # ===== CLASSIFY =====
 def classify(title):
@@ -98,7 +97,7 @@ def classify(title):
 def impact(title):
     t = title.lower()
 
-    if "phase 3" in t or "acquisition" in t:
+    if "phase 3" in t or "acquisition" in t or "merger" in t:
         return "🔥🔥🔥 عالي"
 
     if "earnings" in t or "approval" in t:
@@ -106,7 +105,7 @@ def impact(title):
 
     return "🔥 متوسط"
 
-# ===== TRANSLATE =====
+# ===== TRANSLATION =====
 def tr(text):
     if not USE_TRANSLATION:
         return ""
@@ -130,18 +129,18 @@ async def send(msg):
 
 # ===== FETCH =====
 async def fetch_rss():
-    all_entries = []
+    entries = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        all_entries.extend(feed.entries)
-    return all_entries
+        entries.extend(feed.entries)
+    return entries
 
 def fetch_sec():
     return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:20]
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running SMART...")
+    print("📡 Running SMART FIXED...")
 
     count = 0
 
@@ -187,9 +186,7 @@ async def run_cycle():
         if not is_valid(title):
             continue
 
-        sym = symbol(title)
-        if not sym:
-            continue
+        sym = symbol(title) or "N/A"  # 🔥 ما عاد نحذف
 
         sent.add(e.link)
 
@@ -200,21 +197,21 @@ async def run_cycle():
 {impact(title)}
 📢 {title}"""
 
-        ar = tr(title)
-        if ar:
-            msg += f"\n🇸🇦 {ar}"
+        translated = tr(title)
+        if translated:
+            msg += f"\n🇸🇦 {translated}"
 
         await send(msg)
         count += 1
 
     if count == 0:
-        print("No smart news")
+        print("No news this cycle")
 
 # ===== LOOP =====
 async def main():
-    print("🚀 SMART BOT STARTED")
+    print("🚀 SMART FIXED BOT STARTED")
 
-    await send("🚀 SMART BOT LIVE\nReal Opportunities Only 🔥")
+    await send("🚀 SMART BOT LIVE (FIXED)\nBalanced + Real-Time ⚡")
 
     while True:
         try:
