@@ -1,4 +1,4 @@
-# AlphaBot Pro v4.1 PRO + SEC
+# AlphaBot Pro v4.0 AI TRADING SYSTEM
 
 import os
 import time
@@ -21,39 +21,14 @@ CHAT_IDS = [MAIN_CHAT_ID, SECOND_CHAT_ID]
 CYCLE_TIME = 300
 MAX_NEWS = 10
 
-# ===== RSS =====
+# ===== مصادر =====
 RSS_FEEDS = [
     "https://www.reuters.com/markets/us/rss",
     "https://feeds.bloomberg.com/markets/news.rss",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html"
 ]
 
-# ===== SEC (رجعناه بشكل نظيف) =====
-SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
-
-SEC_HEADERS = {
-    "User-Agent": "AlphaBot/4.1 (Financial Bot; aktfaaksa@gmail.com)"
-}
-
-SEC_KEYWORDS = [
-    "bankruptcy",
-    "chapter 11",
-    "merger agreement",
-    "acquisition agreement",
-    "definitive agreement",
-    "earnings",
-    "results"
-]
-
-SEC_BLOCK = [
-    "staff",
-    "notice",
-    "filing",
-    "form",
-    "registration"
-]
-
-# ===== Filters =====
+# ===== فلترة =====
 BLOCK = ["crypto","coin","token","prediction","video","trailer","opinion"]
 MACRO = ["oil","dollar","gold","bond","iran","war","inflation","rates","fed"]
 IMPORTANT = ["earnings","revenue","profit","merger","acquisition","guidance","shares","stock","drop","plunge","surge","jump"]
@@ -103,10 +78,10 @@ def ai(prompt):
     except:
         return ""
 
-# ===== Extract stock =====
+# ===== استخراج ticker =====
 def get_stock(title):
     prompt = f"""
-Extract US stock ticker and company.
+Extract stock ticker and company from news.
 Return JSON:
 {{"ticker":"...", "company":"..."}}
 
@@ -119,7 +94,7 @@ Return JSON:
     except:
         return None, None
 
-# ===== Analyze =====
+# ===== تحليل =====
 def analyze(title):
     prompt = f"""
 حلل الخبر:
@@ -146,7 +121,7 @@ def get_signal(text):
         return "🔴 SELL"
     return "⚪ NEUTRAL"
 
-# ===== Price =====
+# ===== السعر =====
 def get_price(ticker):
     if not ticker:
         return None
@@ -156,8 +131,8 @@ def get_price(ticker):
     except:
         return None
 
-# ===== Fetch =====
-def fetch_news():
+# ===== جلب =====
+def fetch():
     data = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
@@ -165,53 +140,25 @@ def fetch_news():
             data.append({
                 "title": e.title,
                 "link": e.link,
-                "published": e.get("published_parsed"),
-                "source": "NEWS"
+                "published": e.get("published_parsed")
             })
     return data
 
-def fetch_sec():
-    try:
-        res = requests.get(SEC_RSS, headers=SEC_HEADERS)
-        feed = feedparser.parse(res.text)
-
-        data = []
-        for e in feed.entries:
-            title = e.title.lower()
-
-            if any(w in title for w in SEC_BLOCK):
-                continue
-
-            if not any(k in title for k in SEC_KEYWORDS):
-                continue
-
-            data.append({
-                "title": e.title,
-                "link": e.link,
-                "published": e.get("published_parsed"),
-                "source": "SEC"
-            })
-
-        return data
-    except:
-        return []
-
-# ===== Main =====
+# ===== تشغيل =====
 def run():
-    send("🚀 AlphaBot v4.1 PRO Started")
+    send("🚀 AlphaBot v4.0 AI Started")
 
     while True:
-        news = fetch_news() + fetch_sec()
+        news = fetch()
         count = 0
 
         for n in news:
-
             title = n["title"].lower()
 
             if any(w in title for w in BLOCK):
                 continue
 
-            if not any(w in title for w in IMPORTANT) and n["source"] != "SEC":
+            if not any(w in title for w in IMPORTANT):
                 continue
 
             if not is_new(n["title"]):
@@ -220,11 +167,12 @@ def run():
             if not is_recent(n["published"]):
                 continue
 
+            # 🚫 Macro بدون إشارات
             is_macro = any(w in title for w in MACRO)
 
             ticker, company = get_stock(n["title"])
-            analysis = analyze(n["title"])
 
+            analysis = analyze(n["title"])
             score = extract_score(analysis)
             signal = get_signal(analysis)
 
@@ -233,17 +181,15 @@ def run():
             if is_macro:
                 signal = "🌍 MACRO"
 
-            tag = "🏛 SEC" if n["source"] == "SEC" else "📊 AI Signal"
-
             msg = f"""
-{tag}
+📊 Alpha Signal
 
 🏢 {company or "Unknown"}
 💲 {ticker or "N/A"}
 💰 {price if price else "N/A"}
 
 📢 {signal}
-⭐ {score}/10
+⭐ Strength: {score}/10
 
 {analysis}
 
@@ -258,5 +204,6 @@ def run():
 
         time.sleep(CYCLE_TIME)
 
+# ===== Start =====
 if __name__ == "__main__":
     run()
