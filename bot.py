@@ -1,6 +1,6 @@
 # ==============================
 # AlphaBot Pro
-# Version: 3.0.0 (SMART MODE)
+# Version: 3.1.0 (FIXED & RELAXED)
 # ==============================
 
 import os
@@ -11,19 +11,16 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_IDS = [int(os.getenv("CHAT_ID", 0)), 6315087880]
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
-# ===== إعدادات =====
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 CYCLE_TIME = 300
 MAX_NEWS_PER_CYCLE = 15
 
-# ===== RSS =====
 RSS_FEEDS = [
     "https://www.benzinga.com/feed",
     "https://www.reuters.com/markets/us/rss",
@@ -35,11 +32,10 @@ RSS_FEEDS = [
     "https://seekingalpha.com/feed.xml"
 ]
 
-# ===== SEC =====
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.0 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.1 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
@@ -47,7 +43,6 @@ SEC_KEYWORDS = [
     "results","agreement","deal","delist"
 ]
 
-# ===== فلترة =====
 IMPORTANT_KEYWORDS = [
     "earnings","revenue","profit","merger","acquisition",
     "bankruptcy","dividend","guidance","results","deal"
@@ -57,12 +52,10 @@ BLOCK_WORDS = [
     "analyst","price target","opinion","strategist"
 ]
 
-# ===== Cache =====
 seen_links = set()
 seen_titles = set()
 stock_cache = {}
 
-# ===== Telegram =====
 def send_message(text):
     for chat_id in CHAT_IDS:
         try:
@@ -73,18 +66,16 @@ def send_message(text):
         except:
             pass
 
-# ===== Startup =====
 def startup():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     send_message(f"""
 🤖 AlphaBot Pro
 
 📦 Version: {VERSION}
-🟢 SMART MODE ACTIVE
+🟢 RELAXED MODE ACTIVE
 ⏰ {now}
 """)
 
-# ===== Fetch =====
 def fetch_news():
     data = []
     for url in RSS_FEEDS:
@@ -119,7 +110,6 @@ def fetch_sec():
     except:
         return []
 
-# ===== Utils =====
 def is_duplicate(news):
     h = hashlib.md5(news["title"].lower().encode()).hexdigest()
     if news["link"] in seen_links or h in seen_titles:
@@ -129,9 +119,9 @@ def is_duplicate(news):
     seen_titles.add(h)
     return False
 
-def is_recent(published, hours=3):
+def is_recent(published, hours=4):
     if not published:
-        return False
+        return True  # خففنا الشرط
 
     t = datetime(*published[:6], tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
@@ -151,7 +141,6 @@ def score_news(text):
 
     return score
 
-# ===== AI =====
 def call_ai(prompt, model):
     try:
         r = requests.post(
@@ -171,7 +160,7 @@ def call_ai(prompt, model):
 
 def extract_stock(text):
     prompt = f"""
-Extract US stock ticker and company.
+Extract company and ticker if possible.
 Return JSON:
 {{"company":"...","ticker":"..."}}
 
@@ -190,7 +179,7 @@ def analyze(text):
 
 - ملخص عربي
 - صنف: شراء / بيع / محايد
-- قوة الخبر: رقم من 1 إلى 10
+- قوة الخبر من 1 الى 10
 
 {text}
 """
@@ -198,67 +187,48 @@ def analyze(text):
 
 def extract_score(ai_text):
     try:
-        for line in ai_text.split("\n"):
-            if "قوة" in line:
-                return int(''.join(filter(str.isdigit, line)))
+        nums = [int(s) for s in ai_text.split() if s.isdigit()]
+        return max(nums) if nums else 5
     except:
-        pass
-    return 5
+        return 5
 
-def get_signal(ai_text):
-    if "شراء" in ai_text:
+def get_signal(text):
+    if "شراء" in text:
         return "🟢 شراء"
-    elif "بيع" in ai_text:
+    elif "بيع" in text:
         return "🔴 بيع"
-    else:
-        return "⚪ محايد"
-
-# ===== Market =====
-def is_us_stock(ticker):
-    if not ticker:
-        return False
-
-    if ticker in stock_cache:
-        return stock_cache[ticker]
-
-    try:
-        url = f"https://finnhub.io/api/v1/stock/profile2?symbol={ticker}&token={FINNHUB_API_KEY}"
-        d = requests.get(url).json()
-        res = d.get("country") == "US"
-        stock_cache[ticker] = res
-        return res
-    except:
-        return False
+    return "⚪ محايد"
 
 def get_price(ticker):
+    if not ticker:
+        return None
+
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
         return requests.get(url).json().get("c")
     except:
         return None
 
-# ===== Main =====
 def run():
     while True:
         all_news = fetch_news() + fetch_sec()
-
         candidates = []
+
+        print("TOTAL NEWS:", len(all_news))
 
         for news in all_news:
 
             if is_duplicate(news):
                 continue
 
-            if not is_recent(news["published"], 3):
+            if not is_recent(news["published"], 4):
                 continue
 
             base_score = score_news(news["title"])
 
             stock = extract_stock(news["title"])
             ticker = stock.get("ticker")
-
-            if not is_us_stock(ticker):
-                continue
+            company = stock.get("company")
 
             ai_text = analyze(news["title"])
             ai_score = extract_score(ai_text)
@@ -268,12 +238,13 @@ def run():
             candidates.append({
                 "news": news,
                 "ticker": ticker,
-                "company": stock.get("company"),
+                "company": company,
                 "analysis": ai_text,
                 "score": total_score
             })
 
-        # ===== ترتيب حسب القوة =====
+        print("CANDIDATES:", len(candidates))
+
         candidates.sort(key=lambda x: x["score"], reverse=True)
 
         count = 0
@@ -290,7 +261,7 @@ def run():
 {tag}
 
 🏢 {item['company']}
-💲 {item['ticker']}
+💲 {item['ticker'] if item['ticker'] else "N/A"}
 💰 {price if price else "N/A"}
 
 📊 {signal}
@@ -311,7 +282,6 @@ def run():
 
         time.sleep(CYCLE_TIME)
 
-# ===== Start =====
 if __name__ == "__main__":
     startup()
     run()
