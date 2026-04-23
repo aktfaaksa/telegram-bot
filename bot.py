@@ -1,7 +1,4 @@
-# ==============================
-# AlphaBot Pro
-# Version: 3.1.0 (FIXED & RELAXED)
-# ==============================
+# AlphaBot Pro v3.2.0 CLEAN
 
 import os
 import time
@@ -9,15 +6,15 @@ import requests
 import feedparser
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_IDS = [int(os.getenv("CHAT_ID", 0)), 6315087880]
+CHAT_IDS = [6315087880]
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
-VERSION = "3.1.0"
 CYCLE_TIME = 300
 MAX_NEWS_PER_CYCLE = 15
 
@@ -35,7 +32,7 @@ RSS_FEEDS = [
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.1 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.2 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
@@ -54,7 +51,6 @@ BLOCK_WORDS = [
 
 seen_links = set()
 seen_titles = set()
-stock_cache = {}
 
 def send_message(text):
     for chat_id in CHAT_IDS:
@@ -68,13 +64,7 @@ def send_message(text):
 
 def startup():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    send_message(f"""
-🤖 AlphaBot Pro
-
-📦 Version: {VERSION}
-🟢 RELAXED MODE ACTIVE
-⏰ {now}
-""")
+    send_message(f"🤖 AlphaBot Pro v3.2.0 CLEAN\n🟢 Running\n⏰ {now}")
 
 def fetch_news():
     data = []
@@ -121,7 +111,7 @@ def is_duplicate(news):
 
 def is_recent(published, hours=4):
     if not published:
-        return True  # خففنا الشرط
+        return True
 
     t = datetime(*published[:6], tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
@@ -160,18 +150,24 @@ def call_ai(prompt, model):
 
 def extract_stock(text):
     prompt = f"""
-Extract company and ticker if possible.
+Extract US stock ticker ONLY.
 Return JSON:
-{{"company":"...","ticker":"..."}}
+{{"ticker":"...","company":"..."}}
 
 {text}
 """
     res = call_ai(prompt, "anthropic/claude-3.7-sonnet")
 
     try:
-        return json.loads(res)
+        data = json.loads(res)
+        ticker = data.get("ticker")
+
+        if ticker and len(ticker) <= 5:
+            return data
     except:
-        return {"company":"Unknown","ticker":None}
+        pass
+
+    return {"company":"Unknown","ticker":None}
 
 def analyze(text):
     prompt = f"""
@@ -186,23 +182,24 @@ def analyze(text):
     return call_ai(prompt, "openai/gpt-4o-mini")
 
 def extract_score(ai_text):
-    try:
-        nums = [int(s) for s in ai_text.split() if s.isdigit()]
-        return max(nums) if nums else 5
-    except:
-        return 5
+    match = re.search(r'قوة.*?(\d+)', ai_text)
+    if match:
+        return min(int(match.group(1)), 10)
+    return 5
 
-def get_signal(text):
-    if "شراء" in text:
+def get_signal(ai_text, score):
+    if "شراء" in ai_text:
         return "🟢 شراء"
-    elif "بيع" in text:
+    elif "بيع" in ai_text:
         return "🔴 بيع"
-    return "⚪ محايد"
+    else:
+        if score >= 8:
+            return "⚪ محايد قوي"
+        return None
 
 def get_price(ticker):
     if not ticker:
         return None
-
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
         return requests.get(url).json().get("c")
@@ -214,8 +211,6 @@ def run():
         all_news = fetch_news() + fetch_sec()
         candidates = []
 
-        print("TOTAL NEWS:", len(all_news))
-
         for news in all_news:
 
             if is_duplicate(news):
@@ -226,10 +221,10 @@ def run():
 
             base_score = score_news(news["title"])
 
-            stock = extract_stock(news["title"])
-            ticker = stock.get("ticker")
-            company = stock.get("company")
+            if base_score < 2 and news["source"] != "SEC":
+                continue
 
+            stock = extract_stock(news["title"])
             ai_text = analyze(news["title"])
             ai_score = extract_score(ai_text)
 
@@ -237,25 +232,25 @@ def run():
 
             candidates.append({
                 "news": news,
-                "ticker": ticker,
-                "company": company,
+                "ticker": stock.get("ticker"),
+                "company": stock.get("company"),
                 "analysis": ai_text,
                 "score": total_score
             })
-
-        print("CANDIDATES:", len(candidates))
 
         candidates.sort(key=lambda x: x["score"], reverse=True)
 
         count = 0
 
         for item in candidates:
-            news = item["news"]
+            score = extract_score(item["analysis"])
+            signal = get_signal(item["analysis"], score)
 
-            signal = get_signal(item["analysis"])
+            if not signal:
+                continue
+
             price = get_price(item["ticker"])
-
-            tag = "🏛 SEC" if news["source"] == "SEC" else "📰 News"
+            tag = "🏛 SEC" if item["news"]["source"] == "SEC" else "📰 News"
 
             msg = f"""
 {tag}
@@ -265,16 +260,16 @@ def run():
 💰 {price if price else "N/A"}
 
 📊 {signal}
-⭐ Score: {item['score']}
+⭐ Score: {score}
 
 {item['analysis']}
 
-🔗 {news['link']}
+🔗 {item['news']['link']}
 """
 
             send_message(msg)
 
-            if news["source"] != "SEC":
+            if item["news"]["source"] != "SEC":
                 count += 1
 
             if count >= MAX_NEWS_PER_CYCLE:
