@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar FINAL PRO 🚀 =====
+# ===== Alpha Market Radar FINAL PRO ULTRA 🚀 =====
 
 import asyncio
 import feedparser
@@ -105,7 +105,7 @@ def get_company(title):
     except:
         return "Unknown"
 
-# ===== 🔥 SEC FIX (الجزء المهم) =====
+# ===== 🔥 SEC FIX النهائي =====
 def read_8k(url):
     try:
         res = requests.get(url, headers=SEC_HEADERS, timeout=10)
@@ -117,9 +117,11 @@ def read_8k(url):
             cols = row.find_all("td")
 
             if len(cols) >= 4:
+                doc_name = cols[1].text.strip().lower()
                 doc_type = cols[3].text.strip().lower()
 
-                if "8-k" in doc_type:
+                # 🔥 نختار فقط التقرير الحقيقي
+                if "8-k" in doc_type and not any(x in doc_name for x in ["xml", "xbrl"]):
                     link = cols[2].find("a")
 
                     if link:
@@ -130,6 +132,10 @@ def read_8k(url):
                         soup2 = BeautifulSoup(res2.text, "html.parser")
 
                         text = soup2.get_text(" ", strip=True)
+
+                        # تنظيف النص
+                        text = text.replace("XBRL Viewer", "")
+                        text = text.replace("Please enable JavaScript", "")
 
                         return text[:2000]
 
@@ -177,7 +183,7 @@ def fetch_sec():
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running FINAL PRO FIXED...")
+    print("📡 Running FINAL PRO ULTRA...")
 
     count = 0
 
@@ -257,7 +263,7 @@ async def run_cycle():
 
 # ===== LOOP =====
 async def main():
-    await send("🚀 FINAL PRO FIXED BOT LIVE\nSEC Real Parsing + Translation 🔥")
+    await send("🚀 FINAL PRO ULTRA BOT LIVE\nSEC Fully Fixed + Real Parsing 🔥")
 
     while True:
         try:
