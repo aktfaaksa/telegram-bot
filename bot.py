@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar SMART FIXED 🚀 =====
+# ===== Alpha Market Radar CLEAN SIMPLE 🚀 =====
 
 import asyncio
 import feedparser
@@ -11,7 +11,6 @@ from deep_translator import GoogleTranslator
 # ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
-
 bot = Bot(token=BOT_TOKEN)
 
 # ===== SETTINGS =====
@@ -32,80 +31,75 @@ SEC_HEADERS = {"User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"}
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK =====
+# ===== BLOCK (بس الأساسيات) =====
 BLOCK = [
-    "price target", "analyst", "rating", "upgrade", "downgrade",
-    "opinion", "should you buy",
-    "conference call", "transcript"
+    "price target", "analyst", "upgrade", "downgrade",
+    "opinion", "should you buy", "conference call", "transcript"
 ]
 
-# ===== PRE BLOCK (خففناها) =====
-PRE_BLOCK = [
-    "ahead of",
-    "anticipation"
+# ===== GLOBAL BLOCK (سياسة/عام) =====
+GLOBAL_BLOCK = [
+    "war", "conflict", "trial", "election",
+    "president", "icc", "government"
 ]
 
-# ===== KEYWORDS (موسعة 🔥) =====
+# ===== KEYWORDS خفيفة (بدون تعقيد) =====
 KEYWORDS = [
-    "earnings", "results", "revenue", "profit",
-    "guidance", "forecast",
-
+    "earnings", "results", "revenue",
     "acquires", "acquisition", "merger",
-    "deal", "agreement", "partnership", "contract",
-
-    "phase", "trial", "clinical", "fda", "approval",
-
-    "surges", "jumps", "growth", "expands", "launch"
+    "deal", "agreement", "partnership",
+    "fda", "approval", "trial", "phase",
+    "growth", "profit"
 ]
 
-# ===== DATE FILTER =====
+# ===== DATE =====
 def is_today(entry):
     try:
         t = entry.published_parsed
-        news_time = datetime(*t[:6], tzinfo=timezone.utc)
-        return news_time.date() == datetime.now(timezone.utc).date()
+        dt = datetime(*t[:6], tzinfo=timezone.utc)
+        return dt.date() == datetime.now(timezone.utc).date()
     except:
         return False
 
-# ===== SMART FILTER =====
+# ===== SYMBOL =====
+def get_symbol(text):
+    m = re.findall(r'\(([A-Z]{1,5})\)', text)
+    return m[0] if m else None
+
+# ===== COMPANY CHECK =====
+def has_company(title):
+    if get_symbol(title):
+        return True
+    # وجود كلمة كبيرة غالبًا اسم شركة (تقريب بسيط)
+    words = title.split()
+    return any(w.istitle() for w in words[:6])
+
+# ===== FILTER =====
 def is_valid(title):
     t = title.lower()
 
     if any(x in t for x in BLOCK):
         return False
 
-    if any(x in t for x in PRE_BLOCK):
+    if any(x in t for x in GLOBAL_BLOCK):
         return False
 
-    score = sum(1 for k in KEYWORDS if k in t)
+    if not has_company(title):
+        return False
 
-    return score >= 1  # 🔥 أهم تعديل
+    # يكفي كلمة وحدة
+    return any(k in t for k in KEYWORDS)
 
 # ===== CLASSIFY =====
 def classify(title):
     t = title.lower()
-
-    if any(x in t for x in ["beats", "surges", "growth", "positive"]):
+    if "beat" in t or "growth" in t or "acquires" in t:
         return "🚀 إيجابي"
-
-    if any(x in t for x in ["misses", "drops", "lawsuit"]):
+    if "miss" in t or "drop" in t:
         return "⚠️ سلبي"
-
     return "📊 عادي"
 
-# ===== IMPACT =====
-def impact(title):
-    t = title.lower()
-
-    if "phase 3" in t or "acquisition" in t or "merger" in t:
-        return "🔥🔥🔥 عالي"
-
-    if "earnings" in t or "approval" in t:
-        return "🔥🔥 قوي"
-
-    return "🔥 متوسط"
-
-# ===== TRANSLATION =====
+# ===== TRANSLATE =====
 def tr(text):
     if not USE_TRANSLATION:
         return ""
@@ -113,11 +107,6 @@ def tr(text):
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return ""
-
-# ===== SYMBOL =====
-def symbol(text):
-    m = re.findall(r'\(([A-Z]{1,5})\)', text)
-    return m[0] if m else None
 
 # ===== SEND =====
 async def send(msg):
@@ -129,24 +118,22 @@ async def send(msg):
 
 # ===== FETCH =====
 async def fetch_rss():
-    entries = []
+    data = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        entries.extend(feed.entries)
-    return entries
+        data.extend(feed.entries)
+    return data
 
 def fetch_sec():
     return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:20]
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running SMART FIXED...")
-
+    print("📡 Running CLEAN SIMPLE...")
     count = 0
 
-    # ===== SEC (8-K ONLY) =====
+    # ===== SEC (بس 8-K) =====
     for e in fetch_sec():
-
         if count >= MAX_NEWS:
             return
 
@@ -161,17 +148,14 @@ async def run_cycle():
 
         sent.add(e.link)
 
-        msg = f"""🚨 SEC 8-K
+        await send(f"""🚨 SEC 8-K
 
 📄 {e.title}
-"""
-
-        await send(msg)
+""")
         count += 1
 
     # ===== RSS =====
     for e in await fetch_rss():
-
         if count >= MAX_NEWS:
             return
 
@@ -186,7 +170,9 @@ async def run_cycle():
         if not is_valid(title):
             continue
 
-        sym = symbol(title) or "N/A"  # 🔥 ما عاد نحذف
+        sym = get_symbol(title)
+        if not sym:
+            continue  # نحافظ على نظافة
 
         sent.add(e.link)
 
@@ -194,24 +180,21 @@ async def run_cycle():
 
 🏷️ {sym}
 {classify(title)}
-{impact(title)}
 📢 {title}"""
 
-        translated = tr(title)
-        if translated:
-            msg += f"\n🇸🇦 {translated}"
+        ar = tr(title)
+        if ar:
+            msg += f"\n🇸🇦 {ar}"
 
         await send(msg)
         count += 1
 
     if count == 0:
-        print("No news this cycle")
+        print("No news")
 
 # ===== LOOP =====
 async def main():
-    print("🚀 SMART FIXED BOT STARTED")
-
-    await send("🚀 SMART BOT LIVE (FIXED)\nBalanced + Real-Time ⚡")
+    await send("🚀 BOT LIVE (CLEAN SIMPLE)\nNo Noise + More News")
 
     while True:
         try:
@@ -221,6 +204,5 @@ async def main():
             print("ERROR:", e)
             await asyncio.sleep(60)
 
-# ===== START =====
 if __name__ == "__main__":
     asyncio.run(main())
