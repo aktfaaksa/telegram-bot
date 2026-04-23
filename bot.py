@@ -1,214 +1,298 @@
-# ===== Alpha Market Radar FINAL TRADING 🚀 =====
-
-import asyncio
-import feedparser
 import os
-import re
+import time
+import requests
+import feedparser
+import hashlib
+import json
 from datetime import datetime, timezone
-from telegram import Bot
-from deep_translator import GoogleTranslator
 
 # ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
-bot = Bot(token=BOT_TOKEN)
+CHAT_IDS = [int(os.getenv("CHAT_ID", 0)), 6315087880]
 
-MAX_NEWS = 15
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
+# ===== إعدادات =====
+VERSION = "2.0.0"
+CYCLE_TIME = 300
+MAX_NEWS_PER_CYCLE = 15
+
+# ===== RSS =====
 RSS_FEEDS = [
-    "https://finance.yahoo.com/rss/",
+    "https://www.benzinga.com/feed",
+    "https://www.reuters.com/markets/us/rss",
     "https://feeds.bloomberg.com/markets/news.rss",
-    "https://www.reuters.com/markets/us/rss"
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://finance.yahoo.com/rss/",
+    "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "https://www.investing.com/rss/news_25.rss",
+    "https://seekingalpha.com/feed.xml"
 ]
 
+# ===== SEC =====
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/2.0 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
-sent = set()
+SEC_KEYWORDS = [
+    "bankruptcy","merger","acquisition","earnings",
+    "results","agreement","deal","delist"
+]
 
-# ===== ترجمة =====
-def tr(text):
-    try:
-        return GoogleTranslator(source='auto', target='ar').translate(text)
-    except:
-        return ""
+# ===== فلترة =====
+IMPORTANT_KEYWORDS = [
+    "earnings","revenue","profit","merger","acquisition",
+    "bankruptcy","dividend","guidance","results","deal"
+]
 
-# ===== DATE =====
-def is_today(entry):
-    try:
-        t = entry.get("published_parsed") or entry.get("updated_parsed")
-        if not t:
-            return True
-        dt = datetime(*t[:6], tzinfo=timezone.utc)
-        return dt.date() == datetime.now(timezone.utc).date()
-    except:
-        return True
+BLOCK_WORDS = [
+    "analyst","price target","opinion","strategist"
+]
 
-# ===== SYMBOL =====
-def get_symbol(text):
-    m = re.findall(r'\(([A-Z]{1,5})\)', text)
-    return m[0] if m else None
+# ===== Cache =====
+seen_links = set()
+seen_titles = set()
+stock_cache = {}
 
-# ===== RSS FILTER =====
-def is_valid(title):
-    t = title.lower()
-
-    # منع الضجيج
-    if any(x in t for x in [
-        "analyst", "price target", "upgrade", "downgrade",
-        "opinion", "strategist",
-        "war", "iran", "israel", "gaza",
-        "election", "president"
-    ]):
-        return False
-
-    # لازم يكون حدث مؤثر
-    if not any(k in t for k in [
-        "earnings", "revenue", "profit",
-        "acquire", "merger", "deal",
-        "bankruptcy", "split", "dividend",
-        "fda", "approval", "guidance"
-    ]):
-        return False
-
-    return True
-
-# ===== SEC FILTER =====
-def analyze_sec(title):
-    t = title.lower()
-
-    if any(x in t for x in ["bankruptcy", "chapter 11"]):
-        return "⚠️ إفلاس"
-
-    if any(x in t for x in ["merger", "acquisition"]):
-        return "🤝 اندماج"
-
-    if any(x in t for x in ["earnings", "results"]):
-        return "📊 نتائج مالية"
-
-    if any(x in t for x in ["agreement", "deal"]):
-        return "📢 صفقة"
-
-    if any(x in t for x in ["delist"]):
-        return "🚫 شطب"
-
-    return None  # 🔥 يمنع السبام
-
-# ===== استخراج الشركة =====
-def get_company(title):
-    try:
-        return title.split(" - ")[1].split("(")[0].strip()
-    except:
-        return "Unknown"
-
-# ===== SEND =====
-async def send(msg):
-    for cid in CHAT_IDS:
+# ===== Telegram =====
+def send_message(text):
+    for chat_id in CHAT_IDS:
         try:
-            await bot.send_message(chat_id=cid, text=msg)
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": text}
+            )
         except:
             pass
 
-# ===== FETCH =====
-async def fetch_rss():
-    data = []
+# ===== Startup =====
+def startup():
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    send_message(f"""
+🤖 AlphaBot Pro
+
+📦 Version: {VERSION}
+🟢 Running
+⏰ {now}
+""")
+
+# ===== Fetch News =====
+def fetch_news():
+    news = []
+
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        data.extend(feed.entries)
-    return data
 
-def fetch_sec():
-    return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:20]
+        for entry in feed.entries:
+            news.append({
+                "title": entry.title,
+                "link": entry.link,
+                "published": entry.get("published_parsed"),
+                "source": "NEWS"
+            })
 
-# ===== MAIN =====
-async def run_cycle():
-    print("📡 Running FINAL TRADING...")
+    return news
 
-    count = 0
+# ===== Fetch SEC =====
+def fetch_sec_news():
+    try:
+        response = requests.get(SEC_RSS, headers=SEC_HEADERS)
+        feed = feedparser.parse(response.text)
 
-    # ===== SEC =====
-    for e in fetch_sec():
+        news = []
 
-        if count >= MAX_NEWS:
-            return
+        for entry in feed.entries:
+            title = entry.title.lower()
 
-        if e.link in sent:
-            continue
+            if not any(k in title for k in SEC_KEYWORDS):
+                continue
 
-        if "8-k" not in e.title.lower():
-            continue
+            news.append({
+                "title": entry.title,
+                "link": entry.link,
+                "published": entry.get("published_parsed"),
+                "source": "SEC"
+            })
 
-        event = analyze_sec(e.title)
+        return news
+    except:
+        return []
 
-        # 🔥 فلترة قوية
-        if not event:
-            continue
+# ===== Filters =====
+def score_news(text):
+    text = text.lower()
+    score = 0
 
-        sent.add(e.link)
+    for w in IMPORTANT_KEYWORDS:
+        if w in text:
+            score += 2
 
-        company = get_company(e.title)
+    for w in BLOCK_WORDS:
+        if w in text:
+            score -= 3
 
-        msg = f"""🚨 SEC
+    return score
+
+def is_important(text):
+    return score_news(text) > 1
+
+def is_duplicate(news):
+    link = news["link"]
+    title = hashlib.md5(news["title"].lower().encode()).hexdigest()
+
+    if link in seen_links or title in seen_titles:
+        return True
+
+    seen_links.add(link)
+    seen_titles.add(title)
+    return False
+
+def is_recent(published, hours=2):
+    if not published:
+        return False
+
+    news_time = datetime(*published[:6], tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    return (now - news_time).total_seconds() <= hours * 3600
+
+# ===== AI =====
+def call_ai(prompt, model):
+    try:
+        res = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+        )
+        return res.json()["choices"][0]["message"]["content"]
+    except:
+        return None
+
+def extract_stock(text):
+    prompt = f"""
+Extract company name and US ticker.
+Return JSON:
+{{"company":"...","ticker":"..."}}
+
+{text}
+"""
+    res = call_ai(prompt, "anthropic/claude-3.7-sonnet")
+
+    try:
+        return json.loads(res)
+    except:
+        return {"company":"Unknown","ticker":None}
+
+def analyze(text):
+    prompt = f"""
+حلل الخبر:
+
+- ملخص عربي
+- صنف: شراء / بيع / محايد
+
+{text}
+"""
+    return call_ai(prompt, "openai/gpt-4o-mini") or ""
+
+# ===== Market =====
+def is_us_stock(ticker):
+    if not ticker:
+        return False
+
+    if ticker in stock_cache:
+        return stock_cache[ticker]
+
+    try:
+        url = f"https://finnhub.io/api/v1/stock/profile2?symbol={ticker}&token={FINNHUB_API_KEY}"
+        data = requests.get(url).json()
+        res = data.get("country") == "US"
+        stock_cache[ticker] = res
+        return res
+    except:
+        return False
+
+def get_price(ticker):
+    try:
+        url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
+        return requests.get(url).json().get("c")
+    except:
+        return None
+
+# ===== Signal =====
+def get_signal(text):
+    if "شراء" in text:
+        return "🟢 شراء"
+    elif "بيع" in text:
+        return "🔴 بيع"
+    return None
+
+# ===== Main =====
+def run():
+    while True:
+        news_list = fetch_news() + fetch_sec_news()
+        count = 0
+
+        for news in news_list:
+
+            if is_duplicate(news):
+                continue
+
+            if not is_recent(news["published"], 2):
+                continue
+
+            if news["source"] != "SEC" and not is_important(news["title"]):
+                continue
+
+            stock = extract_stock(news["title"])
+            ticker = stock.get("ticker")
+            company = stock.get("company")
+
+            if not is_us_stock(ticker):
+                continue
+
+            analysis = analyze(news["title"])
+            signal = get_signal(analysis)
+
+            if not signal:
+                continue
+
+            price = get_price(ticker)
+            tag = "🏛 SEC" if news["source"] == "SEC" else "📰 News"
+
+            msg = f"""
+{tag}
 
 🏢 {company}
-{event}
+💲 {ticker}
+💰 {price if price else "N/A"}
 
-📄 {e.title}
-🇸🇦 {tr(e.title)}
+📊 {signal}
 
-🔗 {e.link}
+{analysis}
+
+🔗 {news['link']}
 """
 
-        await send(msg)
-        count += 1
+            send_message(msg)
 
-    # ===== RSS =====
-    for e in await fetch_rss():
+            if news["source"] != "SEC":
+                count += 1
 
-        if count >= MAX_NEWS:
-            return
+            if count >= MAX_NEWS_PER_CYCLE:
+                break
 
-        if e.link in sent:
-            continue
+        time.sleep(CYCLE_TIME)
 
-        if not is_today(e):
-            continue
-
-        title = e.title
-
-        if not is_valid(title):
-            continue
-
-        sym = get_symbol(title)
-        if not sym:
-            continue
-
-        sent.add(e.link)
-
-        msg = f"""📰 NEWS
-
-🏷️ {sym}
-📢 {title}
-🇸🇦 {tr(title)}
-"""
-
-        await send(msg)
-        count += 1
-
-# ===== LOOP =====
-async def main():
-    await send("🚀 FINAL TRADING BOT LIVE\nOnly Real Events • No Noise 🎯")
-
-    while True:
-        try:
-            await run_cycle()
-            await asyncio.sleep(300)
-        except:
-            await asyncio.sleep(60)
-
-# ===== START =====
+# ===== Start =====
 if __name__ == "__main__":
-    asyncio.run(main())
+    startup()
+    run()
