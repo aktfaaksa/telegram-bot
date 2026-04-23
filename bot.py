@@ -1,4 +1,4 @@
-# AlphaBot Pro v3.4.0 MARKET SCANNER
+# AlphaBot Pro v3.5.0 SMART TRANSLATION
 
 import os
 import time
@@ -9,11 +9,9 @@ from datetime import datetime, timezone
 
 # ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# رقمك من Railway
 MAIN_CHAT_ID = int(os.getenv("CHAT_ID"))
-
-# رقم الشخص الثاني
 SECOND_CHAT_ID = 6315087880
 
 CHAT_IDS = [MAIN_CHAT_ID, SECOND_CHAT_ID]
@@ -34,7 +32,7 @@ RSS_FEEDS = [
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.4 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.5 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
@@ -48,7 +46,10 @@ BLOCK_KEYWORDS = [
     "crypto",
     "coin",
     "token",
-    "forecast"
+    "forecast",
+    "video",
+    "trailer",
+    "watch"
 ]
 
 IMPORTANT_KEYWORDS = [
@@ -84,13 +85,33 @@ def is_recent(published, hours=3):
 def send_message(text):
     for chat_id in CHAT_IDS:
         try:
-            res = requests.post(
+            requests.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": text}
             )
-            print(f"SEND {chat_id}:", res.status_code)
-        except Exception as e:
-            print("ERROR:", e)
+        except:
+            pass
+
+# ===== ترجمة ذكية =====
+def translate(text):
+    try:
+        res = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "openai/gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"ترجم الخبر التالي للعربية باختصار:\n{text}"
+                }]
+            }
+        )
+        return res.json()["choices"][0]["message"]["content"]
+    except:
+        return "⚠️ ترجمة غير متوفرة"
 
 # ===== RSS =====
 def fetch_news():
@@ -132,7 +153,7 @@ def fetch_sec():
 
 # ===== تشغيل =====
 def run():
-    send_message("🚀 AlphaBot v3.4.0 Market Scanner Started")
+    send_message("🚀 AlphaBot v3.5.0 SMART Started")
 
     while True:
         news = fetch_news() + fetch_sec()
@@ -142,11 +163,11 @@ def run():
 
             title = n["title"].lower()
 
-            # ❌ منع السبام
+            # ❌ حذف السبام
             if any(word in title for word in BLOCK_KEYWORDS):
                 continue
 
-            # ✅ السماح فقط بالمهم (ما عدا SEC)
+            # ✅ فقط الأخبار المهمة (ما عدا SEC)
             if n["source"] != "SEC":
                 if not any(word in title for word in IMPORTANT_KEYWORDS):
                     continue
@@ -159,12 +180,26 @@ def run():
             if not is_recent(n["published"], 3):
                 continue
 
-            tag = "🏛 SEC" if n["source"] == "SEC" else "📰 News"
+            # 🏷 تصنيف
+            if "earnings" in title:
+                tag = "🔥 Earnings"
+            elif "merger" in title or "acquisition" in title:
+                tag = "🚨 Deal"
+            elif n["source"] == "SEC":
+                tag = "🏛 SEC"
+            else:
+                tag = "📰 News"
+
+            # 🌍 ترجمة فقط للأخبار المهمة
+            translated = ""
+            if any(word in title for word in ["earnings","merger","acquisition","bankruptcy"]):
+                translated = translate(n["title"])
 
             msg = f"""
 {tag}
 
 📰 {n['title']}
+{f"🌍 {translated}" if translated else ""}
 
 🔗 {n['link']}
 """
