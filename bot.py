@@ -1,4 +1,4 @@
-# AlphaBot Pro v3.6.0 SMART TRADING FEED
+# AlphaBot Pro v3.6.1 FINAL CLEAN
 
 import os
 import time
@@ -7,6 +7,7 @@ import feedparser
 import hashlib
 from datetime import datetime, timezone
 
+# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
@@ -15,9 +16,11 @@ SECOND_CHAT_ID = 6315087880
 
 CHAT_IDS = [MAIN_CHAT_ID, SECOND_CHAT_ID]
 
+# ===== إعدادات =====
 CYCLE_TIME = 300
 MAX_NEWS = 15
 
+# ===== مصادر =====
 RSS_FEEDS = [
     "https://www.benzinga.com/feed",
     "https://www.reuters.com/markets/us/rss",
@@ -25,17 +28,32 @@ RSS_FEEDS = [
     "https://www.cnbc.com/id/100003114/device/rss/rss.html"
 ]
 
+# ===== SEC =====
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.6 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.6.1 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
-    "bankruptcy","merger","acquisition","earnings",
-    "results","agreement","deal","delist"
+    "bankruptcy",
+    "chapter 11",
+    "merger agreement",
+    "acquisition agreement",
+    "definitive agreement",
+    "earnings",
+    "results"
 ]
 
+SEC_BLOCK = [
+    "staff",
+    "notice",
+    "filing",
+    "form",
+    "registration"
+]
+
+# ===== فلترة =====
 BLOCK_KEYWORDS = [
     "price prediction","crypto","coin","token",
     "forecast","video","trailer","watch",
@@ -43,15 +61,27 @@ BLOCK_KEYWORDS = [
 ]
 
 MACRO_BLOCK = [
-    "bond","macro","economy","global","fund","loan","pension"
+    "bond","macro","economy","global",
+    "fund","loan","pension","capital"
+]
+
+BAD_ENTITIES = [
+    "pimco","blackrock","vanguard"
 ]
 
 IMPORTANT_KEYWORDS = [
     "earnings","revenue","profit","merger",
     "acquisition","bankruptcy","guidance",
-    "results","deal","shares","stock","drop","plunge","surge"
+    "results","deal","shares","stock",
+    "drop","plunge","surge","jump"
 ]
 
+COMPANY_FILTER = [
+    "inc","corp","ltd","plc",
+    "company","shares","stock"
+]
+
+# ===== منع التكرار =====
 seen = set()
 
 def is_new(title):
@@ -61,12 +91,14 @@ def is_new(title):
     seen.add(h)
     return True
 
+# ===== الوقت =====
 def is_recent(published, hours=3):
     if not published:
         return True
     t = datetime(*published[:6], tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - t).total_seconds() <= hours * 3600
 
+# ===== إرسال =====
 def send_message(text):
     for chat_id in CHAT_IDS:
         try:
@@ -77,6 +109,7 @@ def send_message(text):
         except:
             pass
 
+# ===== ترجمة =====
 def translate(text):
     try:
         res = requests.post(
@@ -97,6 +130,7 @@ def translate(text):
     except:
         return ""
 
+# ===== RSS =====
 def fetch_news():
     data = []
     for url in RSS_FEEDS:
@@ -110,6 +144,7 @@ def fetch_news():
             })
     return data
 
+# ===== SEC =====
 def fetch_sec():
     try:
         res = requests.get(SEC_RSS, headers=SEC_HEADERS)
@@ -118,6 +153,9 @@ def fetch_sec():
         data = []
         for e in feed.entries:
             title = e.title.lower()
+
+            if any(word in title for word in SEC_BLOCK):
+                continue
 
             if not any(k in title for k in SEC_KEYWORDS):
                 continue
@@ -133,8 +171,9 @@ def fetch_sec():
     except:
         return []
 
+# ===== تشغيل =====
 def run():
-    send_message("🚀 AlphaBot v3.6 Started")
+    send_message("🚀 AlphaBot v3.6.1 FINAL Started")
 
     while True:
         news = fetch_news() + fetch_sec()
@@ -153,8 +192,12 @@ def run():
             if any(word in title for word in MACRO_BLOCK):
                 continue
 
+            if any(word in title for word in BAD_ENTITIES):
+                continue
+
+            # ✅ فلترة الشركات فقط
             if n["source"] != "SEC":
-                if not any(word in title for word in IMPORTANT_KEYWORDS):
+                if not any(word in title for word in COMPANY_FILTER + IMPORTANT_KEYWORDS):
                     continue
 
             if not is_new(n["title"]):
@@ -163,17 +206,17 @@ def run():
             if not is_recent(n["published"], 3):
                 continue
 
-            # 🔥 تصنيف ذكي
+            # ===== تصنيف =====
             if "plunge" in title or "drop" in title:
                 tag = "🔻 SELL SIGNAL"
             elif "surge" in title or "jump" in title:
                 tag = "🚀 BUY SIGNAL"
-            elif "earnings" in title:
+            elif "earnings" in title or "revenue" in title:
                 tag = "🔥 Earnings"
             elif "merger" in title or "acquisition" in title:
                 tag = "🚨 Deal"
             elif n["source"] == "SEC":
-                tag = "🏛 SEC"
+                tag = "🏛 HIGH IMPACT SEC"
             else:
                 tag = "📰 News"
 
@@ -198,5 +241,6 @@ def run():
 
         time.sleep(CYCLE_TIME)
 
+# ===== Start =====
 if __name__ == "__main__":
     run()
