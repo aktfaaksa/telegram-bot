@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar CLEAN SIMPLE 🚀 =====
+# ===== Alpha Market Radar TRADING MODE 🚀 =====
 
 import asyncio
 import feedparser
@@ -17,39 +17,52 @@ bot = Bot(token=BOT_TOKEN)
 MAX_NEWS = 15
 USE_TRANSLATION = True
 
-# ===== RSS =====
+# ===== SOURCES =====
 RSS_FEEDS = [
     "https://finance.yahoo.com/rss/",
     "https://feeds.bloomberg.com/markets/news.rss",
     "https://www.reuters.com/markets/us/rss"
 ]
 
-# ===== SEC =====
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 SEC_HEADERS = {"User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"}
 
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK (بس الأساسيات) =====
+# ===== BLOCK =====
 BLOCK = [
     "price target", "analyst", "upgrade", "downgrade",
-    "opinion", "should you buy", "conference call", "transcript"
+    "opinion", "should you buy",
+    "conference call", "transcript"
 ]
 
-# ===== GLOBAL BLOCK (سياسة/عام) =====
 GLOBAL_BLOCK = [
-    "war", "conflict", "trial", "election",
-    "president", "icc", "government"
+    "war", "conflict", "election", "president",
+    "government", "icc"
 ]
 
-# ===== KEYWORDS خفيفة (بدون تعقيد) =====
+# ===== IMPORTANT EVENTS =====
 KEYWORDS = [
-    "earnings", "results", "revenue",
-    "acquires", "acquisition", "merger",
-    "deal", "agreement", "partnership",
+    # Earnings
+    "earnings", "results", "revenue", "profit", "guidance",
+
+    # M&A
+    "acquires", "acquisition", "merger", "deal",
+
+    # Risk events
+    "bankruptcy", "chapter 11", "liquidation",
+    "delisting", "delist", "warning",
+
+    # Corporate actions
+    "split", "stock split", "reverse split",
+    "dividend",
+
+    # Pharma
     "fda", "approval", "trial", "phase",
-    "growth", "profit"
+
+    # Big moves
+    "surges", "plunges", "jumps", "drops"
 ]
 
 # ===== DATE =====
@@ -68,11 +81,7 @@ def get_symbol(text):
 
 # ===== COMPANY CHECK =====
 def has_company(title):
-    if get_symbol(title):
-        return True
-    # وجود كلمة كبيرة غالبًا اسم شركة (تقريب بسيط)
-    words = title.split()
-    return any(w.istitle() for w in words[:6])
+    return bool(get_symbol(title))
 
 # ===== FILTER =====
 def is_valid(title):
@@ -87,17 +96,31 @@ def is_valid(title):
     if not has_company(title):
         return False
 
-    # يكفي كلمة وحدة
     return any(k in t for k in KEYWORDS)
 
 # ===== CLASSIFY =====
 def classify(title):
     t = title.lower()
-    if "beat" in t or "growth" in t or "acquires" in t:
+
+    if any(x in t for x in ["surges", "beats", "growth", "profit"]):
         return "🚀 إيجابي"
-    if "miss" in t or "drop" in t:
+
+    if any(x in t for x in ["plunges", "bankruptcy", "drops", "warning"]):
         return "⚠️ سلبي"
+
     return "📊 عادي"
+
+# ===== IMPACT =====
+def impact(title):
+    t = title.lower()
+
+    if any(x in t for x in ["bankruptcy", "chapter 11", "merger"]):
+        return "🔥🔥🔥 عالي"
+
+    if any(x in t for x in ["earnings", "approval"]):
+        return "🔥🔥 قوي"
+
+    return "🔥 متوسط"
 
 # ===== TRANSLATE =====
 def tr(text):
@@ -129,11 +152,13 @@ def fetch_sec():
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running CLEAN SIMPLE...")
+    print("📡 Running TRADING MODE...")
+
     count = 0
 
-    # ===== SEC (بس 8-K) =====
+    # ===== SEC (8-K فقط) =====
     for e in fetch_sec():
+
         if count >= MAX_NEWS:
             return
 
@@ -152,10 +177,12 @@ async def run_cycle():
 
 📄 {e.title}
 """)
+
         count += 1
 
     # ===== RSS =====
     for e in await fetch_rss():
+
         if count >= MAX_NEWS:
             return
 
@@ -172,7 +199,7 @@ async def run_cycle():
 
         sym = get_symbol(title)
         if not sym:
-            continue  # نحافظ على نظافة
+            continue
 
         sent.add(e.link)
 
@@ -180,6 +207,7 @@ async def run_cycle():
 
 🏷️ {sym}
 {classify(title)}
+{impact(title)}
 📢 {title}"""
 
         ar = tr(title)
@@ -187,14 +215,15 @@ async def run_cycle():
             msg += f"\n🇸🇦 {ar}"
 
         await send(msg)
+
         count += 1
 
     if count == 0:
-        print("No news")
+        print("No trading news")
 
 # ===== LOOP =====
 async def main():
-    await send("🚀 BOT LIVE (CLEAN SIMPLE)\nNo Noise + More News")
+    await send("🚀 TRADING BOT LIVE\nEvery 5 min • Max 15 News 🎯")
 
     while True:
         try:
@@ -204,5 +233,6 @@ async def main():
             print("ERROR:", e)
             await asyncio.sleep(60)
 
+# ===== START =====
 if __name__ == "__main__":
     asyncio.run(main())
