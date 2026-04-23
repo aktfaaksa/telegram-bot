@@ -1,3 +1,8 @@
+# ==============================
+# AlphaBot Pro
+# Version: 3.0.0 (SMART MODE)
+# ==============================
+
 import os
 import time
 import requests
@@ -14,7 +19,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
 # ===== إعدادات =====
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 CYCLE_TIME = 300
 MAX_NEWS_PER_CYCLE = 15
 
@@ -34,7 +39,7 @@ RSS_FEEDS = [
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/2.0 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.0 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
@@ -75,94 +80,81 @@ def startup():
 🤖 AlphaBot Pro
 
 📦 Version: {VERSION}
-🟢 Running
+🟢 SMART MODE ACTIVE
 ⏰ {now}
 """)
 
-# ===== Fetch News =====
+# ===== Fetch =====
 def fetch_news():
-    news = []
-
+    data = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-
-        for entry in feed.entries:
-            news.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.get("published_parsed"),
+        for e in feed.entries:
+            data.append({
+                "title": e.title,
+                "link": e.link,
+                "published": e.get("published_parsed"),
                 "source": "NEWS"
             })
+    return data
 
-    return news
-
-# ===== Fetch SEC =====
-def fetch_sec_news():
+def fetch_sec():
     try:
-        response = requests.get(SEC_RSS, headers=SEC_HEADERS)
-        feed = feedparser.parse(response.text)
+        res = requests.get(SEC_RSS, headers=SEC_HEADERS)
+        feed = feedparser.parse(res.text)
 
-        news = []
-
-        for entry in feed.entries:
-            title = entry.title.lower()
-
-            if not any(k in title for k in SEC_KEYWORDS):
+        data = []
+        for e in feed.entries:
+            t = e.title.lower()
+            if not any(k in t for k in SEC_KEYWORDS):
                 continue
 
-            news.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.get("published_parsed"),
+            data.append({
+                "title": e.title,
+                "link": e.link,
+                "published": e.get("published_parsed"),
                 "source": "SEC"
             })
-
-        return news
+        return data
     except:
         return []
 
-# ===== Filters =====
+# ===== Utils =====
+def is_duplicate(news):
+    h = hashlib.md5(news["title"].lower().encode()).hexdigest()
+    if news["link"] in seen_links or h in seen_titles:
+        return True
+
+    seen_links.add(news["link"])
+    seen_titles.add(h)
+    return False
+
+def is_recent(published, hours=3):
+    if not published:
+        return False
+
+    t = datetime(*published[:6], tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return (now - t).total_seconds() <= hours * 3600
+
 def score_news(text):
     text = text.lower()
     score = 0
 
     for w in IMPORTANT_KEYWORDS:
         if w in text:
-            score += 2
+            score += 3
 
     for w in BLOCK_WORDS:
         if w in text:
-            score -= 3
+            score -= 2
 
     return score
-
-def is_important(text):
-    return score_news(text) > 1
-
-def is_duplicate(news):
-    link = news["link"]
-    title = hashlib.md5(news["title"].lower().encode()).hexdigest()
-
-    if link in seen_links or title in seen_titles:
-        return True
-
-    seen_links.add(link)
-    seen_titles.add(title)
-    return False
-
-def is_recent(published, hours=2):
-    if not published:
-        return False
-
-    news_time = datetime(*published[:6], tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-
-    return (now - news_time).total_seconds() <= hours * 3600
 
 # ===== AI =====
 def call_ai(prompt, model):
     try:
-        res = requests.post(
+        r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -173,13 +165,13 @@ def call_ai(prompt, model):
                 "messages": [{"role": "user", "content": prompt}]
             }
         )
-        return res.json()["choices"][0]["message"]["content"]
+        return r.json()["choices"][0]["message"]["content"]
     except:
-        return None
+        return ""
 
 def extract_stock(text):
     prompt = f"""
-Extract company name and US ticker.
+Extract US stock ticker and company.
 Return JSON:
 {{"company":"...","ticker":"..."}}
 
@@ -198,10 +190,28 @@ def analyze(text):
 
 - ملخص عربي
 - صنف: شراء / بيع / محايد
+- قوة الخبر: رقم من 1 إلى 10
 
 {text}
 """
-    return call_ai(prompt, "openai/gpt-4o-mini") or ""
+    return call_ai(prompt, "openai/gpt-4o-mini")
+
+def extract_score(ai_text):
+    try:
+        for line in ai_text.split("\n"):
+            if "قوة" in line:
+                return int(''.join(filter(str.isdigit, line)))
+    except:
+        pass
+    return 5
+
+def get_signal(ai_text):
+    if "شراء" in ai_text:
+        return "🟢 شراء"
+    elif "بيع" in ai_text:
+        return "🔴 بيع"
+    else:
+        return "⚪ محايد"
 
 # ===== Market =====
 def is_us_stock(ticker):
@@ -213,8 +223,8 @@ def is_us_stock(ticker):
 
     try:
         url = f"https://finnhub.io/api/v1/stock/profile2?symbol={ticker}&token={FINNHUB_API_KEY}"
-        data = requests.get(url).json()
-        res = data.get("country") == "US"
+        d = requests.get(url).json()
+        res = d.get("country") == "US"
         stock_cache[ticker] = res
         return res
     except:
@@ -227,57 +237,66 @@ def get_price(ticker):
     except:
         return None
 
-# ===== Signal =====
-def get_signal(text):
-    if "شراء" in text:
-        return "🟢 شراء"
-    elif "بيع" in text:
-        return "🔴 بيع"
-    return None
-
 # ===== Main =====
 def run():
     while True:
-        news_list = fetch_news() + fetch_sec_news()
-        count = 0
+        all_news = fetch_news() + fetch_sec()
 
-        for news in news_list:
+        candidates = []
+
+        for news in all_news:
 
             if is_duplicate(news):
                 continue
 
-            if not is_recent(news["published"], 2):
+            if not is_recent(news["published"], 3):
                 continue
 
-            if news["source"] != "SEC" and not is_important(news["title"]):
-                continue
+            base_score = score_news(news["title"])
 
             stock = extract_stock(news["title"])
             ticker = stock.get("ticker")
-            company = stock.get("company")
 
             if not is_us_stock(ticker):
                 continue
 
-            analysis = analyze(news["title"])
-            signal = get_signal(analysis)
+            ai_text = analyze(news["title"])
+            ai_score = extract_score(ai_text)
 
-            if not signal:
-                continue
+            total_score = base_score + ai_score
 
-            price = get_price(ticker)
+            candidates.append({
+                "news": news,
+                "ticker": ticker,
+                "company": stock.get("company"),
+                "analysis": ai_text,
+                "score": total_score
+            })
+
+        # ===== ترتيب حسب القوة =====
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+
+        count = 0
+
+        for item in candidates:
+            news = item["news"]
+
+            signal = get_signal(item["analysis"])
+            price = get_price(item["ticker"])
+
             tag = "🏛 SEC" if news["source"] == "SEC" else "📰 News"
 
             msg = f"""
 {tag}
 
-🏢 {company}
-💲 {ticker}
+🏢 {item['company']}
+💲 {item['ticker']}
 💰 {price if price else "N/A"}
 
 📊 {signal}
+⭐ Score: {item['score']}
 
-{analysis}
+{item['analysis']}
 
 🔗 {news['link']}
 """
