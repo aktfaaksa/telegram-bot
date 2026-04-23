@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar TRADING MODE 🚀 =====
+# ===== Alpha Market Radar PRO FINAL 🚀 =====
 
 import asyncio
 import feedparser
@@ -25,87 +25,41 @@ RSS_FEEDS = [
 ]
 
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
-SEC_HEADERS = {"User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"}
+SEC_HEADERS = {
+    "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"
+}
 
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK =====
-BLOCK = [
-    "price target", "analyst", "upgrade", "downgrade",
-    "opinion", "should you buy",
-    "conference call", "transcript"
-]
-
-GLOBAL_BLOCK = [
-    "war", "conflict", "election", "president",
-    "government", "icc"
-]
-
-# ===== IMPORTANT EVENTS =====
-KEYWORDS = [
-    # Earnings
-    "earnings", "results", "revenue", "profit", "guidance",
-
-    # M&A
-    "acquires", "acquisition", "merger", "deal",
-
-    # Risk events
-    "bankruptcy", "chapter 11", "liquidation",
-    "delisting", "delist", "warning",
-
-    # Corporate actions
-    "split", "stock split", "reverse split",
-    "dividend",
-
-    # Pharma
-    "fda", "approval", "trial", "phase",
-
-    # Big moves
-    "surges", "plunges", "jumps", "drops"
-]
-
-# ===== DATE =====
-def is_today(entry):
+# ===== DATE FIX (🔥 مهم) =====
+def is_recent(entry):
     try:
-        t = entry.published_parsed
-        dt = datetime(*t[:6], tzinfo=timezone.utc)
-        return dt.date() == datetime.now(timezone.utc).date()
+        t = entry.get("published_parsed") or entry.get("updated_parsed")
+        if not t:
+            return True
+
+        news_time = datetime(*t[:6], tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        diff = (now - news_time).total_seconds() / 60
+        return diff <= 180  # آخر 3 ساعات
     except:
-        return False
+        return True
 
 # ===== SYMBOL =====
 def get_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
 
-# ===== COMPANY CHECK =====
-def has_company(title):
-    return bool(get_symbol(title))
-
-# ===== FILTER =====
-def is_valid(title):
-    t = title.lower()
-
-    if any(x in t for x in BLOCK):
-        return False
-
-    if any(x in t for x in GLOBAL_BLOCK):
-        return False
-
-    if not has_company(title):
-        return False
-
-    return any(k in t for k in KEYWORDS)
-
 # ===== CLASSIFY =====
 def classify(title):
     t = title.lower()
 
-    if any(x in t for x in ["surges", "beats", "growth", "profit"]):
+    if any(x in t for x in ["beat", "growth", "profit", "surge"]):
         return "🚀 إيجابي"
 
-    if any(x in t for x in ["plunges", "bankruptcy", "drops", "warning"]):
+    if any(x in t for x in ["miss", "drop", "bankruptcy", "warning"]):
         return "⚠️ سلبي"
 
     return "📊 عادي"
@@ -122,6 +76,27 @@ def impact(title):
 
     return "🔥 متوسط"
 
+# ===== FILTER =====
+def is_valid(title):
+    t = title.lower()
+
+    if any(x in t for x in [
+        "price target", "analyst", "upgrade", "downgrade",
+        "opinion", "should you buy"
+    ]):
+        return False
+
+    if not any(k in t for k in [
+        "earnings", "revenue", "profit",
+        "acquire", "merger", "deal",
+        "bankruptcy", "split", "dividend",
+        "trial", "fda", "approval",
+        "guidance", "results"
+    ]):
+        return False
+
+    return True
+
 # ===== TRANSLATE =====
 def tr(text):
     if not USE_TRANSLATION:
@@ -131,6 +106,37 @@ def tr(text):
     except:
         return ""
 
+# ===== SEC HELPERS =====
+def fetch_sec():
+    return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:30]
+
+def extract_company(title):
+    parts = title.split(" - ")
+    return parts[0] if parts else "Unknown"
+
+def guess_symbol(company):
+    words = company.split()
+    if words:
+        sym = words[0].upper()
+        if len(sym) <= 5:
+            return sym
+    return "N/A"
+
+# ===== تحليل 8-K بسيط 🔥 =====
+def analyze_8k(title):
+    t = title.lower()
+
+    if "bankruptcy" in t:
+        return "⚠️ إفلاس محتمل"
+    if "merger" in t or "acquisition" in t:
+        return "🤝 اندماج / استحواذ"
+    if "earnings" in t:
+        return "📊 نتائج مالية"
+    if "delist" in t:
+        return "🚫 شطب محتمل"
+
+    return "📄 حدث مهم"
+
 # ===== SEND =====
 async def send(msg):
     for cid in CHAT_IDS:
@@ -139,7 +145,7 @@ async def send(msg):
         except:
             pass
 
-# ===== FETCH =====
+# ===== FETCH RSS =====
 async def fetch_rss():
     data = []
     for url in RSS_FEEDS:
@@ -147,37 +153,39 @@ async def fetch_rss():
         data.extend(feed.entries)
     return data
 
-def fetch_sec():
-    return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:20]
-
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running TRADING MODE...")
+    print("📡 Running PRO FINAL...")
 
     count = 0
 
-    # ===== SEC (8-K فقط) =====
+    # ===== SEC =====
     for e in fetch_sec():
 
         if count >= MAX_NEWS:
             return
 
-        if not is_today(e):
+        if e.link in sent:
             continue
 
         if "8-k" not in e.title.lower():
             continue
 
-        if e.link in sent:
-            continue
-
         sent.add(e.link)
 
-        await send(f"""🚨 SEC 8-K
+        company = extract_company(e.title)
+        symbol = guess_symbol(company)
+
+        msg = f"""🚨 SEC 8-K
+
+🏷️ {symbol}
+🏢 {company}
+{analyze_8k(e.title)}
 
 📄 {e.title}
-""")
+"""
 
+        await send(msg)
         count += 1
 
     # ===== RSS =====
@@ -186,10 +194,10 @@ async def run_cycle():
         if count >= MAX_NEWS:
             return
 
-        if not is_today(e):
+        if e.link in sent:
             continue
 
-        if e.link in sent:
+        if not is_recent(e):
             continue
 
         title = e.title
@@ -197,9 +205,7 @@ async def run_cycle():
         if not is_valid(title):
             continue
 
-        sym = get_symbol(title)
-        if not sym:
-            continue
+        sym = get_symbol(title) or "N/A"
 
         sent.add(e.link)
 
@@ -215,15 +221,14 @@ async def run_cycle():
             msg += f"\n🇸🇦 {ar}"
 
         await send(msg)
-
         count += 1
 
     if count == 0:
-        print("No trading news")
+        print("⚠️ No news this cycle")
 
 # ===== LOOP =====
 async def main():
-    await send("🚀 TRADING BOT LIVE\nEvery 5 min • Max 15 News 🎯")
+    await send("🚀 PRO BOT LIVE\nSEC + RSS + Smart Analysis 🔥")
 
     while True:
         try:
