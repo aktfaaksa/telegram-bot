@@ -27,7 +27,6 @@ RSS_FEEDS = [
 
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
-# 🔥 الإيميل مضاف هنا
 SEC_HEADERS = {
     "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com) Python Requests"
 }
@@ -41,7 +40,7 @@ def tr(text):
     except:
         return ""
 
-# ===== DATE (اليوم فقط) =====
+# ===== DATE =====
 def is_today(entry):
     try:
         t = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -57,7 +56,7 @@ def get_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
 
-# ===== RSS FILTER =====
+# ===== FILTER =====
 def is_valid(title):
     t = title.lower()
 
@@ -106,30 +105,41 @@ def get_company(title):
     except:
         return "Unknown"
 
-# 🔥 قراءة الملف الحقيقي بدل index
+# ===== 🔥 SEC FIX (الجزء المهم) =====
 def read_8k(url):
     try:
         res = requests.get(url, headers=SEC_HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
 
-        for link in soup.find_all("a"):
-            href = link.get("href", "")
+        rows = soup.find_all("tr")
 
-            if ".htm" in href and "index" not in href:
-                real_url = "https://www.sec.gov" + href
+        for row in rows:
+            cols = row.find_all("td")
 
-                res2 = requests.get(real_url, headers=SEC_HEADERS, timeout=10)
-                soup2 = BeautifulSoup(res2.text, "html.parser")
+            if len(cols) >= 4:
+                doc_type = cols[3].text.strip().lower()
 
-                text = soup2.get_text(" ", strip=True)
-                return text[:2000]
+                if "8-k" in doc_type:
+                    link = cols[2].find("a")
+
+                    if link:
+                        href = link.get("href")
+                        real_url = "https://www.sec.gov" + href
+
+                        res2 = requests.get(real_url, headers=SEC_HEADERS, timeout=10)
+                        soup2 = BeautifulSoup(res2.text, "html.parser")
+
+                        text = soup2.get_text(" ", strip=True)
+
+                        return text[:2000]
 
         return ""
 
-    except:
+    except Exception as e:
+        print("SEC read error:", e)
         return ""
 
-# ===== تحليل الحدث =====
+# ===== ANALYSIS =====
 def analyze(text):
     t = text.lower()
 
@@ -167,7 +177,7 @@ def fetch_sec():
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running FINAL PRO...")
+    print("📡 Running FINAL PRO FIXED...")
 
     count = 0
 
@@ -247,7 +257,7 @@ async def run_cycle():
 
 # ===== LOOP =====
 async def main():
-    await send("🚀 FINAL PRO BOT LIVE\nSEC + Translation + Real Parsing 🔥")
+    await send("🚀 FINAL PRO FIXED BOT LIVE\nSEC Real Parsing + Translation 🔥")
 
     while True:
         try:
