@@ -1,4 +1,4 @@
-# AlphaBot Pro v3.5.0 SMART TRANSLATION
+# AlphaBot Pro v3.5.1 SMART FILTERED FEED
 
 import os
 import time
@@ -32,7 +32,7 @@ RSS_FEEDS = [
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.5 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.5.1 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
@@ -42,26 +42,18 @@ SEC_KEYWORDS = [
 
 # ===== فلترة =====
 BLOCK_KEYWORDS = [
-    "price prediction",
-    "crypto",
-    "coin",
-    "token",
-    "forecast",
-    "video",
-    "trailer",
-    "watch"
+    "price prediction","crypto","coin","token",
+    "forecast","video","trailer","watch"
+]
+
+MACRO_BLOCK = [
+    "bond","macro","economy","global","fund","loan"
 ]
 
 IMPORTANT_KEYWORDS = [
-    "earnings",
-    "revenue",
-    "profit",
-    "merger",
-    "acquisition",
-    "bankruptcy",
-    "guidance",
-    "results",
-    "deal"
+    "earnings","revenue","profit","merger",
+    "acquisition","bankruptcy","guidance",
+    "results","deal","shares","stock"
 ]
 
 # ===== منع التكرار =====
@@ -92,7 +84,7 @@ def send_message(text):
         except:
             pass
 
-# ===== ترجمة ذكية =====
+# ===== ترجمة =====
 def translate(text):
     try:
         res = requests.post(
@@ -111,7 +103,7 @@ def translate(text):
         )
         return res.json()["choices"][0]["message"]["content"]
     except:
-        return "⚠️ ترجمة غير متوفرة"
+        return ""
 
 # ===== RSS =====
 def fetch_news():
@@ -153,7 +145,7 @@ def fetch_sec():
 
 # ===== تشغيل =====
 def run():
-    send_message("🚀 AlphaBot v3.5.0 SMART Started")
+    send_message("🚀 AlphaBot v3.5.1 Started")
 
     while True:
         news = fetch_news() + fetch_sec()
@@ -163,11 +155,19 @@ def run():
 
             title = n["title"].lower()
 
+            # ❌ حذف الفيديو
+            if "video" in n["link"]:
+                continue
+
             # ❌ حذف السبام
             if any(word in title for word in BLOCK_KEYWORDS):
                 continue
 
-            # ✅ فقط الأخبار المهمة (ما عدا SEC)
+            # ❌ حذف الماكرو
+            if any(word in title for word in MACRO_BLOCK):
+                continue
+
+            # ✅ فقط المهم (ما عدا SEC)
             if n["source"] != "SEC":
                 if not any(word in title for word in IMPORTANT_KEYWORDS):
                     continue
@@ -181,7 +181,7 @@ def run():
                 continue
 
             # 🏷 تصنيف
-            if "earnings" in title:
+            if "earnings" in title or "revenue" in title:
                 tag = "🔥 Earnings"
             elif "merger" in title or "acquisition" in title:
                 tag = "🚨 Deal"
@@ -190,9 +190,9 @@ def run():
             else:
                 tag = "📰 News"
 
-            # 🌍 ترجمة فقط للأخبار المهمة
+            # 🌍 ترجمة ذكية
             translated = ""
-            if any(word in title for word in ["earnings","merger","acquisition","bankruptcy"]):
+            if any(word in title for word in IMPORTANT_KEYWORDS):
                 translated = translate(n["title"])
 
             msg = f"""
