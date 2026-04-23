@@ -1,4 +1,4 @@
-# AlphaBot Pro v3.3.2 MULTI USERS + SEC
+# AlphaBot Pro v3.4.0 MARKET SCANNER
 
 import os
 import time
@@ -10,18 +10,17 @@ from datetime import datetime, timezone
 # ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# 🟢 رقمك من Railway
+# رقمك من Railway
 MAIN_CHAT_ID = int(os.getenv("CHAT_ID"))
 
-# 🔵 الشخص الثاني (حط رقمه هنا)
+# رقم الشخص الثاني
 SECOND_CHAT_ID = 6315087880
 
-# 📢 كل المستقبلين
 CHAT_IDS = [MAIN_CHAT_ID, SECOND_CHAT_ID]
 
 # ===== إعدادات =====
 CYCLE_TIME = 300
-MAX_NEWS = 10
+MAX_NEWS = 15
 
 # ===== مصادر =====
 RSS_FEEDS = [
@@ -35,12 +34,33 @@ RSS_FEEDS = [
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
 
 SEC_HEADERS = {
-    "User-Agent": "AlphaBot/3.3.2 (Financial Bot; aktfaaksa@gmail.com)"
+    "User-Agent": "AlphaBot/3.4 (Financial Bot; aktfaaksa@gmail.com)"
 }
 
 SEC_KEYWORDS = [
     "bankruptcy","merger","acquisition","earnings",
     "results","agreement","deal","delist"
+]
+
+# ===== فلترة =====
+BLOCK_KEYWORDS = [
+    "price prediction",
+    "crypto",
+    "coin",
+    "token",
+    "forecast"
+]
+
+IMPORTANT_KEYWORDS = [
+    "earnings",
+    "revenue",
+    "profit",
+    "merger",
+    "acquisition",
+    "bankruptcy",
+    "guidance",
+    "results",
+    "deal"
 ]
 
 # ===== منع التكرار =====
@@ -68,7 +88,7 @@ def send_message(text):
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": text}
             )
-            print(f"SEND TO {chat_id}:", res.status_code)
+            print(f"SEND {chat_id}:", res.status_code)
         except Exception as e:
             print("ERROR:", e)
 
@@ -112,7 +132,7 @@ def fetch_sec():
 
 # ===== تشغيل =====
 def run():
-    send_message("🚀 AlphaBot v3.3.2 Started (Multi Users)")
+    send_message("🚀 AlphaBot v3.4.0 Market Scanner Started")
 
     while True:
         news = fetch_news() + fetch_sec()
@@ -120,9 +140,22 @@ def run():
 
         for n in news:
 
+            title = n["title"].lower()
+
+            # ❌ منع السبام
+            if any(word in title for word in BLOCK_KEYWORDS):
+                continue
+
+            # ✅ السماح فقط بالمهم (ما عدا SEC)
+            if n["source"] != "SEC":
+                if not any(word in title for word in IMPORTANT_KEYWORDS):
+                    continue
+
+            # ❌ تكرار
             if not is_new(n["title"]):
                 continue
 
+            # ⏱ وقت
             if not is_recent(n["published"], 3):
                 continue
 
