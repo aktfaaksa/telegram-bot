@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar REAL-TIME 🚀 =====
+# ===== Alpha Market Radar SMART 🚀 =====
 
 import asyncio
 import feedparser
@@ -27,223 +27,194 @@ RSS_FEEDS = [
 
 # ===== SEC =====
 SEC_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&output=atom"
-
-SEC_HEADERS = {
-    "User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"
-}
+SEC_HEADERS = {"User-Agent": "AlphaBot/5.2 (aktfaaksa@gmail.com)"}
 
 # ===== MEMORY =====
 sent = set()
 
-# ===== BLOCK SPAM =====
-BLOCK_KEYWORDS = [
-    "price target", "raises target", "cuts target",
-    "analyst", "rating", "upgrade", "downgrade",
-    "should you buy", "opinion",
-    "conference call", "transcript",
-    "market wrap", "stocks rise", "stocks fall",
-    "forecast", "outlook", "expects"
+# ===== BLOCK =====
+BLOCK = [
+    "price target", "analyst", "rating", "upgrade", "downgrade",
+    "opinion", "forecast", "outlook", "should you buy",
+    "conference call", "transcript"
 ]
 
-# ===== PRE-EVENT BLOCK =====
-PRE_EVENT_BLOCK = [
-    "ahead of", "before", "anticipation",
-    "expected", "set to", "upcoming"
+PRE_BLOCK = [
+    "ahead of", "expected", "anticipation", "upcoming"
 ]
 
-# ===== EVENTS =====
-STRONG_KEYWORDS = [
-    "beats earnings", "misses earnings", "reports earnings",
-    "acquires", "to acquire", "merger",
-    "fda approval", "approved",
-    "phase 3 results", "positive results",
-    "successful trial"
-]
+# ===== SMART KEYWORDS =====
+KEYWORDS = [
+    # Earnings
+    "earnings", "quarterly", "results", "revenue",
 
-MEDIUM_KEYWORDS = [
-    "phase 2", "trial", "study",
-    "deal", "partnership", "guidance"
+    # Deals
+    "acquires", "acquisition", "merger",
+    "deal", "agreement", "partnership",
+
+    # Pharma
+    "phase", "trial", "clinical", "fda", "approval",
+
+    # Market reaction
+    "surges", "jumps", "soars", "growth"
 ]
 
 # ===== DATE FILTER =====
 def is_today(entry):
     try:
-        published = entry.published_parsed
-        news_time = datetime(*published[:6], tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        return news_time.date() == now.date()
+        t = entry.published_parsed
+        news_time = datetime(*t[:6], tzinfo=timezone.utc)
+        return news_time.date() == datetime.now(timezone.utc).date()
     except:
         return False
 
-# ===== FILTER =====
-def is_valid_news(title):
+# ===== SMART FILTER =====
+def is_valid(title):
     t = title.lower()
 
-    if any(x in t for x in PRE_EVENT_BLOCK):
+    if any(x in t for x in BLOCK):
         return False
 
-    if any(x in t for x in BLOCK_KEYWORDS):
+    if any(x in t for x in PRE_BLOCK):
         return False
 
-    if any(x in t for x in STRONG_KEYWORDS):
-        return True
+    score = sum(1 for k in KEYWORDS if k in t)
 
-    if any(x in t for x in MEDIUM_KEYWORDS):
-        return True
-
-    return False
-
-# ===== IMPACT =====
-def get_impact(title):
-    t = title.lower()
-
-    if "phase 3" in t or "acquires" in t or "merger" in t:
-        return "🔥🔥🔥 عالي"
-
-    if "beats" in t or "approval" in t:
-        return "🔥🔥 قوي"
-
-    return "🔥 متوسط"
+    return score >= 2  # 🔥 السر هنا
 
 # ===== CLASSIFY =====
-def classify_news(title):
+def classify(title):
     t = title.lower()
 
-    if any(x in t for x in ["beats", "positive", "acquires", "approval"]):
+    if any(x in t for x in ["beats", "surges", "growth", "positive"]):
         return "🚀 إيجابي"
 
-    if any(x in t for x in ["misses", "drops", "cuts", "lawsuit"]):
+    if any(x in t for x in ["misses", "drops", "lawsuit"]):
         return "⚠️ سلبي"
 
     return "📊 عادي"
 
-# ===== TRANSLATION =====
+# ===== IMPACT =====
+def impact(title):
+    t = title.lower()
+
+    if "phase 3" in t or "acquisition" in t:
+        return "🔥🔥🔥 عالي"
+
+    if "earnings" in t or "approval" in t:
+        return "🔥🔥 قوي"
+
+    return "🔥 متوسط"
+
+# ===== TRANSLATE =====
 def tr(text):
     if not USE_TRANSLATION:
         return ""
-
     try:
         return GoogleTranslator(source='auto', target='ar').translate(text)
     except:
         return ""
 
 # ===== SYMBOL =====
-def extract_symbol(text):
-    match = re.findall(r'\(([A-Z]{1,5})\)', text)
-    return match[0] if match else None
-
-def extract_sec_symbol(title):
-    match = re.findall(r'\((.*?)\)', title)
-    return match[0] if match else None
+def symbol(text):
+    m = re.findall(r'\(([A-Z]{1,5})\)', text)
+    return m[0] if m else None
 
 # ===== SEND =====
-async def send_msg(text):
-    for chat_id in CHAT_IDS:
+async def send(msg):
+    for cid in CHAT_IDS:
         try:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await bot.send_message(chat_id=cid, text=msg)
         except:
             pass
 
 # ===== FETCH =====
 async def fetch_rss():
-    entries = []
+    all_entries = []
     for url in RSS_FEEDS:
         feed = feedparser.parse(url)
-        entries.extend(feed.entries)
-    return entries
+        all_entries.extend(feed.entries)
+    return all_entries
 
 def fetch_sec():
-    feed = feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS)
-    return feed.entries[:20]
+    return feedparser.parse(SEC_RSS, request_headers=SEC_HEADERS).entries[:20]
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running REAL-TIME mode...")
+    print("📡 Running SMART...")
 
-    total_sent = 0
+    count = 0
 
-    # ===== SEC =====
+    # ===== SEC (8-K ONLY) =====
     for e in fetch_sec():
 
-        if total_sent >= MAX_NEWS:
+        if count >= MAX_NEWS:
             return
 
         if not is_today(e):
             continue
 
-        key = e.link
-        if key in sent:
+        if "8-k" not in e.title.lower():
             continue
 
-        title = e.title
-
-        if not is_valid_news(title):
+        if e.link in sent:
             continue
 
-        symbol = extract_sec_symbol(title)
-        if not symbol:
-            continue
+        sent.add(e.link)
 
-        sent.add(key)
+        msg = f"""🚨 SEC 8-K
 
-        msg = f"""🚨 SEC
-
-🏷️ {symbol}
-{classify_news(title)}
-{get_impact(title)}
-📄 {title}
+📄 {e.title}
 """
 
-        await send_msg(msg)
-        total_sent += 1
+        await send(msg)
+        count += 1
 
     # ===== RSS =====
     for e in await fetch_rss():
 
-        if total_sent >= MAX_NEWS:
+        if count >= MAX_NEWS:
             return
 
         if not is_today(e):
             continue
 
-        key = e.link
-        if key in sent:
+        if e.link in sent:
             continue
 
         title = e.title
 
-        if not is_valid_news(title):
+        if not is_valid(title):
             continue
 
-        symbol = extract_symbol(title)
-        if not symbol:
+        sym = symbol(title)
+        if not sym:
             continue
 
-        sent.add(key)
-
-        translated = tr(title)
+        sent.add(e.link)
 
         msg = f"""📰 NEWS
 
-🏷️ {symbol}
-{classify_news(title)}
-{get_impact(title)}
+🏷️ {sym}
+{classify(title)}
+{impact(title)}
 📢 {title}"""
 
-        if translated:
-            msg += f"\n🇸🇦 {translated}"
+        ar = tr(title)
+        if ar:
+            msg += f"\n🇸🇦 {ar}"
 
-        await send_msg(msg)
-        total_sent += 1
+        await send(msg)
+        count += 1
 
-    if total_sent == 0:
-        print("No real-time news")
+    if count == 0:
+        print("No smart news")
 
 # ===== LOOP =====
 async def main():
-    print("🚀 Alpha Market Radar REAL-TIME")
+    print("🚀 SMART BOT STARTED")
 
-    await send_msg("🚀 البوت شغال (REAL-TIME)\nOnly Today News ⚡")
+    await send("🚀 SMART BOT LIVE\nReal Opportunities Only 🔥")
 
     while True:
         try:
