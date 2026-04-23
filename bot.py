@@ -1,4 +1,4 @@
-# ===== Alpha Market Radar STABLE PRO 🚀 =====
+# ===== Alpha Market Radar FINAL TRADING 🚀 =====
 
 import asyncio
 import feedparser
@@ -52,32 +52,11 @@ def get_symbol(text):
     m = re.findall(r'\(([A-Z]{1,5})\)', text)
     return m[0] if m else None
 
-# ===== SEC ANALYSIS (ذكي) =====
-def analyze_sec(title):
-    t = title.lower()
-
-    if "bankruptcy" in t:
-        return "⚠️ إفلاس"
-    if "merger" in t or "acquisition" in t:
-        return "🤝 اندماج"
-    if "earnings" in t:
-        return "📊 نتائج"
-    if "agreement" in t:
-        return "📢 اتفاقية"
-
-    return "📄 إفصاح"
-
-# ===== استخراج الشركة =====
-def get_company(title):
-    try:
-        return title.split(" - ")[1].split("(")[0].strip()
-    except:
-        return "Unknown"
-
 # ===== RSS FILTER =====
 def is_valid(title):
     t = title.lower()
 
+    # منع الضجيج
     if any(x in t for x in [
         "analyst", "price target", "upgrade", "downgrade",
         "opinion", "strategist",
@@ -86,15 +65,44 @@ def is_valid(title):
     ]):
         return False
 
+    # لازم يكون حدث مؤثر
     if not any(k in t for k in [
         "earnings", "revenue", "profit",
         "acquire", "merger", "deal",
         "bankruptcy", "split", "dividend",
-        "fda", "approval"
+        "fda", "approval", "guidance"
     ]):
         return False
 
     return True
+
+# ===== SEC FILTER =====
+def analyze_sec(title):
+    t = title.lower()
+
+    if any(x in t for x in ["bankruptcy", "chapter 11"]):
+        return "⚠️ إفلاس"
+
+    if any(x in t for x in ["merger", "acquisition"]):
+        return "🤝 اندماج"
+
+    if any(x in t for x in ["earnings", "results"]):
+        return "📊 نتائج مالية"
+
+    if any(x in t for x in ["agreement", "deal"]):
+        return "📢 صفقة"
+
+    if any(x in t for x in ["delist"]):
+        return "🚫 شطب"
+
+    return None  # 🔥 يمنع السبام
+
+# ===== استخراج الشركة =====
+def get_company(title):
+    try:
+        return title.split(" - ")[1].split("(")[0].strip()
+    except:
+        return "Unknown"
 
 # ===== SEND =====
 async def send(msg):
@@ -117,7 +125,7 @@ def fetch_sec():
 
 # ===== MAIN =====
 async def run_cycle():
-    print("📡 Running STABLE PRO...")
+    print("📡 Running FINAL TRADING...")
 
     count = 0
 
@@ -133,10 +141,15 @@ async def run_cycle():
         if "8-k" not in e.title.lower():
             continue
 
+        event = analyze_sec(e.title)
+
+        # 🔥 فلترة قوية
+        if not event:
+            continue
+
         sent.add(e.link)
 
         company = get_company(e.title)
-        event = analyze_sec(e.title)
 
         msg = f"""🚨 SEC
 
@@ -187,7 +200,7 @@ async def run_cycle():
 
 # ===== LOOP =====
 async def main():
-    await send("🚀 STABLE PRO BOT LIVE\nClean + SEC Reliable 🎯")
+    await send("🚀 FINAL TRADING BOT LIVE\nOnly Real Events • No Noise 🎯")
 
     while True:
         try:
@@ -196,5 +209,6 @@ async def main():
         except:
             await asyncio.sleep(60)
 
+# ===== START =====
 if __name__ == "__main__":
     asyncio.run(main())
