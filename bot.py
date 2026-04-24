@@ -1,4 +1,4 @@
-# AlphaBot Pro v4.6 PRO INTELLIGENCE
+# AlphaBot Pro v4.7 ELITE UI (FINAL)
 
 import os, time, requests, feedparser, hashlib
 from datetime import datetime, timezone
@@ -9,14 +9,15 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 
+# ===== مصادر =====
 RSS = [
     "https://www.reuters.com/markets/us/rss",
     "https://feeds.bloomberg.com/markets/news.rss",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html"
 ]
 
+# ===== فلترة =====
 BLOCK = ["crypto","coin","token","trailer"]
-
 STOCK_WORDS = ["earnings","revenue","shares","stock","plunge","surge","guidance"]
 MARKET_WORDS = ["oil","fed","inflation","rates","war","iran","dollar","yield"]
 
@@ -68,11 +69,14 @@ def ai(prompt):
 # ===== تحليل الأسهم =====
 def analyze_stock(title):
     prompt = f"""
-حلل الخبر التالي:
+اعطني فقط بدون تنسيق:
 
-- ترجمة عربية مختصرة
-- التأثير: إيجابي / سلبي / محايد
-- السبب (سطر واحد)
+ترجمة:
+...
+تأثير:
+...
+سبب:
+...
 
 {title}
 """
@@ -81,17 +85,40 @@ def analyze_stock(title):
 # ===== تحليل السوق =====
 def analyze_market(title):
     prompt = f"""
-ترجم وفسر التأثير على السوق الأمريكي:
+اعطني فقط بدون تنسيق:
 
-- ترجمة مختصرة
-- التأثير على السوق (صعود / هبوط / تقلب)
-- السبب (سطر واحد)
+ترجمة:
+...
+تأثير:
+...
+سبب:
+...
 
 {title}
 """
     return ai(prompt)
 
-# ===== جلب =====
+# ===== تنظيم الإخراج =====
+def format_output(text):
+    lines = text.split("\n")
+
+    translation = ""
+    impact = ""
+    reason = ""
+
+    for l in lines:
+        l = l.strip()
+
+        if "ترجمة" in l:
+            translation = l.replace("ترجمة:", "").strip()
+        elif "تأثير" in l:
+            impact = l.replace("تأثير:", "").strip()
+        elif "سبب" in l:
+            reason = l.replace("سبب:", "").strip()
+
+    return translation, impact, reason
+
+# ===== جلب الأخبار =====
 def fetch():
     data = []
     for u in RSS:
@@ -102,7 +129,7 @@ def fetch():
 
 # ===== تشغيل =====
 def run():
-    send("🚀 AlphaBot v4.6 PRO Started")
+    send("🚀 AlphaBot v4.7 ELITE Started")
 
     while True:
         news = fetch()
@@ -111,9 +138,11 @@ def run():
         for n in news:
             title = n.title.lower()
 
+            # ❌ تجاهل الفيديو
             if "video" in n.link:
                 continue
 
+            # ❌ فلترة
             if any(w in title for w in BLOCK):
                 continue
 
@@ -126,22 +155,28 @@ def run():
             # ===== STOCK =====
             if any(w in title for w in STOCK_WORDS):
                 tag = "📊 STOCK"
-                analysis = analyze_stock(n.title)
+                raw = analyze_stock(n.title)
 
             # ===== MARKET =====
             elif any(w in title for w in MARKET_WORDS):
                 tag = "🌍 MARKET"
-                analysis = analyze_market(n.title)
+                raw = analyze_market(n.title)
 
             else:
                 continue
+
+            translation, impact, reason = format_output(raw)
 
             msg = f"""
 {tag}
 
 📰 {n.title}
 
-{analysis}
+🌍 الترجمة:
+{translation}
+
+📊 التأثير: {impact}
+🧠 السبب: {reason}
 
 🔗 {n.link}
 """
@@ -153,5 +188,6 @@ def run():
 
         time.sleep(120)
 
+# ===== START =====
 if __name__ == "__main__":
     run()
