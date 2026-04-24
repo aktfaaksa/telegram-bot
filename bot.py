@@ -1,85 +1,97 @@
-# AlphaBot v4.3 LIVE NEWS (FULL)
+# AlphaBot v4.4 SMART MARKET FEED
 
-import os
-import time
-import requests
+import os, time, requests, feedparser, hashlib
+from datetime import datetime, timezone
 
-# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 
-# ===== إعدادات =====
-CHECK_INTERVAL = 60       # كل دقيقة
-MAX_NEWS = 10             # حد الإرسال
-MAX_AGE = 1800            # 30 دقيقة فقط
+RSS = [
+    "https://www.reuters.com/markets/us/rss",
+    "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+]
+
+BLOCK = ["crypto","coin","token","celebrity","sports"]
+
+STOCK_WORDS = ["earnings","revenue","shares","stock","plunge","surge","guidance"]
+MARKET_WORDS = ["oil","fed","inflation","rates","war","iran","dollar","yield"]
 
 seen = set()
 
-# ===== إرسال =====
 def send(msg):
-    for chat_id in CHAT_IDS:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": msg}
-            )
-        except:
-            pass
+    for c in CHAT_IDS:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": c, "text": msg}
+        )
 
-# ===== جلب الأخبار =====
-def fetch_news():
-    try:
-        url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
-        return requests.get(url).json()
-    except:
-        return []
+def is_new(t):
+    h = hashlib.md5(t.encode()).hexdigest()
+    if h in seen:
+        return False
+    seen.add(h)
+    return True
 
-# ===== تشغيل =====
+def recent(p):
+    if not p: return True
+    t = datetime(*p[:6], tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc)-t).seconds < 7200
+
+def fetch():
+    data = []
+    for u in RSS:
+        f = feedparser.parse(u)
+        for e in f.entries:
+            data.append(e)
+    return data
+
 def run():
-    send("⚡ AlphaBot LIVE NEWS Started")
+    send("🚀 AlphaBot v4.4 MARKET Started")
 
     while True:
-        news = fetch_news()
-        now = int(time.time())
+        news = fetch()
         count = 0
 
         for n in news:
-            title = n.get("headline", "")
-            link = n.get("url", "")
-            timestamp = n.get("datetime", 0)
+            title = n.title.lower()
 
-            # ❌ بدون عنوان
-            if not title:
+            if any(w in title for w in BLOCK):
                 continue
 
-            # ❌ تكرار
-            if title in seen:
+            if not is_new(n.title):
                 continue
 
-            # ⏱ فلترة الوقت (آخر 30 دقيقة)
-            if now - timestamp > MAX_AGE:
+            if not recent(n.get("published_parsed")):
                 continue
 
-            seen.add(title)
+            # 🟢 STOCK NEWS
+            if any(w in title for w in STOCK_WORDS):
+                tag = "📊 STOCK"
+
+            # 🔵 MARKET NEWS
+            elif any(w in title for w in MARKET_WORDS):
+                tag = "🌍 MARKET"
+
+            else:
+                continue
 
             msg = f"""
-⚡ LIVE NEWS
+{tag}
 
-📰 {title}
+📰 {n.title}
 
-🔗 {link}
+🔗 {n.link}
 """
-
             send(msg)
 
             count += 1
-            if count >= MAX_NEWS:
+            if count >= 15:
                 break
 
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(120)
 
-# ===== Start =====
 if __name__ == "__main__":
     run()
