@@ -1,4 +1,4 @@
-# AlphaBot Pro v4.5 SMART TRANSLATION
+# AlphaBot Pro v4.6 PRO INTELLIGENCE
 
 import os, time, requests, feedparser, hashlib
 from datetime import datetime, timezone
@@ -9,15 +9,14 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 CHAT_IDS = [int(os.getenv("CHAT_ID")), 6315087880]
 
-# ===== RSS =====
 RSS = [
     "https://www.reuters.com/markets/us/rss",
     "https://feeds.bloomberg.com/markets/news.rss",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html"
 ]
 
-# ===== فلترة =====
-BLOCK = ["crypto","coin","token","video","trailer"]
+BLOCK = ["crypto","coin","token","trailer"]
+
 STOCK_WORDS = ["earnings","revenue","shares","stock","plunge","surge","guidance"]
 MARKET_WORDS = ["oil","fed","inflation","rates","war","iran","dollar","yield"]
 
@@ -48,8 +47,8 @@ def recent(p):
     t = datetime(*p[:6], tzinfo=timezone.utc)
     return (datetime.now(timezone.utc)-t).seconds < 7200
 
-# ===== ترجمة =====
-def translate(text):
+# ===== AI =====
+def ai(prompt):
     try:
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -59,15 +58,38 @@ def translate(text):
             },
             json={
                 "model": "openai/gpt-4o-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": f"ترجم هذا الخبر للعربية في سطر واحد فقط:\n{text}"
-                }]
+                "messages": [{"role":"user","content":prompt}]
             }
         )
         return r.json()["choices"][0]["message"]["content"]
     except:
         return ""
+
+# ===== تحليل الأسهم =====
+def analyze_stock(title):
+    prompt = f"""
+حلل الخبر التالي:
+
+- ترجمة عربية مختصرة
+- التأثير: إيجابي / سلبي / محايد
+- السبب (سطر واحد)
+
+{title}
+"""
+    return ai(prompt)
+
+# ===== تحليل السوق =====
+def analyze_market(title):
+    prompt = f"""
+ترجم وفسر التأثير على السوق الأمريكي:
+
+- ترجمة مختصرة
+- التأثير على السوق (صعود / هبوط / تقلب)
+- السبب (سطر واحد)
+
+{title}
+"""
+    return ai(prompt)
 
 # ===== جلب =====
 def fetch():
@@ -80,7 +102,7 @@ def fetch():
 
 # ===== تشغيل =====
 def run():
-    send("🚀 AlphaBot v4.5 SMART Started")
+    send("🚀 AlphaBot v4.6 PRO Started")
 
     while True:
         news = fetch()
@@ -88,6 +110,9 @@ def run():
 
         for n in news:
             title = n.title.lower()
+
+            if "video" in n.link:
+                continue
 
             if any(w in title for w in BLOCK):
                 continue
@@ -98,14 +123,15 @@ def run():
             if not recent(n.get("published_parsed")):
                 continue
 
-            # ===== تصنيف =====
+            # ===== STOCK =====
             if any(w in title for w in STOCK_WORDS):
                 tag = "📊 STOCK"
-                translated = translate(n.title)
+                analysis = analyze_stock(n.title)
 
+            # ===== MARKET =====
             elif any(w in title for w in MARKET_WORDS):
                 tag = "🌍 MARKET"
-                translated = ""  # بدون ترجمة لتوفير السرعة
+                analysis = analyze_market(n.title)
 
             else:
                 continue
@@ -114,14 +140,15 @@ def run():
 {tag}
 
 📰 {n.title}
-{f"🌍 {translated}" if translated else ""}
+
+{analysis}
 
 🔗 {n.link}
 """
             send(msg)
 
             count += 1
-            if count >= 15:
+            if count >= 12:
                 break
 
         time.sleep(120)
