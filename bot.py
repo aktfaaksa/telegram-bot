@@ -1,5 +1,6 @@
-# AlphaBot Pro v5.1 Smart News
+# AlphaBot Pro v5.2 Smart News
 # RSS + Finnhub + SEC + OpenRouter + Telegram
+# Low Price Stock Priority Mode
 
 import os
 import re
@@ -16,7 +17,7 @@ from email.utils import parsedate_to_datetime
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.1 Smart News"
+VERSION = "v5.2 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -30,10 +31,13 @@ DEFAULT_EXTRA_CHAT_IDS = [6315087880]
 CHECK_EVERY_SECONDS = 90
 MAX_NEWS_AGE_MINUTES = 60
 
-# تم تخفيف الفلترة من 7 إلى 6
-MIN_IMPACT_SCORE = 6
+# وضع تفضيل الأسهم منخفضة السعر
+LOW_PRICE_MODE = True
+LOW_PRICE_MAX = 30.0
+LOW_PRICE_MIN_SCORE = 6
+BIG_STOCK_MIN_SCORE = 8
+UNKNOWN_PRICE_MIN_SCORE = 7
 
-# تقليل السبام
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 TICKER_COOLDOWN_MINUTES = 45
@@ -76,6 +80,8 @@ US_MARKET_KEYWORDS = [
     "fed", "federal reserve", "cpi", "inflation", "jobs report",
     "payrolls", "interest rates", "treasury yields", "pce"
 ]
+
+PRICE_CACHE = {}
 
 
 # =========================
@@ -157,7 +163,12 @@ def startup_message():
 الحالة: يعمل الآن
 المصادر: RSS + Finnhub + SEC + OpenRouter
 وضع الإرسال: الأخبار المؤثرة فقط
-الفلترة: خبر جديد + غير مكرر + قوة {MIN_IMPACT_SCORE}/10 أو أعلى
+
+وضع السعر:
+🔥 الأسهم تحت ${LOW_PRICE_MAX:.0f}: قوة {LOW_PRICE_MIN_SCORE}/10 أو أعلى
+🚨 الأسهم فوق ${LOW_PRICE_MAX:.0f}: قوة {BIG_STOCK_MIN_SCORE}/10 أو أعلى
+⚪ السعر غير معروف: قوة {UNKNOWN_PRICE_MIN_SCORE}/10 أو أعلى
+
 عدد المستلمين: {len(CHAT_IDS)}
 """
     send_telegram(msg)
@@ -313,7 +324,7 @@ def extract_possible_ticker(text):
     bad_words = {
         "CEO", "CFO", "USA", "SEC", "FDA", "EPS", "ETF", "IPO",
         "AI", "US", "DJIA", "GDP", "CPI", "PCE", "FOMC", "THE",
-        "AND", "FOR", "NEW", "NYSE", "NASDAQ"
+        "AND", "FOR", "NEW", "NYSE", "NASDAQ", "CNBC"
     }
 
     for pattern in patterns:
@@ -365,10 +376,11 @@ def normalize_category(category):
         return "M&A"
     if "macro" in c_l:
         return "Macro"
+    if "bankruptcy" in c_l:
+        return "Bankruptcy"
     if "sec" in c_l or "10-q" in c_l or "10-k" in c_l or "8-k" in c_l:
         return "SEC"
 
-    # إذا رجع الذكاء تصنيف طويل، نختصره
     if "/" in c:
         return c.split("/")[0].strip()
 
@@ -376,7 +388,86 @@ def normalize_category(category):
 
 
 # =========================
-# 8) FETCH RSS
+# 8) PRICE FROM FINNHUB
+# =========================
+
+def get_stock_price(ticker):
+    ticker = clean_text(ticker).upper()
+
+    if not ticker or not FINNHUB_API_KEY:
+        return None
+
+    if ticker in PRICE_CACHE:
+        cached = PRICE_CACHE[ticker]
+        cached_time = cached.get("time")
+        if cached_time and now_utc() - cached_time < timedelta(minutes=10):
+            return cached.get("price")
+
+    try:
+        url = "https://finnhub.io/api/v1/quote"
+        params = {
+            "symbol": ticker,
+            "token": FINNHUB_API_KEY
+        }
+
+        r = requests.get(url, params=params, timeout=10)
+
+        if r.status_code != 200:
+            print(f"Price error {ticker}: {r.status_code}", flush=True)
+            return None
+
+        data = r.json()
+        price = data.get("c")
+
+        if price is None:
+            return None
+
+        price = float(price)
+
+        if price <= 0:
+            return None
+
+        PRICE_CACHE[ticker] = {
+            "price": price,
+            "time": now_utc()
+        }
+
+        return price
+
+    except Exception as e:
+        print(f"get_stock_price error {ticker}: {e}", flush=True)
+        return None
+
+
+def get_price_mode(price):
+    if price is None:
+        return "UNKNOWN"
+
+    if price <= LOW_PRICE_MAX:
+        return "LOW"
+
+    return "BIG"
+
+
+def get_required_score(price, category):
+    category = normalize_category(category)
+
+    urgent_categories = ["Offering", "FDA", "M&A", "Bankruptcy"]
+
+    if category in urgent_categories:
+        return LOW_PRICE_MIN_SCORE
+
+    if price is None:
+        return UNKNOWN_PRICE_MIN_SCORE
+
+    if price <= LOW_PRICE_MAX:
+        return LOW_PRICE_MIN_SCORE
+
+    return BIG_STOCK_MIN_SCORE
+
+
+# =========================
+# 9) FETCH RSS
 # =========================
 
 def fetch_rss_news():
@@ -420,10 +511,7 @@ def fetch_rss_news():
                     "raw": ""
                 })
 
-            print(
-                f"RSS OK {src['name']}: {len(items) - count_before} items",
-                flush=True
-            )
+            print(f"RSS OK {src['name']}: {len(items) - count_before} items", flush=True)
 
         except Exception as e:
             print(f"RSS error {src['name']}: {e}", flush=True)
@@ -432,7 +520,7 @@ def fetch_rss_news():
 
 
 # =========================
-# 9) FETCH FINNHUB
+# 10) FETCH FINNHUB
 # =========================
 
 def fetch_finnhub_news():
@@ -501,7 +589,7 @@ def fetch_finnhub_news():
 
 
 # =========================
-# 10) FETCH SEC CURRENT FILINGS
+# 11) FETCH SEC CURRENT FILINGS
 # =========================
 
 def fetch_sec_news():
@@ -563,10 +651,7 @@ def fetch_sec_news():
                     "raw": ""
                 })
 
-            print(
-                f"SEC OK {feed_info['name']}: {len(items) - count_before} items",
-                flush=True
-            )
+            print(f"SEC OK {feed_info['name']}: {len(items) - count_before} items", flush=True)
 
         except Exception as e:
             print(f"SEC error {feed_info['name']}: {e}", flush=True)
@@ -575,7 +660,7 @@ def fetch_sec_news():
 
 
 # =========================
-# 11) OPENROUTER AI ANALYSIS
+# 12) OPENROUTER AI ANALYSIS
 # =========================
 
 def analyze_with_ai(item):
@@ -614,7 +699,7 @@ JSON format:
   "title_ar": "ترجمة العنوان للعربية",
   "summary_ar": "ملخص عربي قصير",
   "why_important_ar": "سبب أهمية الخبر",
-  "trading_note_ar": "ملاحظة تداول مختصرة ومحايدة بدون توصية شراء أو بيع"
+  "trading_note_ar": "ملاحظة تداول فعلية ومحايدة مثل: راقب حجم التداول وردة فعل السعر"
 }}
 
 الخبر:
@@ -662,7 +747,7 @@ Extra: {raw}
 
 
 # =========================
-# 12) SEND DECISION
+# 13) SEND DECISION
 # =========================
 
 def ticker_cooldown_ok(state, ticker):
@@ -712,14 +797,29 @@ def should_send_alert(item, analysis, state):
     except Exception:
         score = 0
 
-    if score < MIN_IMPACT_SCORE:
-        return False, f"low score {score}"
-
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
     category = normalize_category(analysis.get("category", ""))
 
-    if not ticker and category.lower() != "macro":
+    if not ticker and category != "Macro":
         return False, "no ticker"
+
+    price = None
+    required_score = UNKNOWN_PRICE_MIN_SCORE
+    price_mode = "UNKNOWN"
+
+    if ticker and category != "Macro":
+        price = get_stock_price(ticker)
+        price_mode = get_price_mode(price)
+        required_score = get_required_score(price, category)
+    elif category == "Macro":
+        required_score = BIG_STOCK_MIN_SCORE
+
+    analysis["stock_price"] = price
+    analysis["price_mode"] = price_mode
+    analysis["required_score"] = required_score
+
+    if score < required_score:
+        return False, f"score {score} below required {required_score} | price {price}"
 
     if not ticker_cooldown_ok(state, ticker):
         urgent_categories = ["Offering", "FDA", "M&A", "Bankruptcy"]
@@ -733,7 +833,7 @@ def should_send_alert(item, analysis, state):
 
 
 # =========================
-# 13) FORMAT ALERT
+# 14) FORMAT ALERT
 # =========================
 
 def safe_trading_note(note):
@@ -749,7 +849,11 @@ def safe_trading_note(note):
         "ادخل",
         "الدخول",
         "buy",
-        "consider buying"
+        "consider buying",
+        "ملاحظة تداول مختصرة",
+        "بدون توصية شراء أو بيع",
+        "محايدة بدون توصية",
+        "يفضل مراقبة أداء السهم في الفترة القادمة"
     ]
 
     note_l = trading_note.lower()
@@ -760,11 +864,25 @@ def safe_trading_note(note):
     return trading_note
 
 
+def format_price_line(price, price_mode, required_score):
+    if price is None:
+        return f"💵 السعر: غير معروف | شرط الإرسال: {required_score}/10"
+
+    if price_mode == "LOW":
+        return f"💵 السعر: ${price:.2f} | 🔥 سهم منخفض السعر | شرط الإرسال: {required_score}/10"
+
+    return f"💵 السعر: ${price:.2f} | 🚨 سهم كبير/مرتفع السعر | شرط الإرسال: {required_score}/10"
+
+
 def format_alert(item, analysis):
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
     category = normalize_category(analysis.get("category", "Other"))
     direction = normalize_direction(analysis.get("direction", "mixed"))
     score = analysis.get("impact_score", "?")
+
+    price = analysis.get("stock_price")
+    price_mode = analysis.get("price_mode", "UNKNOWN")
+    required_score = analysis.get("required_score", UNKNOWN_PRICE_MIN_SCORE)
 
     title = clean_text(item.get("title"))
     title_ar = clean_text(analysis.get("title_ar"))
@@ -779,12 +897,15 @@ def format_alert(item, analysis):
     if not ticker:
         ticker = "السوق الأمريكي"
 
+    price_line = format_price_line(price, price_mode, required_score)
+
     msg = f"""🚨 خبر مؤثر على سهم أمريكي
 
 🏷️ السهم: {ticker}
 📌 نوع الخبر: {category}
 📊 التأثير المتوقع: {direction}
 🔥 قوة الخبر: {score}/10
+{price_line}
 ⏱️ وقت الخبر: {age}
 📰 المصدر: {source}
 
@@ -811,7 +932,7 @@ def format_alert(item, analysis):
 
 
 # =========================
-# 14) PROCESS NEWS
+# 15) PROCESS NEWS
 # =========================
 
 def process_news_item(item, state):
@@ -830,7 +951,6 @@ def process_news_item(item, state):
     source_name = item.get("source", "")
 
     # تقليل تكرار تقارير SEC العادية مثل 10-Q و10-K
-    # لا نرسلها إلا إذا فيها كلمات خطيرة فعلاً
     if source_name in ["SEC 10-Q", "SEC 10-K"]:
         title_l = title.lower()
         sec_urgent_words = [
@@ -889,7 +1009,7 @@ def process_news_item(item, state):
 
 
 # =========================
-# 15) COLLECT NEWS
+# 16) COLLECT NEWS
 # =========================
 
 def collect_all_news():
@@ -932,7 +1052,7 @@ def collect_all_news():
 
 
 # =========================
-# 16) STARTUP CHECKS
+# 17) STARTUP CHECKS
 # =========================
 
 def startup_checks():
@@ -943,11 +1063,13 @@ def startup_checks():
     print(f"OPENROUTER_API_KEY: {'OK' if OPENROUTER_API_KEY else 'MISSING'}", flush=True)
     print(f"FINNHUB_API_KEY: {'OK' if FINNHUB_API_KEY else 'MISSING'}", flush=True)
     print(f"SEC_USER_AGENT: {SEC_USER_AGENT}", flush=True)
+    print(f"LOW_PRICE_MODE: {LOW_PRICE_MODE}", flush=True)
+    print(f"LOW_PRICE_MAX: {LOW_PRICE_MAX}", flush=True)
     print("===================================", flush=True)
 
 
 # =========================
-# 17) MAIN LOOP
+# 18) MAIN LOOP
 # =========================
 
 def run():
@@ -985,7 +1107,7 @@ def run():
 
 
 # =========================
-# 18) START
+# 19) START
 # =========================
 
 if __name__ == "__main__":
