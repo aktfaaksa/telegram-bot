@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.4 Smart News
+# AlphaBot Pro v5.5 Smart News
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Low Price Stock Priority Mode
+# Low Price Stock Priority Mode + SEC Form Cooldown
 
 import os
 import re
@@ -17,7 +17,7 @@ from email.utils import parsedate_to_datetime
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.4 Smart News"
+VERSION = "v5.5 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -25,13 +25,11 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "AlphaBot aktfaaksa@gmail.com")
 
-# الآيدي القديم الموجود في كودك السابق
 DEFAULT_EXTRA_CHAT_IDS = [6315087880]
 
 CHECK_EVERY_SECONDS = 90
 MAX_NEWS_AGE_MINUTES = 60
 
-# وضع تفضيل الأسهم منخفضة السعر
 LOW_PRICE_MODE = True
 LOW_PRICE_MAX = 30.0
 LOW_PRICE_MIN_SCORE = 6
@@ -42,9 +40,12 @@ MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 TICKER_COOLDOWN_MINUTES = 45
 
+# جديد: منع تكرار نفس نموذج SEC لنفس السهم
+SEC_FORM_COOLDOWN_MINUTES = 60
+
 STATE_FILE = "seen_news.json"
 
-# مصادر الأخبار العامة
+
 RSS_SOURCES = [
     {
         "name": "Reuters US Markets",
@@ -60,7 +61,7 @@ RSS_SOURCES = [
     }
 ]
 
-# مصادر أخبار الشركات الصغيرة والبيانات الصحفية
+
 SMALL_CAP_RSS_SOURCES = [
     {
         "name": "GlobeNewswire Press Releases",
@@ -88,7 +89,7 @@ SMALL_CAP_RSS_SOURCES = [
     }
 ]
 
-# نماذج SEC المهمة
+
 SEC_FORMS = [
     "8-K",
     "S-1",
@@ -111,6 +112,7 @@ SEC_FORMS = [
     "10-K"
 ]
 
+
 SEC_IMPORTANT_FORMS = [
     "424B5",
     "424B3",
@@ -130,10 +132,12 @@ SEC_IMPORTANT_FORMS = [
     "NT 10-K"
 ]
 
+
 BLOCK_WORDS = [
     "crypto", "coin", "token", "bitcoin", "ethereum",
     "video", "podcast", "trailer", "sports", "nfl", "nba"
 ]
+
 
 IMPORTANT_KEYWORDS = [
     "earnings", "revenue", "eps", "guidance", "outlook",
@@ -148,6 +152,7 @@ IMPORTANT_KEYWORDS = [
     "8-k", "10-q", "10-k", "s-3", "s-1", "424b5", "424b3", "424b4",
     "form 4", "13d", "13g", "effect", "fwp"
 ]
+
 
 SMALL_CAP_KEYWORDS = [
     "offering",
@@ -188,6 +193,7 @@ SMALL_CAP_KEYWORDS = [
     "restatement"
 ]
 
+
 SEC_URGENT_WORDS = [
     "common stock",
     "ordinary shares",
@@ -225,10 +231,12 @@ SEC_URGENT_WORDS = [
     "default"
 ]
 
+
 US_MARKET_KEYWORDS = [
     "fed", "federal reserve", "cpi", "inflation", "jobs report",
     "payrolls", "interest rates", "treasury yields", "pce"
 ]
+
 
 PRICE_CACHE = {}
 
@@ -324,6 +332,9 @@ GlobeNewswire + PR Newswire + BusinessWire
 نماذج SEC المتقدمة:
 424B5 + S-1/S-3 + EFFECT + Form 4 + 13D/13G + NT 10-Q/10-K
 
+منع التكرار:
+نفس السهم + نفس نموذج SEC لا يتكرر خلال {SEC_FORM_COOLDOWN_MINUTES} دقيقة
+
 عدد المستلمين: {len(CHAT_IDS)}
 """
     send_telegram(msg)
@@ -337,6 +348,7 @@ def load_state():
     default_state = {
         "seen": [],
         "ticker_last_alert": {},
+        "sec_form_last_alert": {},
         "daily": {
             "date": current_date_key(),
             "count": 0
@@ -352,6 +364,7 @@ def load_state():
 
         state.setdefault("seen", [])
         state.setdefault("ticker_last_alert", {})
+        state.setdefault("sec_form_last_alert", {})
         state.setdefault("daily", {"date": current_date_key(), "count": 0})
 
         if state["daily"].get("date") != current_date_key():
@@ -508,6 +521,39 @@ def get_sec_form_from_source(source_name):
 def is_important_sec_form(source_name):
     form = get_sec_form_from_source(source_name)
     return form in [x.upper() for x in SEC_IMPORTANT_FORMS]
+
+
+def make_sec_form_cooldown_key(ticker, form):
+    ticker = clean_text(ticker).upper()
+    form = clean_text(form).upper()
+
+    if not ticker or not form:
+        return ""
+
+    return f"{ticker}|{form}"
+
+
+def sec_form_cooldown_ok(state, ticker, form):
+    key = make_sec_form_cooldown_key(ticker, form)
+
+    if not key:
+        return True
+
+    last = state.get("sec_form_last_alert", {}).get(key)
+
+    if not last:
+        return True
+
+    try:
+        last_dt = datetime.fromisoformat(last)
+
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+
+        return now_utc() - last_dt >= timedelta(minutes=SEC_FORM_COOLDOWN_MINUTES)
+
+    except Exception:
+        return True
 
 
 def extract_possible_ticker(text):
@@ -680,11 +726,9 @@ def get_required_score(price, category, source_name):
         "Proxy / Vote"
     ]
 
-    # Form 4 و 13D/13G نبيها تظهر إذا كانت مناسبة
     if category in ["Insider / Form 4", "Ownership"]:
         return LOW_PRICE_MIN_SCORE if price is not None and price <= LOW_PRICE_MAX else UNKNOWN_PRICE_MIN_SCORE
 
-    # نماذج SEC المهمة تأخذ حد أسهل للأسهم الرخيصة
     if form in [x.upper() for x in SEC_IMPORTANT_FORMS]:
         if price is not None and price <= LOW_PRICE_MAX:
             return LOW_PRICE_MIN_SCORE
@@ -1092,9 +1136,15 @@ def should_send_alert(item, analysis, state):
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
     category = normalize_category(analysis.get("category", ""))
     source_name = item.get("source", "")
+    sec_form = get_sec_form_from_source(source_name)
 
     if not ticker and category != "Macro":
         return False, "no ticker"
+
+    # جديد: منع تكرار نفس السهم + نفس نموذج SEC خلال ساعة
+    if is_sec_source(source_name) and sec_form:
+        if not sec_form_cooldown_ok(state, ticker, sec_form):
+            return False, f"SEC form cooldown for {ticker} {sec_form}"
 
     price = None
     required_score = UNKNOWN_PRICE_MIN_SCORE
@@ -1272,20 +1322,16 @@ def process_news_item(item, state):
     source_name = item.get("source", "")
     source_form = get_sec_form_from_source(source_name)
 
-    # تقليل تكرار تقارير SEC العادية مثل 10-Q و10-K
     if source_name in ["SEC 10-Q", "SEC 10-K"]:
         title_l = title.lower()
         if not any(w in title_l for w in SEC_URGENT_WORDS):
             return False
 
-    # 8-K عادي قد يكون كثير، نخليه يمر للذكاء إذا كان من SEC أو فيه كلمات مهمة
     if source_name == "SEC 8-K":
         title_l = title.lower()
         if not has_sec_urgent_keyword(title_l) and not has_important_keyword(title_l):
-            # نسمح لـ 8-K لكن الذكاء يقرر، لأنه أحيانًا العنوان فقط ما يكفي
             pass
 
-    # نماذج SEC المهمة تمر حتى لو العنوان بسيط
     if is_sec_source(source_name) and source_form in [x.upper() for x in SEC_IMPORTANT_FORMS]:
         pass
     elif is_small_cap_source(source_name):
@@ -1304,7 +1350,6 @@ def process_news_item(item, state):
     if news_id in state.get("seen", []):
         return False
 
-    # إثراء بعض إفصاحات SEC حتى يعرف الذكاء هل هي أسهم أو دين أو EFFECT وغيره
     item = enrich_sec_item(item)
 
     analysis = analyze_with_ai(item)
@@ -1321,9 +1366,16 @@ def process_news_item(item, state):
     send_telegram(alert)
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
+    sec_form = get_sec_form_from_source(item.get("source", ""))
 
     if ticker:
         state.setdefault("ticker_last_alert", {})[ticker] = now_utc().isoformat()
+
+    # جديد: حفظ آخر إرسال لنفس السهم + نفس نموذج SEC
+    if ticker and sec_form:
+        key = make_sec_form_cooldown_key(ticker, sec_form)
+        if key:
+            state.setdefault("sec_form_last_alert", {})[key] = now_utc().isoformat()
 
     state.setdefault("daily", {})
 
@@ -1404,6 +1456,7 @@ def startup_checks():
     print(f"SEC_USER_AGENT: {SEC_USER_AGENT}", flush=True)
     print(f"LOW_PRICE_MODE: {LOW_PRICE_MODE}", flush=True)
     print(f"LOW_PRICE_MAX: {LOW_PRICE_MAX}", flush=True)
+    print(f"SEC_FORM_COOLDOWN_MINUTES: {SEC_FORM_COOLDOWN_MINUTES}", flush=True)
     print("SMALL_CAP_SOURCES: ON", flush=True)
     print("SEC_ADVANCED_FORMS: ON", flush=True)
     print("===================================", flush=True)
