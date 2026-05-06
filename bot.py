@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.0 Smart News
+# AlphaBot Pro v5.1 Smart News
 # RSS + Finnhub + SEC + OpenRouter + Telegram
 
 import os
@@ -16,7 +16,7 @@ from email.utils import parsedate_to_datetime
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.0 Smart News"
+VERSION = "v5.1 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -29,10 +29,14 @@ DEFAULT_EXTRA_CHAT_IDS = [6315087880]
 
 CHECK_EVERY_SECONDS = 90
 MAX_NEWS_AGE_MINUTES = 60
+
+# تم تخفيف الفلترة من 7 إلى 6
 MIN_IMPACT_SCORE = 6
-MAX_ALERTS_PER_CYCLE = 5
+
+# تقليل السبام
+MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
-TICKER_COOLDOWN_MINUTES = 20
+TICKER_COOLDOWN_MINUTES = 45
 
 STATE_FILE = "seen_news.json"
 
@@ -153,7 +157,7 @@ def startup_message():
 الحالة: يعمل الآن
 المصادر: RSS + Finnhub + SEC + OpenRouter
 وضع الإرسال: الأخبار المؤثرة فقط
-الفلترة: خبر جديد + غير مكرر + قوة 7/10 أو أعلى
+الفلترة: خبر جديد + غير مكرر + قوة {MIN_IMPACT_SCORE}/10 أو أعلى
 عدد المستلمين: {len(CHAT_IDS)}
 """
     send_telegram(msg)
@@ -322,6 +326,55 @@ def extract_possible_ticker(text):
     return ""
 
 
+def normalize_direction(direction):
+    d = clean_text(direction).lower()
+
+    if "positive" in d or "إيجابي" in d:
+        return "إيجابي"
+    if "negative" in d or "سلبي" in d:
+        return "سلبي"
+    if "mixed" in d or "مختلط" in d:
+        return "مختلط"
+    if "neutral" in d or "محايد" in d:
+        return "محايد"
+
+    return "غير واضح"
+
+
+def normalize_category(category):
+    c = clean_text(category)
+
+    if not c:
+        return "Other"
+
+    c_l = c.lower()
+
+    if "earning" in c_l:
+        return "Earnings"
+    if "guidance" in c_l:
+        return "Guidance"
+    if "offering" in c_l:
+        return "Offering"
+    if "fda" in c_l:
+        return "FDA"
+    if "contract" in c_l or "agreement" in c_l:
+        return "Contract"
+    if "analyst" in c_l or "upgrade" in c_l or "downgrade" in c_l:
+        return "Analyst"
+    if "m&a" in c_l or "merger" in c_l or "acquisition" in c_l:
+        return "M&A"
+    if "macro" in c_l:
+        return "Macro"
+    if "sec" in c_l or "10-q" in c_l or "10-k" in c_l or "8-k" in c_l:
+        return "SEC"
+
+    # إذا رجع الذكاء تصنيف طويل، نختصره
+    if "/" in c:
+        return c.split("/")[0].strip()
+
+    return c
+
+
 # =========================
 # 8) FETCH RSS
 # =========================
@@ -468,6 +521,10 @@ def fetch_sec_news():
         {
             "name": "SEC 10-Q",
             "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-Q&owner=include&count=40&output=atom"
+        },
+        {
+            "name": "SEC 10-K",
+            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K&owner=include&count=40&output=atom"
         }
     ]
 
@@ -542,19 +599,22 @@ def analyze_with_ai(item):
 - لا تبالغ في التأثير.
 - impact_score من 1 إلى 10.
 - أرسل فقط الأخبار التي قد تحرك السهم أو السوق.
+- لا تعطِ توصية شراء أو بيع مباشرة.
+- لا تستخدم عبارات مثل: اشترِ، بيع، ادخل، ينصح بالشراء.
+- trading_note_ar يجب أن تكون مراقبة ومحايدة.
 - اللغة العربية مختصرة وواضحة.
 
 JSON format:
 {{
   "send": true,
   "ticker": "RDW",
-  "category": "Earnings / Guidance / SEC / Offering / FDA / Contract / Analyst / M&A / Macro / Other",
+  "category": "Earnings",
   "impact_score": 8,
-  "direction": "positive / negative / mixed / neutral",
+  "direction": "positive",
   "title_ar": "ترجمة العنوان للعربية",
   "summary_ar": "ملخص عربي قصير",
   "why_important_ar": "سبب أهمية الخبر",
-  "trading_note_ar": "ملاحظة تداول مختصرة"
+  "trading_note_ar": "ملاحظة تداول مختصرة ومحايدة بدون توصية شراء أو بيع"
 }}
 
 الخبر:
@@ -656,14 +716,14 @@ def should_send_alert(item, analysis, state):
         return False, f"low score {score}"
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
-    category = clean_text(analysis.get("category", "")).lower()
+    category = normalize_category(analysis.get("category", ""))
 
-    if not ticker and "macro" not in category:
+    if not ticker and category.lower() != "macro":
         return False, "no ticker"
 
     if not ticker_cooldown_ok(state, ticker):
-        urgent_categories = ["offering", "fda", "m&a", "sec", "bankruptcy"]
-        if not any(x in category for x in urgent_categories):
+        urgent_categories = ["Offering", "FDA", "M&A", "Bankruptcy"]
+        if category not in urgent_categories:
             return False, f"cooldown for {ticker}"
 
     if not daily_limit_ok(state):
@@ -676,17 +736,42 @@ def should_send_alert(item, analysis, state):
 # 13) FORMAT ALERT
 # =========================
 
+def safe_trading_note(note):
+    trading_note = clean_text(note)
+
+    bad_trading_phrases = [
+        "يمكن النظر في الشراء",
+        "يمكن النظر في شراء",
+        "ينصح بالشراء",
+        "نوصي بالشراء",
+        "شراء السهم",
+        "اشتر",
+        "ادخل",
+        "الدخول",
+        "buy",
+        "consider buying"
+    ]
+
+    note_l = trading_note.lower()
+
+    if not trading_note or any(p in note_l for p in bad_trading_phrases):
+        return "راقب حركة السهم وحجم التداول، ولا تطارد بعد ارتفاع قوي إلا مع اختراق وثبات."
+
+    return trading_note
+
+
 def format_alert(item, analysis):
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
-    category = clean_text(analysis.get("category", "Other"))
-    direction = clean_text(analysis.get("direction", "mixed"))
+    category = normalize_category(analysis.get("category", "Other"))
+    direction = normalize_direction(analysis.get("direction", "mixed"))
     score = analysis.get("impact_score", "?")
 
     title = clean_text(item.get("title"))
     title_ar = clean_text(analysis.get("title_ar"))
     summary_ar = clean_text(analysis.get("summary_ar"))
     why = clean_text(analysis.get("why_important_ar"))
-    trading_note = clean_text(analysis.get("trading_note_ar"))
+    trading_note = safe_trading_note(analysis.get("trading_note_ar"))
+
     url = item.get("url")
     source = item.get("source")
     age = human_age(item.get("published_at"))
@@ -743,6 +828,20 @@ def process_news_item(item, state):
         return False
 
     source_name = item.get("source", "")
+
+    # تقليل تكرار تقارير SEC العادية مثل 10-Q و10-K
+    # لا نرسلها إلا إذا فيها كلمات خطيرة فعلاً
+    if source_name in ["SEC 10-Q", "SEC 10-K"]:
+        title_l = title.lower()
+        sec_urgent_words = [
+            "bankruptcy", "chapter 11", "going concern",
+            "offering", "s-3", "merger", "acquisition",
+            "investigation", "material weakness",
+            "restatement", "default", "delisting"
+        ]
+
+        if not any(w in title_l for w in sec_urgent_words):
+            return False
 
     if (
         not has_important_keyword(title)
