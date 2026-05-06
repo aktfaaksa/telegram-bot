@@ -1,5 +1,5 @@
-# AlphaBot Pro v5.3 Smart News
-# RSS + Small-Cap Newswires + Finnhub + SEC + OpenRouter + Telegram
+# AlphaBot Pro v5.4 Smart News
+# RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Low Price Stock Priority Mode
 
 import os
@@ -17,7 +17,7 @@ from email.utils import parsedate_to_datetime
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.3 Smart News"
+VERSION = "v5.4 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -88,6 +88,48 @@ SMALL_CAP_RSS_SOURCES = [
     }
 ]
 
+# نماذج SEC المهمة
+SEC_FORMS = [
+    "8-K",
+    "S-1",
+    "S-3",
+    "F-1",
+    "F-3",
+    "424B5",
+    "424B3",
+    "424B4",
+    "EFFECT",
+    "FWP",
+    "4",
+    "SC 13D",
+    "SC 13G",
+    "DEF 14A",
+    "PRE 14A",
+    "NT 10-Q",
+    "NT 10-K",
+    "10-Q",
+    "10-K"
+]
+
+SEC_IMPORTANT_FORMS = [
+    "424B5",
+    "424B3",
+    "424B4",
+    "S-1",
+    "S-3",
+    "F-1",
+    "F-3",
+    "EFFECT",
+    "FWP",
+    "4",
+    "SC 13D",
+    "SC 13G",
+    "DEF 14A",
+    "PRE 14A",
+    "NT 10-Q",
+    "NT 10-K"
+]
+
 BLOCK_WORDS = [
     "crypto", "coin", "token", "bitcoin", "ethereum",
     "video", "podcast", "trailer", "sports", "nfl", "nba"
@@ -103,7 +145,8 @@ IMPORTANT_KEYWORDS = [
     "bankruptcy", "chapter 11", "investigation", "sec investigation",
     "contract", "agreement", "partnership", "order",
     "downgrade", "upgrade", "price target",
-    "8-k", "10-q", "10-k", "s-3", "form 4"
+    "8-k", "10-q", "10-k", "s-3", "s-1", "424b5", "424b3", "424b4",
+    "form 4", "13d", "13g", "effect", "fwp"
 ]
 
 SMALL_CAP_KEYWORDS = [
@@ -143,6 +186,43 @@ SMALL_CAP_KEYWORDS = [
     "going concern",
     "material weakness",
     "restatement"
+]
+
+SEC_URGENT_WORDS = [
+    "common stock",
+    "ordinary shares",
+    "offering",
+    "public offering",
+    "registered direct",
+    "private placement",
+    "at-the-market",
+    "atm",
+    "warrant",
+    "units",
+    "prospectus supplement",
+    "424b5",
+    "424b3",
+    "424b4",
+    "effect",
+    "free writing prospectus",
+    "form 4",
+    "insider",
+    "beneficial ownership",
+    "13d",
+    "13g",
+    "late filing",
+    "nt 10-q",
+    "nt 10-k",
+    "delisting",
+    "reverse split",
+    "increase authorized shares",
+    "nasdaq compliance",
+    "material weakness",
+    "going concern",
+    "bankruptcy",
+    "chapter 11",
+    "restatement",
+    "default"
 ]
 
 US_MARKET_KEYWORDS = [
@@ -230,8 +310,8 @@ def startup_message():
 
 الإصدار: {VERSION}
 الحالة: يعمل الآن
-المصادر: RSS + Small-Cap Newswires + Finnhub + SEC + OpenRouter
-وضع الإرسال: الأخبار المؤثرة فقط
+المصادر: RSS + Small-Cap Newswires + Finnhub + SEC Advanced + OpenRouter
+وضع الإرسال: الأخبار والإفصاحات المؤثرة فقط
 
 وضع السعر:
 🔥 الأسهم تحت ${LOW_PRICE_MAX:.0f}: قوة {LOW_PRICE_MIN_SCORE}/10 أو أعلى
@@ -240,6 +320,9 @@ def startup_message():
 
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
+
+نماذج SEC المتقدمة:
+424B5 + S-1/S-3 + EFFECT + Form 4 + 13D/13G + NT 10-Q/10-K
 
 عدد المستلمين: {len(CHAT_IDS)}
 """
@@ -366,6 +449,17 @@ def clean_text(text):
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
+def strip_html(text):
+    if not text:
+        return ""
+    text = re.sub(r"<script.*?</script>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<style.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    return clean_text(text)
+
+
 def is_blocked(title):
     title_l = title.lower()
     return any(word in title_l for word in BLOCK_WORDS)
@@ -381,6 +475,11 @@ def has_small_cap_keyword(title):
     return any(word in title_l for word in SMALL_CAP_KEYWORDS)
 
 
+def has_sec_urgent_keyword(text):
+    text_l = text.lower()
+    return any(word in text_l for word in SEC_URGENT_WORDS)
+
+
 def has_us_market_keyword(title):
     title_l = title.lower()
     return any(word in title_l for word in US_MARKET_KEYWORDS)
@@ -394,6 +493,21 @@ def is_small_cap_source(source_name):
         or "businesswire" in s
         or "business wire" in s
     )
+
+
+def is_sec_source(source_name):
+    return source_name.upper().startswith("SEC ")
+
+
+def get_sec_form_from_source(source_name):
+    if not is_sec_source(source_name):
+        return ""
+    return source_name.replace("SEC ", "").strip().upper()
+
+
+def is_important_sec_form(source_name):
+    form = get_sec_form_from_source(source_name)
+    return form in [x.upper() for x in SEC_IMPORTANT_FORMS]
 
 
 def extract_possible_ticker(text):
@@ -413,7 +527,8 @@ def extract_possible_ticker(text):
     bad_words = {
         "CEO", "CFO", "USA", "SEC", "FDA", "EPS", "ETF", "IPO",
         "AI", "US", "DJIA", "GDP", "CPI", "PCE", "FOMC", "THE",
-        "AND", "FOR", "NEW", "NYSE", "NASDAQ", "CNBC", "PR", "RSS"
+        "AND", "FOR", "NEW", "NYSE", "NASDAQ", "CNBC", "PR", "RSS",
+        "FORM", "SC", "DEF", "PRE", "NT", "INC", "CORP", "LTD", "LLC"
     }
 
     for pattern in patterns:
@@ -449,12 +564,22 @@ def normalize_category(category):
 
     c_l = c.lower()
 
+    if "offering" in c_l or "private placement" in c_l or "424b" in c_l:
+        return "Offering / Prospectus"
+    if "effect" in c_l:
+        return "Registration Effective"
+    if "form 4" in c_l or "insider" in c_l:
+        return "Insider / Form 4"
+    if "13d" in c_l or "13g" in c_l or "ownership" in c_l:
+        return "Ownership"
+    if "nt 10-q" in c_l or "nt 10-k" in c_l or "late filing" in c_l:
+        return "Late Filing"
+    if "proxy" in c_l or "14a" in c_l or "reverse split" in c_l:
+        return "Proxy / Vote"
     if "earning" in c_l:
         return "Earnings"
     if "guidance" in c_l:
         return "Guidance"
-    if "offering" in c_l or "private placement" in c_l:
-        return "Offering"
     if "fda" in c_l or "clinical" in c_l or "phase" in c_l:
         return "FDA / Clinical"
     if "contract" in c_l or "agreement" in c_l or "partnership" in c_l:
@@ -542,14 +667,30 @@ def get_price_mode(price):
 
 def get_required_score(price, category, source_name):
     category = normalize_category(category)
+    form = get_sec_form_from_source(source_name)
 
     urgent_categories = [
-        "Offering",
+        "Offering / Prospectus",
+        "Registration Effective",
         "FDA / Clinical",
         "M&A",
         "Bankruptcy",
-        "Nasdaq Compliance"
+        "Nasdaq Compliance",
+        "Late Filing",
+        "Proxy / Vote"
     ]
+
+    # Form 4 و 13D/13G نبيها تظهر إذا كانت مناسبة
+    if category in ["Insider / Form 4", "Ownership"]:
+        return LOW_PRICE_MIN_SCORE if price is not None and price <= LOW_PRICE_MAX else UNKNOWN_PRICE_MIN_SCORE
+
+    # نماذج SEC المهمة تأخذ حد أسهل للأسهم الرخيصة
+    if form in [x.upper() for x in SEC_IMPORTANT_FORMS]:
+        if price is not None and price <= LOW_PRICE_MAX:
+            return LOW_PRICE_MIN_SCORE
+        if price is None:
+            return UNKNOWN_PRICE_MIN_SCORE
+        return BIG_STOCK_MIN_SCORE
 
     if category in urgent_categories:
         return LOW_PRICE_MIN_SCORE
@@ -559,10 +700,6 @@ def get_required_score(price, category, source_name):
 
     if price <= LOW_PRICE_MAX:
         return LOW_PRICE_MIN_SCORE
-
-    # لو الخبر من مصادر الشركات الصغيرة والسهم مرتفع، نشدد عليه
-    if is_small_cap_source(source_name):
-        return BIG_STOCK_MIN_SCORE
 
     return BIG_STOCK_MIN_SCORE
 
@@ -706,26 +843,7 @@ def fetch_finnhub_news():
 def fetch_sec_news():
     items = []
 
-    print("Fetching SEC news...", flush=True)
-
-    sec_feeds = [
-        {
-            "name": "SEC 8-K",
-            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&owner=include&count=40&output=atom"
-        },
-        {
-            "name": "SEC S-3",
-            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=S-3&owner=include&count=40&output=atom"
-        },
-        {
-            "name": "SEC 10-Q",
-            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-Q&owner=include&count=40&output=atom"
-        },
-        {
-            "name": "SEC 10-K",
-            "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K&owner=include&count=40&output=atom"
-        }
-    ]
+    print("Fetching SEC advanced filings...", flush=True)
 
     headers = {
         "User-Agent": SEC_USER_AGENT,
@@ -733,12 +851,21 @@ def fetch_sec_news():
         "Accept": "application/atom+xml, application/xml, text/xml, */*"
     }
 
-    for feed_info in sec_feeds:
+    for form_type in SEC_FORMS:
         try:
-            r = requests.get(feed_info["url"], headers=headers, timeout=15)
+            url = "https://www.sec.gov/cgi-bin/browse-edgar"
+            params = {
+                "action": "getcurrent",
+                "type": form_type,
+                "owner": "include",
+                "count": "40",
+                "output": "atom"
+            }
+
+            r = requests.get(url, params=params, headers=headers, timeout=15)
 
             if r.status_code != 200:
-                print(f"SEC status error {feed_info['name']}: {r.status_code}", flush=True)
+                print(f"SEC status error {form_type}: {r.status_code}", flush=True)
                 continue
 
             feed = feedparser.parse(r.text)
@@ -746,27 +873,63 @@ def fetch_sec_news():
 
             for entry in feed.entries[:25]:
                 title = clean_text(entry.get("title"))
-                url = clean_text(entry.get("link"))
+                filing_url = clean_text(entry.get("link"))
                 published_at = parse_rss_time(entry)
 
-                if not title or not url:
+                if not title or not filing_url:
                     continue
 
+                source_name = f"SEC {form_type}"
+                ticker_guess = extract_possible_ticker(title)
+
                 items.append({
-                    "source": feed_info["name"],
+                    "source": source_name,
                     "title": title,
-                    "url": url,
+                    "url": filing_url,
                     "published_at": published_at,
-                    "ticker": extract_possible_ticker(title),
-                    "raw": ""
+                    "ticker": ticker_guess,
+                    "raw": f"SEC filing form {form_type}"
                 })
 
-            print(f"SEC OK {feed_info['name']}: {len(items) - count_before} items", flush=True)
+            print(f"SEC OK {form_type}: {len(items) - count_before} items", flush=True)
 
         except Exception as e:
-            print(f"SEC error {feed_info['name']}: {e}", flush=True)
+            print(f"SEC error {form_type}: {e}", flush=True)
 
     return items
+
+
+def enrich_sec_item(item):
+    source_name = item.get("source", "")
+    url = item.get("url", "")
+
+    if not is_sec_source(source_name):
+        return item
+
+    if not is_important_sec_form(source_name):
+        return item
+
+    if item.get("raw") and len(item.get("raw", "")) > 200:
+        return item
+
+    headers = {
+        "User-Agent": SEC_USER_AGENT,
+        "Accept-Encoding": "gzip, deflate",
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+
+        if r.status_code != 200:
+            return item
+
+        text = strip_html(r.text)
+        item["raw"] = text[:3500]
+
+    except Exception as e:
+        print(f"SEC enrich error: {e}", flush=True)
+
+    return item
 
 
 # =========================
@@ -784,14 +947,33 @@ def analyze_with_ai(item):
     ticker = item.get("ticker", "")
 
     prompt = f"""
-أنت محلل أخبار للأسهم الأمريكية فقط.
+أنت محلل أخبار وإفصاحات SEC للأسهم الأمريكية فقط.
 
-حلل الخبر التالي وارجع JSON فقط بدون شرح إضافي.
+حلل الخبر أو الإفصاح التالي وارجع JSON فقط بدون شرح إضافي.
 
 المطلوب:
 - إذا الخبر لا يخص سهم أمريكي أو حدث قوي يؤثر على السوق الأمريكي، اجعل send=false.
 - ركز على الأخبار التي قد تحرك السهم فعلياً.
 - ركز أكثر على الأسهم منخفضة السعر والشركات الصغيرة إذا الخبر عن: offering, FDA, contract, clinical trial, Nasdaq compliance, delisting, reverse split.
+- حلل إفصاحات SEC بذكاء:
+  424B5 / 424B3 / 424B4:
+    common stock أو warrants أو units أو ATM أو registered direct = سلبي غالباً بسبب تخفيف محتمل.
+    debt securities = محايد أو ضغط محدود.
+  S-1 / S-3 / F-1 / F-3:
+    تسجيل أوراق مالية = مراقبة / احتمال تمويل.
+  EFFECT:
+    التسجيل أصبح فعالاً = مهم، وقد يسمح بطرح أو بيع أوراق مالية.
+  Form 4:
+    شراء داخلي كبير = إيجابي.
+    بيع روتيني = محايد أو سلبي خفيف.
+  SC 13D:
+    دخول مالك كبير أو ناشط = مهم / إيجابي أو مراقبة.
+  SC 13G:
+    ملكية كبيرة سلبية أو مؤسسية = مراقبة.
+  NT 10-Q / NT 10-K:
+    تأخير تقرير مالي = سلبي / تحذيري.
+  DEF 14A / PRE 14A:
+    انتبه لـ reverse split أو زيادة الأسهم المصرح بها.
 - لا ترسل أخبار كريبتو أو فيديو أو مقالات رأي ضعيفة.
 - لا تبالغ في التأثير.
 - impact_score من 1 إلى 10.
@@ -804,12 +986,12 @@ JSON format:
 {{
   "send": true,
   "ticker": "RDW",
-  "category": "Contract",
-  "impact_score": 8,
-  "direction": "positive",
+  "category": "Offering / Prospectus",
+  "impact_score": 7,
+  "direction": "negative",
   "title_ar": "ترجمة العنوان للعربية",
   "summary_ar": "ملخص عربي قصير",
-  "why_important_ar": "سبب أهمية الخبر",
+  "why_important_ar": "سبب أهمية الخبر أو الإفصاح",
   "trading_note_ar": "ملاحظة تداول فعلية ومحايدة مثل: راقب حجم التداول وردة فعل السعر"
 }}
 
@@ -934,12 +1116,16 @@ def should_send_alert(item, analysis, state):
 
     if not ticker_cooldown_ok(state, ticker):
         urgent_categories = [
-            "Offering",
+            "Offering / Prospectus",
+            "Registration Effective",
             "FDA / Clinical",
             "M&A",
             "Bankruptcy",
-            "Nasdaq Compliance"
+            "Nasdaq Compliance",
+            "Late Filing",
+            "Proxy / Vote"
         ]
+
         if category not in urgent_categories:
             return False, f"cooldown for {ticker}"
 
@@ -1010,6 +1196,7 @@ def format_alert(item, analysis):
     url = item.get("url")
     source = item.get("source")
     age = human_age(item.get("published_at"))
+    form = get_sec_form_from_source(source)
 
     if not ticker:
         ticker = "السوق الأمريكي"
@@ -1017,13 +1204,26 @@ def format_alert(item, analysis):
     price_line = format_price_line(price, price_mode, required_score)
 
     label = "🚨 خبر مؤثر على سهم أمريكي"
+
     if price_mode == "LOW":
         label = "🔥 خبر سهم منخفض السعر"
+
+    if is_sec_source(source):
+        if direction == "سلبي":
+            label = "🔴 إفصاح SEC مهم"
+        elif direction == "إيجابي":
+            label = "🟢 إفصاح SEC مهم"
+        else:
+            label = "🟡 إفصاح SEC مهم"
+
+    sec_line = ""
+    if form:
+        sec_line = f"📄 نموذج SEC: {form}\n"
 
     msg = f"""{label}
 
 🏷️ السهم: {ticker}
-📌 نوع الخبر: {category}
+{sec_line}📌 نوع الخبر: {category}
 📊 التأثير المتوقع: {direction}
 🔥 قوة الخبر: {score}/10
 {price_line}
@@ -1070,22 +1270,25 @@ def process_news_item(item, state):
         return False
 
     source_name = item.get("source", "")
+    source_form = get_sec_form_from_source(source_name)
 
     # تقليل تكرار تقارير SEC العادية مثل 10-Q و10-K
     if source_name in ["SEC 10-Q", "SEC 10-K"]:
         title_l = title.lower()
-        sec_urgent_words = [
-            "bankruptcy", "chapter 11", "going concern",
-            "offering", "s-3", "merger", "acquisition",
-            "investigation", "material weakness",
-            "restatement", "default", "delisting"
-        ]
-
-        if not any(w in title_l for w in sec_urgent_words):
+        if not any(w in title_l for w in SEC_URGENT_WORDS):
             return False
 
-    # مصادر الأسهم الصغيرة تحتاج كلمات قوية حتى لا تتحول إلى سبام
-    if is_small_cap_source(source_name):
+    # 8-K عادي قد يكون كثير، نخليه يمر للذكاء إذا كان من SEC أو فيه كلمات مهمة
+    if source_name == "SEC 8-K":
+        title_l = title.lower()
+        if not has_sec_urgent_keyword(title_l) and not has_important_keyword(title_l):
+            # نسمح لـ 8-K لكن الذكاء يقرر، لأنه أحيانًا العنوان فقط ما يكفي
+            pass
+
+    # نماذج SEC المهمة تمر حتى لو العنوان بسيط
+    if is_sec_source(source_name) and source_form in [x.upper() for x in SEC_IMPORTANT_FORMS]:
+        pass
+    elif is_small_cap_source(source_name):
         if not has_small_cap_keyword(title) and not has_important_keyword(title):
             return False
     else:
@@ -1100,6 +1303,9 @@ def process_news_item(item, state):
 
     if news_id in state.get("seen", []):
         return False
+
+    # إثراء بعض إفصاحات SEC حتى يعرف الذكاء هل هي أسهم أو دين أو EFFECT وغيره
+    item = enrich_sec_item(item)
 
     analysis = analyze_with_ai(item)
 
@@ -1199,6 +1405,7 @@ def startup_checks():
     print(f"LOW_PRICE_MODE: {LOW_PRICE_MODE}", flush=True)
     print(f"LOW_PRICE_MAX: {LOW_PRICE_MAX}", flush=True)
     print("SMALL_CAP_SOURCES: ON", flush=True)
+    print("SEC_ADVANCED_FORMS: ON", flush=True)
     print("===================================", flush=True)
 
 
