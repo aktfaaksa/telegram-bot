@@ -75,7 +75,19 @@ US_MARKET_KEYWORDS = [
 
 
 # =========================
-# 2) CHAT IDS
+# 2) DATE HELPERS
+# =========================
+
+def now_utc():
+    return datetime.now(timezone.utc)
+
+
+def current_date_key():
+    return now_utc().strftime("%Y-%m-%d")
+
+
+# =========================
+# 3) CHAT IDS
 # =========================
 
 def get_chat_ids():
@@ -95,7 +107,6 @@ def get_chat_ids():
     for extra_id in DEFAULT_EXTRA_CHAT_IDS:
         ids.append(extra_id)
 
-    # إزالة التكرار مع الحفاظ على الترتيب
     unique_ids = []
     for cid in ids:
         if cid not in unique_ids:
@@ -108,16 +119,16 @@ CHAT_IDS = get_chat_ids()
 
 
 # =========================
-# 3) TELEGRAM
+# 4) TELEGRAM
 # =========================
 
 def send_telegram(message):
     if not BOT_TOKEN:
-        print("BOT_TOKEN missing")
+        print("BOT_TOKEN missing", flush=True)
         return
 
     if not CHAT_IDS:
-        print("CHAT_IDS missing")
+        print("CHAT_IDS missing", flush=True)
         return
 
     for chat_id in CHAT_IDS:
@@ -132,7 +143,7 @@ def send_telegram(message):
                 timeout=15
             )
         except Exception as e:
-            print(f"Telegram send error to {chat_id}: {e}")
+            print(f"Telegram send error to {chat_id}: {e}", flush=True)
 
 
 def startup_message():
@@ -149,7 +160,7 @@ def startup_message():
 
 
 # =========================
-# 4) STATE / DUPLICATES
+# 5) STATE / DUPLICATES
 # =========================
 
 def load_state():
@@ -178,20 +189,20 @@ def load_state():
 
         return state
 
-    except Exception:
+    except Exception as e:
+        print(f"load_state error: {e}", flush=True)
         return default_state
 
 
 def save_state(state):
     try:
-        # نحافظ فقط على آخر 3000 خبر حتى لا يكبر الملف
         state["seen"] = state.get("seen", [])[-3000:]
 
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
 
     except Exception as e:
-        print(f"save_state error: {e}")
+        print(f"save_state error: {e}", flush=True)
 
 
 def make_news_id(item):
@@ -199,17 +210,9 @@ def make_news_id(item):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def current_date_key():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
 # =========================
-# 5) TIME HELPERS
+# 6) TIME HELPERS
 # =========================
-
-def now_utc():
-    return datetime.now(timezone.utc)
-
 
 def parse_rss_time(entry):
     try:
@@ -267,7 +270,7 @@ def human_age(published_at):
 
 
 # =========================
-# 6) BASIC FILTERS
+# 7) BASIC FILTERS
 # =========================
 
 def clean_text(text):
@@ -295,7 +298,6 @@ def extract_possible_ticker(text):
     if not text:
         return ""
 
-    # يبحث عن رموز أسهم مثل: (RDW), NASDAQ:RDW, NYSE:PLTR
     patterns = [
         r"\bNASDAQ:\s*([A-Z]{1,5})\b",
         r"\bNYSE:\s*([A-Z]{1,5})\b",
@@ -306,7 +308,8 @@ def extract_possible_ticker(text):
 
     bad_words = {
         "CEO", "CFO", "USA", "SEC", "FDA", "EPS", "ETF", "IPO",
-        "AI", "US", "DJIA", "GDP", "CPI", "PCE", "FOMC"
+        "AI", "US", "DJIA", "GDP", "CPI", "PCE", "FOMC", "THE",
+        "AND", "FOR", "NEW", "NYSE", "NASDAQ"
     }
 
     for pattern in patterns:
@@ -320,15 +323,32 @@ def extract_possible_ticker(text):
 
 
 # =========================
-# 7) FETCH RSS
+# 8) FETCH RSS
 # =========================
 
 def fetch_rss_news():
     items = []
 
+    print("Fetching RSS news...", flush=True)
+
     for src in RSS_SOURCES:
         try:
-            feed = feedparser.parse(src["url"])
+            r = requests.get(
+                src["url"],
+                headers={
+                    "User-Agent": "AlphaBot News Bot",
+                    "Accept": "application/rss+xml, application/xml, text/xml, */*"
+                },
+                timeout=15
+            )
+
+            if r.status_code != 200:
+                print(f"RSS status error {src['name']}: {r.status_code}", flush=True)
+                continue
+
+            feed = feedparser.parse(r.text)
+
+            count_before = len(items)
 
             for entry in feed.entries[:30]:
                 title = clean_text(entry.get("title"))
@@ -347,21 +367,29 @@ def fetch_rss_news():
                     "raw": ""
                 })
 
+            print(
+                f"RSS OK {src['name']}: {len(items) - count_before} items",
+                flush=True
+            )
+
         except Exception as e:
-            print(f"RSS error {src['name']}: {e}")
+            print(f"RSS error {src['name']}: {e}", flush=True)
 
     return items
 
 
 # =========================
-# 8) FETCH FINNHUB
+# 9) FETCH FINNHUB
 # =========================
 
 def fetch_finnhub_news():
     items = []
 
     if not FINNHUB_API_KEY:
+        print("Finnhub skipped: missing API key", flush=True)
         return items
+
+    print("Fetching Finnhub news...", flush=True)
 
     try:
         url = "https://finnhub.io/api/v1/news"
@@ -371,9 +399,15 @@ def fetch_finnhub_news():
         }
 
         r = requests.get(url, params=params, timeout=15)
+
+        if r.status_code != 200:
+            print(f"Finnhub status error: {r.status_code} | {r.text[:200]}", flush=True)
+            return items
+
         data = r.json()
 
         if not isinstance(data, list):
+            print("Finnhub returned non-list data", flush=True)
             return items
 
         for n in data[:50]:
@@ -384,8 +418,12 @@ def fetch_finnhub_news():
 
             ts = n.get("datetime")
             published_at = None
+
             if ts:
-                published_at = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                try:
+                    published_at = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                except Exception:
+                    published_at = None
 
             if not title or not news_url:
                 continue
@@ -401,18 +439,22 @@ def fetch_finnhub_news():
                 "raw": summary
             })
 
+        print(f"Finnhub OK: {len(items)} items", flush=True)
+
     except Exception as e:
-        print(f"Finnhub error: {e}")
+        print(f"Finnhub error: {e}", flush=True)
 
     return items
 
 
 # =========================
-# 9) FETCH SEC CURRENT FILINGS
+# 10) FETCH SEC CURRENT FILINGS
 # =========================
 
 def fetch_sec_news():
     items = []
+
+    print("Fetching SEC news...", flush=True)
 
     sec_feeds = [
         {
@@ -432,12 +474,20 @@ def fetch_sec_news():
     headers = {
         "User-Agent": SEC_USER_AGENT,
         "Accept-Encoding": "gzip, deflate",
+        "Accept": "application/atom+xml, application/xml, text/xml, */*"
     }
 
     for feed_info in sec_feeds:
         try:
             r = requests.get(feed_info["url"], headers=headers, timeout=15)
+
+            if r.status_code != 200:
+                print(f"SEC status error {feed_info['name']}: {r.status_code}", flush=True)
+                continue
+
             feed = feedparser.parse(r.text)
+
+            count_before = len(items)
 
             for entry in feed.entries[:25]:
                 title = clean_text(entry.get("title"))
@@ -456,18 +506,24 @@ def fetch_sec_news():
                     "raw": ""
                 })
 
+            print(
+                f"SEC OK {feed_info['name']}: {len(items) - count_before} items",
+                flush=True
+            )
+
         except Exception as e:
-            print(f"SEC error {feed_info['name']}: {e}")
+            print(f"SEC error {feed_info['name']}: {e}", flush=True)
 
     return items
 
 
 # =========================
-# 10) OPENROUTER AI ANALYSIS
+# 11) OPENROUTER AI ANALYSIS
 # =========================
 
 def analyze_with_ai(item):
     if not OPENROUTER_API_KEY:
+        print("OpenRouter skipped: missing API key", flush=True)
         return None
 
     title = item.get("title", "")
@@ -528,22 +584,25 @@ Extra: {raw}
             timeout=25
         )
 
+        if r.status_code != 200:
+            print(f"OpenRouter status error: {r.status_code} | {r.text[:300]}", flush=True)
+            return None
+
         data = r.json()
         content = data["choices"][0]["message"]["content"].strip()
 
-        # استخراج JSON حتى لو رجع داخل بلوك
         content = content.replace("```json", "").replace("```", "").strip()
 
         parsed = json.loads(content)
         return parsed
 
     except Exception as e:
-        print(f"OpenRouter error: {e}")
+        print(f"OpenRouter error: {e}", flush=True)
         return None
 
 
 # =========================
-# 11) SEND DECISION
+# 12) SEND DECISION
 # =========================
 
 def ticker_cooldown_ok(state, ticker):
@@ -558,6 +617,7 @@ def ticker_cooldown_ok(state, ticker):
 
     try:
         last_dt = datetime.fromisoformat(last)
+
         if last_dt.tzinfo is None:
             last_dt = last_dt.replace(tzinfo=timezone.utc)
 
@@ -596,14 +656,12 @@ def should_send_alert(item, analysis, state):
         return False, f"low score {score}"
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
+    category = clean_text(analysis.get("category", "")).lower()
 
-    if not ticker and analysis.get("category", "").lower() != "macro":
+    if not ticker and "macro" not in category:
         return False, "no ticker"
 
     if not ticker_cooldown_ok(state, ticker):
-        category = clean_text(analysis.get("category", "")).lower()
-
-        # أخبار خطيرة نسمح بها حتى لو داخل فترة التهدئة
         urgent_categories = ["offering", "fda", "m&a", "sec", "bankruptcy"]
         if not any(x in category for x in urgent_categories):
             return False, f"cooldown for {ticker}"
@@ -615,7 +673,7 @@ def should_send_alert(item, analysis, state):
 
 
 # =========================
-# 12) FORMAT ALERT
+# 13) FORMAT ALERT
 # =========================
 
 def format_alert(item, analysis):
@@ -668,7 +726,7 @@ def format_alert(item, analysis):
 
 
 # =========================
-# 13) PROCESS NEWS
+# 14) PROCESS NEWS
 # =========================
 
 def process_news_item(item, state):
@@ -684,8 +742,13 @@ def process_news_item(item, state):
     if not is_fresh_news(item.get("published_at")):
         return False
 
-    # فلترة أولية قبل استهلاك OpenRouter
-    if not has_important_keyword(title) and not has_us_market_keyword(title) and "SEC" not in item.get("source", ""):
+    source_name = item.get("source", "")
+
+    if (
+        not has_important_keyword(title)
+        and not has_us_market_keyword(title)
+        and "SEC" not in source_name
+    ):
         return False
 
     news_id = make_news_id(item)
@@ -698,7 +761,7 @@ def process_news_item(item, state):
     ok, reason = should_send_alert(item, analysis, state)
 
     if not ok:
-        print(f"Skip: {reason} | {title}")
+        print(f"Skip: {reason} | {title}", flush=True)
         state["seen"].append(news_id)
         save_state(state)
         return False
@@ -707,12 +770,17 @@ def process_news_item(item, state):
     send_telegram(alert)
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
+
     if ticker:
         state.setdefault("ticker_last_alert", {})[ticker] = now_utc().isoformat()
 
     state.setdefault("daily", {})
+
     if state["daily"].get("date") != current_date_key():
-        state["daily"] = {"date": current_date_key(), "count": 0}
+        state["daily"] = {
+            "date": current_date_key(),
+            "count": 0
+        }
 
     state["daily"]["count"] = int(state["daily"].get("count", 0)) + 1
     state["seen"].append(news_id)
@@ -722,17 +790,33 @@ def process_news_item(item, state):
 
 
 # =========================
-# 14) MAIN LOOP
+# 15) COLLECT NEWS
 # =========================
 
 def collect_all_news():
     all_items = []
 
-    all_items.extend(fetch_rss_news())
-    all_items.extend(fetch_finnhub_news())
-    all_items.extend(fetch_sec_news())
+    try:
+        rss_items = fetch_rss_news()
+        all_items.extend(rss_items)
+        print(f"Collected RSS: {len(rss_items)}", flush=True)
+    except Exception as e:
+        print(f"collect RSS error: {e}", flush=True)
 
-    # ترتيب من الأحدث إلى الأقدم
+    try:
+        finnhub_items = fetch_finnhub_news()
+        all_items.extend(finnhub_items)
+        print(f"Collected Finnhub: {len(finnhub_items)}", flush=True)
+    except Exception as e:
+        print(f"collect Finnhub error: {e}", flush=True)
+
+    try:
+        sec_items = fetch_sec_news()
+        all_items.extend(sec_items)
+        print(f"Collected SEC: {len(sec_items)}", flush=True)
+    except Exception as e:
+        print(f"collect SEC error: {e}", flush=True)
+
     all_items = [
         x for x in all_items
         if x.get("published_at") is not None
@@ -743,19 +827,29 @@ def collect_all_news():
         reverse=True
     )
 
+    print(f"Total collected with dates: {len(all_items)}", flush=True)
+
     return all_items
 
 
-def startup_checks():
-    print("===== AlphaBot Startup Checks =====")
-    print(f"VERSION: {VERSION}")
-    print(f"BOT_TOKEN: {'OK' if BOT_TOKEN else 'MISSING'}")
-    print(f"CHAT_IDS: {CHAT_IDS if CHAT_IDS else 'MISSING'}")
-    print(f"OPENROUTER_API_KEY: {'OK' if OPENROUTER_API_KEY else 'MISSING'}")
-    print(f"FINNHUB_API_KEY: {'OK' if FINNHUB_API_KEY else 'MISSING'}")
-    print(f"SEC_USER_AGENT: {SEC_USER_AGENT}")
-    print("===================================")
+# =========================
+# 16) STARTUP CHECKS
+# =========================
 
+def startup_checks():
+    print("===== AlphaBot Startup Checks =====", flush=True)
+    print(f"VERSION: {VERSION}", flush=True)
+    print(f"BOT_TOKEN: {'OK' if BOT_TOKEN else 'MISSING'}", flush=True)
+    print(f"CHAT_IDS: {CHAT_IDS if CHAT_IDS else 'MISSING'}", flush=True)
+    print(f"OPENROUTER_API_KEY: {'OK' if OPENROUTER_API_KEY else 'MISSING'}", flush=True)
+    print(f"FINNHUB_API_KEY: {'OK' if FINNHUB_API_KEY else 'MISSING'}", flush=True)
+    print(f"SEC_USER_AGENT: {SEC_USER_AGENT}", flush=True)
+    print("===================================", flush=True)
+
+
+# =========================
+# 17) MAIN LOOP
+# =========================
 
 def run():
     startup_checks()
@@ -765,6 +859,8 @@ def run():
 
     while True:
         try:
+            print("Starting new cycle...", flush=True)
+
             news_items = collect_all_news()
             sent_count = 0
 
@@ -778,16 +874,19 @@ def run():
                     sent_count += 1
                     time.sleep(2)
 
-            print(f"Cycle done. Sent: {sent_count}. Total items: {len(news_items)}")
+            print(
+                f"Cycle done. Sent: {sent_count}. Total items: {len(news_items)}",
+                flush=True
+            )
 
         except Exception as e:
-            print(f"Main loop error: {e}")
+            print(f"Main loop error: {e}", flush=True)
 
         time.sleep(CHECK_EVERY_SECONDS)
 
 
 # =========================
-# 15) START
+# 18) START
 # =========================
 
 if __name__ == "__main__":
