@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.5 Smart News
+# AlphaBot Pro v5.6 Smart News
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Low Price Stock Priority Mode + SEC Form Cooldown
+# Low Price Stock Priority Mode + SEC Cleanup + CIK to Ticker + Form 4 Filter
 
 import os
 import re
@@ -11,13 +11,14 @@ import requests
 import feedparser
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
+from urllib.parse import urljoin
 
 
 # =========================
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.5 Smart News"
+VERSION = "v5.6 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -39,12 +40,9 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 TICKER_COOLDOWN_MINUTES = 45
-
-# جديد: منع تكرار نفس نموذج SEC لنفس السهم
 SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
-
 
 RSS_SOURCES = [
     {
@@ -60,7 +58,6 @@ RSS_SOURCES = [
         "url": "https://www.nasdaq.com/feed/rssoutbound?category=Stocks"
     }
 ]
-
 
 SMALL_CAP_RSS_SOURCES = [
     {
@@ -89,7 +86,6 @@ SMALL_CAP_RSS_SOURCES = [
     }
 ]
 
-
 SEC_FORMS = [
     "8-K",
     "S-1",
@@ -112,7 +108,6 @@ SEC_FORMS = [
     "10-K"
 ]
 
-
 SEC_IMPORTANT_FORMS = [
     "424B5",
     "424B3",
@@ -132,12 +127,10 @@ SEC_IMPORTANT_FORMS = [
     "NT 10-K"
 ]
 
-
 BLOCK_WORDS = [
     "crypto", "coin", "token", "bitcoin", "ethereum",
     "video", "podcast", "trailer", "sports", "nfl", "nba"
 ]
-
 
 IMPORTANT_KEYWORDS = [
     "earnings", "revenue", "eps", "guidance", "outlook",
@@ -152,7 +145,6 @@ IMPORTANT_KEYWORDS = [
     "8-k", "10-q", "10-k", "s-3", "s-1", "424b5", "424b3", "424b4",
     "form 4", "13d", "13g", "effect", "fwp"
 ]
-
 
 SMALL_CAP_KEYWORDS = [
     "offering",
@@ -193,7 +185,6 @@ SMALL_CAP_KEYWORDS = [
     "restatement"
 ]
 
-
 SEC_URGENT_WORDS = [
     "common stock",
     "ordinary shares",
@@ -231,14 +222,13 @@ SEC_URGENT_WORDS = [
     "default"
 ]
 
-
 US_MARKET_KEYWORDS = [
     "fed", "federal reserve", "cpi", "inflation", "jobs report",
     "payrolls", "interest rates", "treasury yields", "pce"
 ]
 
-
 PRICE_CACHE = {}
+SEC_TICKER_MAP = None
 
 
 # =========================
@@ -329,8 +319,11 @@ def startup_message():
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-نماذج SEC المتقدمة:
-424B5 + S-1/S-3 + EFFECT + Form 4 + 13D/13G + NT 10-Q/10-K
+تنظيف SEC:
+✅ قراءة النموذج الحقيقي من العنوان
+✅ تحويل CIK إلى رمز السهم عند الإمكان
+✅ منع تكرار نفس رابط SEC
+✅ Form 4 لا يرسل إلا مع شراء داخلي واضح
 
 منع التكرار:
 نفس السهم + نفس نموذج SEC لا يتكرر خلال {SEC_FORM_COOLDOWN_MINUTES} دقيقة
@@ -389,7 +382,12 @@ def save_state(state):
 
 
 def make_news_id(item):
-    raw = f"{item.get('source','')}|{item.get('ticker','')}|{item.get('title','')}|{item.get('url','')}"
+    url = clean_text(item.get("url", ""))
+
+    if url:
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+    raw = f"{item.get('ticker','')}|{item.get('title','')}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -470,6 +468,7 @@ def strip_html(text):
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"&nbsp;", " ", text)
     text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&quot;", '"', text)
     return clean_text(text)
 
 
@@ -512,20 +511,70 @@ def is_sec_source(source_name):
     return source_name.upper().startswith("SEC ")
 
 
+def canonical_sec_form(form):
+    form = clean_text(form).upper()
+    form = form.replace("/A", "")
+    form = form.replace("FORM ", "")
+
+    if form in ["4", "FORM 4"]:
+        return "4"
+
+    return form
+
+
+def extract_sec_form_from_title(title):
+    title = clean_text(title)
+
+    if not title:
+        return ""
+
+    match = re.match(r"^\s*([A-Z0-9/ -]+?)\s*[-–]\s*", title, flags=re.IGNORECASE)
+
+    if not match:
+        return ""
+
+    form = canonical_sec_form(match.group(1))
+
+    known = [canonical_sec_form(x) for x in SEC_FORMS]
+
+    if form in known:
+        return form
+
+    return ""
+
+
+def get_sec_form_from_item(item):
+    if not item:
+        return ""
+
+    if item.get("sec_form"):
+        return canonical_sec_form(item.get("sec_form"))
+
+    title_form = extract_sec_form_from_title(item.get("title", ""))
+    if title_form:
+        return title_form
+
+    source = item.get("source", "")
+    if is_sec_source(source):
+        return canonical_sec_form(source.replace("SEC ", ""))
+
+    return ""
+
+
 def get_sec_form_from_source(source_name):
     if not is_sec_source(source_name):
         return ""
-    return source_name.replace("SEC ", "").strip().upper()
+    return canonical_sec_form(source_name.replace("SEC ", ""))
 
 
-def is_important_sec_form(source_name):
-    form = get_sec_form_from_source(source_name)
-    return form in [x.upper() for x in SEC_IMPORTANT_FORMS]
+def is_important_sec_form_from_item(item):
+    form = get_sec_form_from_item(item)
+    return form in [canonical_sec_form(x) for x in SEC_IMPORTANT_FORMS]
 
 
 def make_sec_form_cooldown_key(ticker, form):
     ticker = clean_text(ticker).upper()
-    form = clean_text(form).upper()
+    form = canonical_sec_form(form)
 
     if not ticker or not form:
         return ""
@@ -556,6 +605,73 @@ def sec_form_cooldown_ok(state, ticker, form):
         return True
 
 
+def extract_cik(text):
+    if not text:
+        return ""
+
+    patterns = [
+        r"\((\d{10})\)",
+        r"/data/(\d+)/",
+        r"CIK[=: ]+(\d{1,10})"
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if m:
+            return str(int(m.group(1)))
+
+    return ""
+
+
+def load_sec_ticker_map():
+    global SEC_TICKER_MAP
+
+    if SEC_TICKER_MAP is not None:
+        return SEC_TICKER_MAP
+
+    SEC_TICKER_MAP = {}
+
+    headers = {
+        "User-Agent": SEC_USER_AGENT,
+        "Accept-Encoding": "gzip, deflate"
+    }
+
+    try:
+        r = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=headers,
+            timeout=15
+        )
+
+        if r.status_code != 200:
+            print(f"SEC ticker map status error: {r.status_code}", flush=True)
+            return SEC_TICKER_MAP
+
+        data = r.json()
+
+        for _, row in data.items():
+            cik = str(int(row.get("cik_str")))
+            ticker = clean_text(row.get("ticker")).upper()
+
+            if cik and ticker:
+                SEC_TICKER_MAP[cik] = ticker
+
+        print(f"SEC ticker map loaded: {len(SEC_TICKER_MAP)} tickers", flush=True)
+
+    except Exception as e:
+        print(f"SEC ticker map error: {e}", flush=True)
+
+    return SEC_TICKER_MAP
+
+
+def get_ticker_from_cik(cik):
+    if not cik:
+        return ""
+
+    mapping = load_sec_ticker_map()
+    return mapping.get(str(int(cik)), "")
+
+
 def extract_possible_ticker(text):
     if not text:
         return ""
@@ -574,7 +690,8 @@ def extract_possible_ticker(text):
         "CEO", "CFO", "USA", "SEC", "FDA", "EPS", "ETF", "IPO",
         "AI", "US", "DJIA", "GDP", "CPI", "PCE", "FOMC", "THE",
         "AND", "FOR", "NEW", "NYSE", "NASDAQ", "CNBC", "PR", "RSS",
-        "FORM", "SC", "DEF", "PRE", "NT", "INC", "CORP", "LTD", "LLC"
+        "FORM", "SC", "DEF", "PRE", "NT", "INC", "CORP", "LTD", "LLC",
+        "GLOBAL", "HOLDINGS", "PHARMACEUTICAL", "SERVICES", "TRUST"
     }
 
     for pattern in patterns:
@@ -585,6 +702,17 @@ def extract_possible_ticker(text):
                 return ticker
 
     return ""
+
+
+def extract_ticker_for_sec(title, url=""):
+    cik = extract_cik(f"{title} {url}")
+
+    if cik:
+        ticker = get_ticker_from_cik(cik)
+        if ticker:
+            return ticker
+
+    return extract_possible_ticker(title)
 
 
 def normalize_direction(direction):
@@ -711,9 +839,9 @@ def get_price_mode(price):
     return "BIG"
 
 
-def get_required_score(price, category, source_name):
+def get_required_score(price, category, item):
     category = normalize_category(category)
-    form = get_sec_form_from_source(source_name)
+    form = get_sec_form_from_item(item)
 
     urgent_categories = [
         "Offering / Prospectus",
@@ -729,7 +857,7 @@ def get_required_score(price, category, source_name):
     if category in ["Insider / Form 4", "Ownership"]:
         return LOW_PRICE_MIN_SCORE if price is not None and price <= LOW_PRICE_MAX else UNKNOWN_PRICE_MIN_SCORE
 
-    if form in [x.upper() for x in SEC_IMPORTANT_FORMS]:
+    if form in [canonical_sec_form(x) for x in SEC_IMPORTANT_FORMS]:
         if price is not None and price <= LOW_PRICE_MAX:
             return LOW_PRICE_MIN_SCORE
         if price is None:
@@ -749,7 +877,7 @@ def get_required_score(price, category, source_name):
 
 
 # =========================
-# 9) FETCH RSS GENERIC
+# 9) RSS
 # =========================
 
 def fetch_rss_group(sources, group_name, limit_per_source=30):
@@ -792,7 +920,8 @@ def fetch_rss_group(sources, group_name, limit_per_source=30):
                     "url": url,
                     "published_at": published_at,
                     "ticker": extract_possible_ticker(combined),
-                    "raw": summary
+                    "raw": summary,
+                    "sec_form": ""
                 })
 
             print(f"{group_name} OK {src['name']}: {len(items) - count_before} items", flush=True)
@@ -812,7 +941,7 @@ def fetch_small_cap_news():
 
 
 # =========================
-# 10) FETCH FINNHUB
+# 10) FINNHUB
 # =========================
 
 def fetch_finnhub_news():
@@ -869,7 +998,8 @@ def fetch_finnhub_news():
                 "url": news_url,
                 "published_at": published_at,
                 "ticker": extract_possible_ticker(full_text),
-                "raw": summary
+                "raw": summary,
+                "sec_form": ""
             })
 
         print(f"Finnhub OK: {len(items)} items", flush=True)
@@ -881,7 +1011,7 @@ def fetch_finnhub_news():
 
 
 # =========================
-# 11) FETCH SEC CURRENT FILINGS
+# 11) SEC
 # =========================
 
 def fetch_sec_news():
@@ -923,8 +1053,9 @@ def fetch_sec_news():
                 if not title or not filing_url:
                     continue
 
-                source_name = f"SEC {form_type}"
-                ticker_guess = extract_possible_ticker(title)
+                actual_form = extract_sec_form_from_title(title) or canonical_sec_form(form_type)
+                source_name = f"SEC {actual_form}"
+                ticker_guess = extract_ticker_for_sec(title, filing_url)
 
                 items.append({
                     "source": source_name,
@@ -932,7 +1063,8 @@ def fetch_sec_news():
                     "url": filing_url,
                     "published_at": published_at,
                     "ticker": ticker_guess,
-                    "raw": f"SEC filing form {form_type}"
+                    "raw": f"SEC filing form {actual_form}",
+                    "sec_form": actual_form
                 })
 
             print(f"SEC OK {form_type}: {len(items) - count_before} items", flush=True)
@@ -943,18 +1075,60 @@ def fetch_sec_news():
     return items
 
 
+def find_sec_doc_links(index_html, base_url):
+    links = []
+
+    hrefs = re.findall(r'href="([^"]+)"', index_html, flags=re.IGNORECASE)
+
+    for href in hrefs:
+        full = urljoin(base_url, href)
+
+        lower = full.lower()
+
+        if "/archives/edgar/data/" not in lower:
+            continue
+
+        if "ixviewer" in lower or "xsl" in lower:
+            continue
+
+        if lower.endswith("-index.htm") or lower.endswith("-index.html"):
+            continue
+
+        if "filingsummary.xml" in lower:
+            continue
+
+        if lower.endswith(".xml") or lower.endswith(".htm") or lower.endswith(".html"):
+            if full not in links:
+                links.append(full)
+
+    return links[:3]
+
+
+def form4_has_open_market_purchase(raw):
+    if not raw:
+        return False
+
+    raw_l = raw.lower()
+
+    purchase_patterns = [
+        "<transactioncode>p</transactioncode>",
+        "<transactioncode>p",
+        "transaction code p",
+        ">p</transactioncode>",
+        "open market purchase"
+    ]
+
+    return any(p in raw_l for p in purchase_patterns)
+
+
 def enrich_sec_item(item):
-    source_name = item.get("source", "")
+    if not is_sec_source(item.get("source", "")):
+        return item
+
+    if not is_important_sec_form_from_item(item):
+        return item
+
     url = item.get("url", "")
-
-    if not is_sec_source(source_name):
-        return item
-
-    if not is_important_sec_form(source_name):
-        return item
-
-    if item.get("raw") and len(item.get("raw", "")) > 200:
-        return item
 
     headers = {
         "User-Agent": SEC_USER_AGENT,
@@ -967,8 +1141,34 @@ def enrich_sec_item(item):
         if r.status_code != 200:
             return item
 
-        text = strip_html(r.text)
-        item["raw"] = text[:3500]
+        index_html = r.text
+        index_text = strip_html(index_html)
+
+        doc_texts = []
+
+        links = find_sec_doc_links(index_html, url)
+
+        for link in links:
+            try:
+                dr = requests.get(link, headers=headers, timeout=10)
+
+                if dr.status_code != 200:
+                    continue
+
+                if link.lower().endswith(".xml"):
+                    doc_texts.append(dr.text[:3500])
+                else:
+                    doc_texts.append(strip_html(dr.text)[:3500])
+
+            except Exception:
+                continue
+
+        combined = "SEC index text:\n" + index_text[:2000]
+
+        if doc_texts:
+            combined += "\n\nSEC document text:\n" + "\n\n".join(doc_texts)
+
+        item["raw"] = combined[:7000]
 
     except Exception as e:
         print(f"SEC enrich error: {e}", flush=True)
@@ -977,7 +1177,7 @@ def enrich_sec_item(item):
 
 
 # =========================
-# 12) OPENROUTER AI ANALYSIS
+# 12) OPENROUTER AI
 # =========================
 
 def analyze_with_ai(item):
@@ -989,6 +1189,7 @@ def analyze_with_ai(item):
     source = item.get("source", "")
     raw = item.get("raw", "")
     ticker = item.get("ticker", "")
+    sec_form = get_sec_form_from_item(item)
 
     prompt = f"""
 أنت محلل أخبار وإفصاحات SEC للأسهم الأمريكية فقط.
@@ -1008,8 +1209,8 @@ def analyze_with_ai(item):
   EFFECT:
     التسجيل أصبح فعالاً = مهم، وقد يسمح بطرح أو بيع أوراق مالية.
   Form 4:
-    شراء داخلي كبير = إيجابي.
-    بيع روتيني = محايد أو سلبي خفيف.
+    لا تعتبره إيجابيًا إلا إذا كان هناك شراء داخلي واضح Open Market Purchase أو transaction code P.
+    البيع أو المنح أو الخيارات أو التعويضات = محايد غالباً أو تجاهل.
   SC 13D:
     دخول مالك كبير أو ناشط = مهم / إيجابي أو مراقبة.
   SC 13G:
@@ -1041,6 +1242,7 @@ JSON format:
 
 الخبر:
 Source: {source}
+SEC Form: {sec_form}
 Ticker guess: {ticker}
 Title: {title}
 Extra: {raw}
@@ -1135,16 +1337,21 @@ def should_send_alert(item, analysis, state):
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
     category = normalize_category(analysis.get("category", ""))
-    source_name = item.get("source", "")
-    sec_form = get_sec_form_from_source(source_name)
+    sec_form = get_sec_form_from_item(item)
 
     if not ticker and category != "Macro":
         return False, "no ticker"
 
-    # جديد: منع تكرار نفس السهم + نفس نموذج SEC خلال ساعة
-    if is_sec_source(source_name) and sec_form:
+    if is_sec_source(item.get("source", "")) and sec_form:
         if not sec_form_cooldown_ok(state, ticker, sec_form):
             return False, f"SEC form cooldown for {ticker} {sec_form}"
+
+    # Form 4 filter: لا نرسل إلا إذا فيه شراء واضح
+    if sec_form == "4":
+        raw = item.get("raw", "")
+
+        if not form4_has_open_market_purchase(raw):
+            return False, "Form 4 without clear open-market purchase"
 
     price = None
     required_score = UNKNOWN_PRICE_MIN_SCORE
@@ -1153,7 +1360,7 @@ def should_send_alert(item, analysis, state):
     if ticker and category != "Macro":
         price = get_stock_price(ticker)
         price_mode = get_price_mode(price)
-        required_score = get_required_score(price, category, source_name)
+        required_score = get_required_score(price, category, item)
     elif category == "Macro":
         required_score = BIG_STOCK_MIN_SCORE
 
@@ -1246,7 +1453,7 @@ def format_alert(item, analysis):
     url = item.get("url")
     source = item.get("source")
     age = human_age(item.get("published_at"))
-    form = get_sec_form_from_source(source)
+    form = get_sec_form_from_item(item)
 
     if not ticker:
         ticker = "السوق الأمريكي"
@@ -1320,19 +1527,14 @@ def process_news_item(item, state):
         return False
 
     source_name = item.get("source", "")
-    source_form = get_sec_form_from_source(source_name)
+    source_form = get_sec_form_from_item(item)
 
     if source_name in ["SEC 10-Q", "SEC 10-K"]:
         title_l = title.lower()
         if not any(w in title_l for w in SEC_URGENT_WORDS):
             return False
 
-    if source_name == "SEC 8-K":
-        title_l = title.lower()
-        if not has_sec_urgent_keyword(title_l) and not has_important_keyword(title_l):
-            pass
-
-    if is_sec_source(source_name) and source_form in [x.upper() for x in SEC_IMPORTANT_FORMS]:
+    if is_sec_source(source_name) and source_form in [canonical_sec_form(x) for x in SEC_IMPORTANT_FORMS]:
         pass
     elif is_small_cap_source(source_name):
         if not has_small_cap_keyword(title) and not has_important_keyword(title):
@@ -1366,12 +1568,11 @@ def process_news_item(item, state):
     send_telegram(alert)
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
-    sec_form = get_sec_form_from_source(item.get("source", ""))
+    sec_form = get_sec_form_from_item(item)
 
     if ticker:
         state.setdefault("ticker_last_alert", {})[ticker] = now_utc().isoformat()
 
-    # جديد: حفظ آخر إرسال لنفس السهم + نفس نموذج SEC
     if ticker and sec_form:
         key = make_sec_form_cooldown_key(ticker, sec_form)
         if key:
@@ -1459,6 +1660,8 @@ def startup_checks():
     print(f"SEC_FORM_COOLDOWN_MINUTES: {SEC_FORM_COOLDOWN_MINUTES}", flush=True)
     print("SMALL_CAP_SOURCES: ON", flush=True)
     print("SEC_ADVANCED_FORMS: ON", flush=True)
+    print("SEC_CIK_TO_TICKER: ON", flush=True)
+    print("FORM_4_PURCHASE_FILTER: ON", flush=True)
     print("===================================", flush=True)
 
 
