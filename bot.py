@@ -1,5 +1,5 @@
-# AlphaBot Pro v5.2 Smart News
-# RSS + Finnhub + SEC + OpenRouter + Telegram
+# AlphaBot Pro v5.3 Smart News
+# RSS + Small-Cap Newswires + Finnhub + SEC + OpenRouter + Telegram
 # Low Price Stock Priority Mode
 
 import os
@@ -17,7 +17,7 @@ from email.utils import parsedate_to_datetime
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.2 Smart News"
+VERSION = "v5.3 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -44,6 +44,7 @@ TICKER_COOLDOWN_MINUTES = 45
 
 STATE_FILE = "seen_news.json"
 
+# مصادر الأخبار العامة
 RSS_SOURCES = [
     {
         "name": "Reuters US Markets",
@@ -59,6 +60,34 @@ RSS_SOURCES = [
     }
 ]
 
+# مصادر أخبار الشركات الصغيرة والبيانات الصحفية
+SMALL_CAP_RSS_SOURCES = [
+    {
+        "name": "GlobeNewswire Press Releases",
+        "url": "https://www.globenewswire.com/RssFeed/subjectcode/72-Press%20Releases/feedTitle/GlobeNewswire%20-%20Press%20Releases"
+    },
+    {
+        "name": "GlobeNewswire Stock Market News",
+        "url": "https://www.globenewswire.com/RssFeed/subjectcode/39-Stock%20Market%20News/feedTitle/GlobeNewswire%20-%20Stock%20Market%20News"
+    },
+    {
+        "name": "GlobeNewswire Partnerships",
+        "url": "https://www.globenewswire.com/RssFeed/subjectcode/56-Partnerships/feedTitle/GlobeNewswire%20-%20Partnerships"
+    },
+    {
+        "name": "GlobeNewswire M&A",
+        "url": "https://www.globenewswire.com/RssFeed/subjectcode/27-Mergers%20And%20Acquisitions/feedTitle/GlobeNewswire%20-%20Mergers%20And%20Acquisitions"
+    },
+    {
+        "name": "PR Newswire All News",
+        "url": "https://www.prnewswire.com/rss/news-releases-list.rss"
+    },
+    {
+        "name": "BusinessWire News",
+        "url": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeGVtRXQ=="
+    }
+]
+
 BLOCK_WORDS = [
     "crypto", "coin", "token", "bitcoin", "ethereum",
     "video", "podcast", "trailer", "sports", "nfl", "nba"
@@ -70,10 +99,50 @@ IMPORTANT_KEYWORDS = [
     "fda", "approval", "rejection", "phase 1", "phase 2", "phase 3",
     "merger", "acquisition", "acquires", "buyout",
     "offering", "public offering", "registered direct",
+    "private placement",
     "bankruptcy", "chapter 11", "investigation", "sec investigation",
     "contract", "agreement", "partnership", "order",
     "downgrade", "upgrade", "price target",
     "8-k", "10-q", "10-k", "s-3", "form 4"
+]
+
+SMALL_CAP_KEYWORDS = [
+    "offering",
+    "registered direct",
+    "private placement",
+    "at-the-market",
+    "atm offering",
+    "fda",
+    "approval",
+    "clearance",
+    "rejection",
+    "complete response letter",
+    "clinical trial",
+    "phase 1",
+    "phase 2",
+    "phase 3",
+    "trial results",
+    "topline results",
+    "contract",
+    "purchase order",
+    "strategic partnership",
+    "partnership",
+    "agreement",
+    "merger",
+    "acquisition",
+    "nasdaq compliance",
+    "compliance",
+    "delisting",
+    "reverse split",
+    "stock split",
+    "warrant",
+    "debt financing",
+    "credit facility",
+    "bankruptcy",
+    "chapter 11",
+    "going concern",
+    "material weakness",
+    "restatement"
 ]
 
 US_MARKET_KEYWORDS = [
@@ -161,13 +230,16 @@ def startup_message():
 
 الإصدار: {VERSION}
 الحالة: يعمل الآن
-المصادر: RSS + Finnhub + SEC + OpenRouter
+المصادر: RSS + Small-Cap Newswires + Finnhub + SEC + OpenRouter
 وضع الإرسال: الأخبار المؤثرة فقط
 
 وضع السعر:
 🔥 الأسهم تحت ${LOW_PRICE_MAX:.0f}: قوة {LOW_PRICE_MIN_SCORE}/10 أو أعلى
 🚨 الأسهم فوق ${LOW_PRICE_MAX:.0f}: قوة {BIG_STOCK_MIN_SCORE}/10 أو أعلى
 ⚪ السعر غير معروف: قوة {UNKNOWN_PRICE_MIN_SCORE}/10 أو أعلى
+
+مصادر الأسهم الصغيرة:
+GlobeNewswire + PR Newswire + BusinessWire
 
 عدد المستلمين: {len(CHAT_IDS)}
 """
@@ -304,9 +376,24 @@ def has_important_keyword(title):
     return any(word in title_l for word in IMPORTANT_KEYWORDS)
 
 
+def has_small_cap_keyword(title):
+    title_l = title.lower()
+    return any(word in title_l for word in SMALL_CAP_KEYWORDS)
+
+
 def has_us_market_keyword(title):
     title_l = title.lower()
     return any(word in title_l for word in US_MARKET_KEYWORDS)
+
+
+def is_small_cap_source(source_name):
+    s = source_name.lower()
+    return (
+        "globenewswire" in s
+        or "pr newswire" in s
+        or "businesswire" in s
+        or "business wire" in s
+    )
 
 
 def extract_possible_ticker(text):
@@ -318,13 +405,15 @@ def extract_possible_ticker(text):
         r"\bNYSE:\s*([A-Z]{1,5})\b",
         r"\bAMEX:\s*([A-Z]{1,5})\b",
         r"\(([A-Z]{1,5})\)",
+        r"\bTicker:\s*([A-Z]{1,5})\b",
+        r"\bSymbol:\s*([A-Z]{1,5})\b",
         r"\b([A-Z]{2,5})\b"
     ]
 
     bad_words = {
         "CEO", "CFO", "USA", "SEC", "FDA", "EPS", "ETF", "IPO",
         "AI", "US", "DJIA", "GDP", "CPI", "PCE", "FOMC", "THE",
-        "AND", "FOR", "NEW", "NYSE", "NASDAQ", "CNBC"
+        "AND", "FOR", "NEW", "NYSE", "NASDAQ", "CNBC", "PR", "RSS"
     }
 
     for pattern in patterns:
@@ -364,12 +453,12 @@ def normalize_category(category):
         return "Earnings"
     if "guidance" in c_l:
         return "Guidance"
-    if "offering" in c_l:
+    if "offering" in c_l or "private placement" in c_l:
         return "Offering"
-    if "fda" in c_l:
-        return "FDA"
-    if "contract" in c_l or "agreement" in c_l:
-        return "Contract"
+    if "fda" in c_l or "clinical" in c_l or "phase" in c_l:
+        return "FDA / Clinical"
+    if "contract" in c_l or "agreement" in c_l or "partnership" in c_l:
+        return "Contract / Partnership"
     if "analyst" in c_l or "upgrade" in c_l or "downgrade" in c_l:
         return "Analyst"
     if "m&a" in c_l or "merger" in c_l or "acquisition" in c_l:
@@ -378,6 +467,8 @@ def normalize_category(category):
         return "Macro"
     if "bankruptcy" in c_l:
         return "Bankruptcy"
+    if "compliance" in c_l or "delisting" in c_l:
+        return "Nasdaq Compliance"
     if "sec" in c_l or "10-q" in c_l or "10-k" in c_l or "8-k" in c_l:
         return "SEC"
 
@@ -449,10 +540,16 @@ def get_price_mode(price):
     return "BIG"
 
 
-def get_required_score(price, category):
+def get_required_score(price, category, source_name):
     category = normalize_category(category)
 
-    urgent_categories = ["Offering", "FDA", "M&A", "Bankruptcy"]
+    urgent_categories = [
+        "Offering",
+        "FDA / Clinical",
+        "M&A",
+        "Bankruptcy",
+        "Nasdaq Compliance"
+    ]
 
     if category in urgent_categories:
         return LOW_PRICE_MIN_SCORE
@@ -463,19 +560,23 @@ def get_required_score(price, category):
     if price <= LOW_PRICE_MAX:
         return LOW_PRICE_MIN_SCORE
 
+    # لو الخبر من مصادر الشركات الصغيرة والسهم مرتفع، نشدد عليه
+    if is_small_cap_source(source_name):
+        return BIG_STOCK_MIN_SCORE
+
     return BIG_STOCK_MIN_SCORE
 
 
 # =========================
-# 9) FETCH RSS
+# 9) FETCH RSS GENERIC
 # =========================
 
-def fetch_rss_news():
+def fetch_rss_group(sources, group_name, limit_per_source=30):
     items = []
 
-    print("Fetching RSS news...", flush=True)
+    print(f"Fetching {group_name}...", flush=True)
 
-    for src in RSS_SOURCES:
+    for src in sources:
         try:
             r = requests.get(
                 src["url"],
@@ -487,36 +588,46 @@ def fetch_rss_news():
             )
 
             if r.status_code != 200:
-                print(f"RSS status error {src['name']}: {r.status_code}", flush=True)
+                print(f"{group_name} status error {src['name']}: {r.status_code}", flush=True)
                 continue
 
             feed = feedparser.parse(r.text)
-
             count_before = len(items)
 
-            for entry in feed.entries[:30]:
+            for entry in feed.entries[:limit_per_source]:
                 title = clean_text(entry.get("title"))
                 url = clean_text(entry.get("link"))
                 published_at = parse_rss_time(entry)
+                summary = clean_text(entry.get("summary") or entry.get("description") or "")
 
                 if not title or not url:
                     continue
+
+                combined = f"{title} {summary}"
 
                 items.append({
                     "source": src["name"],
                     "title": title,
                     "url": url,
                     "published_at": published_at,
-                    "ticker": extract_possible_ticker(title),
-                    "raw": ""
+                    "ticker": extract_possible_ticker(combined),
+                    "raw": summary
                 })
 
-            print(f"RSS OK {src['name']}: {len(items) - count_before} items", flush=True)
+            print(f"{group_name} OK {src['name']}: {len(items) - count_before} items", flush=True)
 
         except Exception as e:
-            print(f"RSS error {src['name']}: {e}", flush=True)
+            print(f"{group_name} error {src['name']}: {e}", flush=True)
 
     return items
+
+
+def fetch_rss_news():
+    return fetch_rss_group(RSS_SOURCES, "RSS", limit_per_source=30)
+
+
+def fetch_small_cap_news():
+    return fetch_rss_group(SMALL_CAP_RSS_SOURCES, "SmallCap RSS", limit_per_source=25)
 
 
 # =========================
@@ -631,7 +742,6 @@ def fetch_sec_news():
                 continue
 
             feed = feedparser.parse(r.text)
-
             count_before = len(items)
 
             for entry in feed.entries[:25]:
@@ -680,10 +790,11 @@ def analyze_with_ai(item):
 
 المطلوب:
 - إذا الخبر لا يخص سهم أمريكي أو حدث قوي يؤثر على السوق الأمريكي، اجعل send=false.
+- ركز على الأخبار التي قد تحرك السهم فعلياً.
+- ركز أكثر على الأسهم منخفضة السعر والشركات الصغيرة إذا الخبر عن: offering, FDA, contract, clinical trial, Nasdaq compliance, delisting, reverse split.
 - لا ترسل أخبار كريبتو أو فيديو أو مقالات رأي ضعيفة.
 - لا تبالغ في التأثير.
 - impact_score من 1 إلى 10.
-- أرسل فقط الأخبار التي قد تحرك السهم أو السوق.
 - لا تعطِ توصية شراء أو بيع مباشرة.
 - لا تستخدم عبارات مثل: اشترِ، بيع، ادخل، ينصح بالشراء.
 - trading_note_ar يجب أن تكون مراقبة ومحايدة.
@@ -693,7 +804,7 @@ JSON format:
 {{
   "send": true,
   "ticker": "RDW",
-  "category": "Earnings",
+  "category": "Contract",
   "impact_score": 8,
   "direction": "positive",
   "title_ar": "ترجمة العنوان للعربية",
@@ -735,7 +846,6 @@ Extra: {raw}
 
         data = r.json()
         content = data["choices"][0]["message"]["content"].strip()
-
         content = content.replace("```json", "").replace("```", "").strip()
 
         parsed = json.loads(content)
@@ -799,6 +909,7 @@ def should_send_alert(item, analysis, state):
 
     ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
     category = normalize_category(analysis.get("category", ""))
+    source_name = item.get("source", "")
 
     if not ticker and category != "Macro":
         return False, "no ticker"
@@ -810,7 +921,7 @@ def should_send_alert(item, analysis, state):
     if ticker and category != "Macro":
         price = get_stock_price(ticker)
         price_mode = get_price_mode(price)
-        required_score = get_required_score(price, category)
+        required_score = get_required_score(price, category, source_name)
     elif category == "Macro":
         required_score = BIG_STOCK_MIN_SCORE
 
@@ -822,7 +933,13 @@ def should_send_alert(item, analysis, state):
         return False, f"score {score} below required {required_score} | price {price}"
 
     if not ticker_cooldown_ok(state, ticker):
-        urgent_categories = ["Offering", "FDA", "M&A", "Bankruptcy"]
+        urgent_categories = [
+            "Offering",
+            "FDA / Clinical",
+            "M&A",
+            "Bankruptcy",
+            "Nasdaq Compliance"
+        ]
         if category not in urgent_categories:
             return False, f"cooldown for {ticker}"
 
@@ -899,7 +1016,11 @@ def format_alert(item, analysis):
 
     price_line = format_price_line(price, price_mode, required_score)
 
-    msg = f"""🚨 خبر مؤثر على سهم أمريكي
+    label = "🚨 خبر مؤثر على سهم أمريكي"
+    if price_mode == "LOW":
+        label = "🔥 خبر سهم منخفض السعر"
+
+    msg = f"""{label}
 
 🏷️ السهم: {ticker}
 📌 نوع الخبر: {category}
@@ -963,12 +1084,17 @@ def process_news_item(item, state):
         if not any(w in title_l for w in sec_urgent_words):
             return False
 
-    if (
-        not has_important_keyword(title)
-        and not has_us_market_keyword(title)
-        and "SEC" not in source_name
-    ):
-        return False
+    # مصادر الأسهم الصغيرة تحتاج كلمات قوية حتى لا تتحول إلى سبام
+    if is_small_cap_source(source_name):
+        if not has_small_cap_keyword(title) and not has_important_keyword(title):
+            return False
+    else:
+        if (
+            not has_important_keyword(title)
+            and not has_us_market_keyword(title)
+            and "SEC" not in source_name
+        ):
+            return False
 
     news_id = make_news_id(item)
 
@@ -1023,6 +1149,13 @@ def collect_all_news():
         print(f"collect RSS error: {e}", flush=True)
 
     try:
+        small_items = fetch_small_cap_news()
+        all_items.extend(small_items)
+        print(f"Collected SmallCap RSS: {len(small_items)}", flush=True)
+    except Exception as e:
+        print(f"collect SmallCap RSS error: {e}", flush=True)
+
+    try:
         finnhub_items = fetch_finnhub_news()
         all_items.extend(finnhub_items)
         print(f"Collected Finnhub: {len(finnhub_items)}", flush=True)
@@ -1065,6 +1198,7 @@ def startup_checks():
     print(f"SEC_USER_AGENT: {SEC_USER_AGENT}", flush=True)
     print(f"LOW_PRICE_MODE: {LOW_PRICE_MODE}", flush=True)
     print(f"LOW_PRICE_MAX: {LOW_PRICE_MAX}", flush=True)
+    print("SMALL_CAP_SOURCES: ON", flush=True)
     print("===================================", flush=True)
 
 
