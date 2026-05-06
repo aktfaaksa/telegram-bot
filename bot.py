@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.6 Smart News
+# AlphaBot Pro v5.7 Smart News
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Low Price Stock Priority Mode + SEC Cleanup + CIK to Ticker + Form 4 Filter
+# Low Price Stock Priority Mode + SEC Cleanup + CIK/Form Cooldown + Common Ticker Preference
 
 import os
 import re
@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.6 Smart News"
+VERSION = "v5.7 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -40,6 +40,8 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 TICKER_COOLDOWN_MINUTES = 45
+
+# منع تكرار نفس نموذج SEC لنفس الشركة
 SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
@@ -321,12 +323,13 @@ GlobeNewswire + PR Newswire + BusinessWire
 
 تنظيف SEC:
 ✅ قراءة النموذج الحقيقي من العنوان
-✅ تحويل CIK إلى رمز السهم عند الإمكان
-✅ منع تكرار نفس رابط SEC
+✅ تحويل CIK إلى رمز السهم العادي عند الإمكان
+✅ تجنب رموز Warrants / Preferred قدر الإمكان
+✅ منع تكرار نفس CIK + نفس نموذج SEC
 ✅ Form 4 لا يرسل إلا مع شراء داخلي واضح
 
 منع التكرار:
-نفس السهم + نفس نموذج SEC لا يتكرر خلال {SEC_FORM_COOLDOWN_MINUTES} دقيقة
+نفس الشركة CIK + نفس نموذج SEC لا يتكرر خلال {SEC_FORM_COOLDOWN_MINUTES} دقيقة
 
 عدد المستلمين: {len(CHAT_IDS)}
 """
@@ -534,7 +537,6 @@ def extract_sec_form_from_title(title):
         return ""
 
     form = canonical_sec_form(match.group(1))
-
     known = [canonical_sec_form(x) for x in SEC_FORMS]
 
     if form in known:
@@ -572,39 +574,6 @@ def is_important_sec_form_from_item(item):
     return form in [canonical_sec_form(x) for x in SEC_IMPORTANT_FORMS]
 
 
-def make_sec_form_cooldown_key(ticker, form):
-    ticker = clean_text(ticker).upper()
-    form = canonical_sec_form(form)
-
-    if not ticker or not form:
-        return ""
-
-    return f"{ticker}|{form}"
-
-
-def sec_form_cooldown_ok(state, ticker, form):
-    key = make_sec_form_cooldown_key(ticker, form)
-
-    if not key:
-        return True
-
-    last = state.get("sec_form_last_alert", {}).get(key)
-
-    if not last:
-        return True
-
-    try:
-        last_dt = datetime.fromisoformat(last)
-
-        if last_dt.tzinfo is None:
-            last_dt = last_dt.replace(tzinfo=timezone.utc)
-
-        return now_utc() - last_dt >= timedelta(minutes=SEC_FORM_COOLDOWN_MINUTES)
-
-    except Exception:
-        return True
-
-
 def extract_cik(text):
     if not text:
         return ""
@@ -618,9 +587,108 @@ def extract_cik(text):
     for pattern in patterns:
         m = re.search(pattern, text, flags=re.IGNORECASE)
         if m:
-            return str(int(m.group(1)))
+            try:
+                return str(int(m.group(1)))
+            except Exception:
+                return m.group(1).lstrip("0")
 
     return ""
+
+
+def get_cik_from_item(item):
+    if not item:
+        return ""
+
+    if item.get("cik"):
+        return str(item.get("cik"))
+
+    return extract_cik(f"{item.get('title','')} {item.get('url','')} {item.get('raw','')}")
+
+
+def is_warrant_or_right_ticker(ticker):
+    t = clean_text(ticker).upper()
+
+    if not t:
+        return False
+
+    if "-" in t or "." in t or "^" in t:
+        return True
+
+    suffixes = [
+        "WS", "WT", "WTA", "W",
+        "Z", "R", "U"
+    ]
+
+    for s in suffixes:
+        if len(t) > 2 and t.endswith(s):
+            return True
+
+    return False
+
+
+def ticker_quality_score(ticker):
+    t = clean_text(ticker).upper()
+
+    if not t:
+        return -100
+
+    score = 100
+
+    if "-" in t or "." in t or "^" in t:
+        score -= 60
+
+    if is_warrant_or_right_ticker(t):
+        score -= 40
+
+    if len(t) <= 4:
+        score += 10
+
+    if len(t) > 5:
+        score -= 20
+
+    return score
+
+
+def normalize_common_ticker(ticker, available_tickers=None):
+    t = clean_text(ticker).upper()
+
+    if not t:
+        return ""
+
+    if available_tickers:
+        candidates = [clean_text(x).upper() for x in available_tickers if clean_text(x)]
+
+        normal_candidates = [
+            x for x in candidates
+            if not is_warrant_or_right_ticker(x)
+        ]
+
+        if normal_candidates:
+            normal_candidates.sort(key=ticker_quality_score, reverse=True)
+            return normal_candidates[0]
+
+        candidates.sort(key=ticker_quality_score, reverse=True)
+        return candidates[0]
+
+    if "-" in t:
+        return t.split("-")[0]
+
+    if "." in t:
+        return t.split(".")[0]
+
+    if len(t) > 2 and t.endswith("WS"):
+        return t[:-2]
+
+    if len(t) > 2 and t.endswith("WT"):
+        return t[:-2]
+
+    if len(t) > 1 and t.endswith("W"):
+        return t[:-1]
+
+    if len(t) > 1 and t.endswith("Z"):
+        return t[:-1]
+
+    return t
 
 
 def load_sec_ticker_map():
@@ -654,9 +722,11 @@ def load_sec_ticker_map():
             ticker = clean_text(row.get("ticker")).upper()
 
             if cik and ticker:
-                SEC_TICKER_MAP[cik] = ticker
+                SEC_TICKER_MAP.setdefault(cik, [])
+                if ticker not in SEC_TICKER_MAP[cik]:
+                    SEC_TICKER_MAP[cik].append(ticker)
 
-        print(f"SEC ticker map loaded: {len(SEC_TICKER_MAP)} tickers", flush=True)
+        print(f"SEC ticker map loaded: {len(SEC_TICKER_MAP)} CIKs", flush=True)
 
     except Exception as e:
         print(f"SEC ticker map error: {e}", flush=True)
@@ -669,7 +739,12 @@ def get_ticker_from_cik(cik):
         return ""
 
     mapping = load_sec_ticker_map()
-    return mapping.get(str(int(cik)), "")
+    tickers = mapping.get(str(int(cik)), [])
+
+    if not tickers:
+        return ""
+
+    return normalize_common_ticker("", tickers)
 
 
 def extract_possible_ticker(text):
@@ -699,7 +774,7 @@ def extract_possible_ticker(text):
         for m in matches:
             ticker = m.strip().upper()
             if ticker not in bad_words:
-                return ticker
+                return normalize_common_ticker(ticker)
 
     return ""
 
@@ -713,6 +788,43 @@ def extract_ticker_for_sec(title, url=""):
             return ticker
 
     return extract_possible_ticker(title)
+
+
+def make_sec_form_cooldown_key(item, ticker, form):
+    cik = get_cik_from_item(item)
+    form = canonical_sec_form(form)
+    ticker = clean_text(ticker).upper()
+
+    if cik and form:
+        return f"CIK:{cik}|{form}"
+
+    if ticker and form:
+        return f"TICKER:{ticker}|{form}"
+
+    return ""
+
+
+def sec_form_cooldown_ok(state, item, ticker, form):
+    key = make_sec_form_cooldown_key(item, ticker, form)
+
+    if not key:
+        return True
+
+    last = state.get("sec_form_last_alert", {}).get(key)
+
+    if not last:
+        return True
+
+    try:
+        last_dt = datetime.fromisoformat(last)
+
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+
+        return now_utc() - last_dt >= timedelta(minutes=SEC_FORM_COOLDOWN_MINUTES)
+
+    except Exception:
+        return True
 
 
 def normalize_direction(direction):
@@ -782,7 +894,7 @@ def normalize_category(category):
 # =========================
 
 def get_stock_price(ticker):
-    ticker = clean_text(ticker).upper()
+    ticker = normalize_common_ticker(ticker)
 
     if not ticker or not FINNHUB_API_KEY:
         return None
@@ -921,7 +1033,8 @@ def fetch_rss_group(sources, group_name, limit_per_source=30):
                     "published_at": published_at,
                     "ticker": extract_possible_ticker(combined),
                     "raw": summary,
-                    "sec_form": ""
+                    "sec_form": "",
+                    "cik": ""
                 })
 
             print(f"{group_name} OK {src['name']}: {len(items) - count_before} items", flush=True)
@@ -999,7 +1112,8 @@ def fetch_finnhub_news():
                 "published_at": published_at,
                 "ticker": extract_possible_ticker(full_text),
                 "raw": summary,
-                "sec_form": ""
+                "sec_form": "",
+                "cik": ""
             })
 
         print(f"Finnhub OK: {len(items)} items", flush=True)
@@ -1054,6 +1168,7 @@ def fetch_sec_news():
                     continue
 
                 actual_form = extract_sec_form_from_title(title) or canonical_sec_form(form_type)
+                cik = extract_cik(f"{title} {filing_url}")
                 source_name = f"SEC {actual_form}"
                 ticker_guess = extract_ticker_for_sec(title, filing_url)
 
@@ -1064,7 +1179,8 @@ def fetch_sec_news():
                     "published_at": published_at,
                     "ticker": ticker_guess,
                     "raw": f"SEC filing form {actual_form}",
-                    "sec_form": actual_form
+                    "sec_form": actual_form,
+                    "cik": cik
                 })
 
             print(f"SEC OK {form_type}: {len(items) - count_before} items", flush=True)
@@ -1082,7 +1198,6 @@ def find_sec_doc_links(index_html, base_url):
 
     for href in hrefs:
         full = urljoin(base_url, href)
-
         lower = full.lower()
 
         if "/archives/edgar/data/" not in lower:
@@ -1190,6 +1305,7 @@ def analyze_with_ai(item):
     raw = item.get("raw", "")
     ticker = item.get("ticker", "")
     sec_form = get_sec_form_from_item(item)
+    cik = get_cik_from_item(item)
 
     prompt = f"""
 أنت محلل أخبار وإفصاحات SEC للأسهم الأمريكية فقط.
@@ -1203,7 +1319,7 @@ def analyze_with_ai(item):
 - حلل إفصاحات SEC بذكاء:
   424B5 / 424B3 / 424B4:
     common stock أو warrants أو units أو ATM أو registered direct = سلبي غالباً بسبب تخفيف محتمل.
-    debt securities = محايد أو ضغط محدود.
+    debt securities أو preferred stock = محايد إلى سلبي محدود حسب السياق.
   S-1 / S-3 / F-1 / F-3:
     تسجيل أوراق مالية = مراقبة / احتمال تمويل.
   EFFECT:
@@ -1243,6 +1359,7 @@ JSON format:
 الخبر:
 Source: {source}
 SEC Form: {sec_form}
+CIK: {cik}
 Ticker guess: {ticker}
 Title: {title}
 Extra: {raw}
@@ -1292,7 +1409,7 @@ def ticker_cooldown_ok(state, ticker):
     if not ticker:
         return True
 
-    ticker = ticker.upper()
+    ticker = normalize_common_ticker(ticker)
     last = state.get("ticker_last_alert", {}).get(ticker)
 
     if not last:
@@ -1335,7 +1452,7 @@ def should_send_alert(item, analysis, state):
     except Exception:
         score = 0
 
-    ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
+    ticker = normalize_common_ticker(analysis.get("ticker") or item.get("ticker", ""))
     category = normalize_category(analysis.get("category", ""))
     sec_form = get_sec_form_from_item(item)
 
@@ -1343,10 +1460,9 @@ def should_send_alert(item, analysis, state):
         return False, "no ticker"
 
     if is_sec_source(item.get("source", "")) and sec_form:
-        if not sec_form_cooldown_ok(state, ticker, sec_form):
-            return False, f"SEC form cooldown for {ticker} {sec_form}"
+        if not sec_form_cooldown_ok(state, item, ticker, sec_form):
+            return False, f"SEC CIK/form cooldown for {ticker} {sec_form}"
 
-    # Form 4 filter: لا نرسل إلا إذا فيه شراء واضح
     if sec_form == "4":
         raw = item.get("raw", "")
 
@@ -1364,6 +1480,7 @@ def should_send_alert(item, analysis, state):
     elif category == "Macro":
         required_score = BIG_STOCK_MIN_SCORE
 
+    analysis["ticker"] = ticker
     analysis["stock_price"] = price
     analysis["price_mode"] = price_mode
     analysis["required_score"] = required_score
@@ -1428,14 +1545,19 @@ def format_price_line(price, price_mode, required_score):
     if price is None:
         return f"💵 السعر: غير معروف | شرط الإرسال: {required_score}/10"
 
-    if price_mode == "LOW":
-        return f"💵 السعر: ${price:.2f} | 🔥 سهم منخفض السعر | شرط الإرسال: {required_score}/10"
+    if price < 0.01:
+        price_text = f"${price:.6f}"
+    else:
+        price_text = f"${price:.2f}"
 
-    return f"💵 السعر: ${price:.2f} | 🚨 سهم كبير/مرتفع السعر | شرط الإرسال: {required_score}/10"
+    if price_mode == "LOW":
+        return f"💵 السعر: {price_text} | 🔥 سهم منخفض السعر | شرط الإرسال: {required_score}/10"
+
+    return f"💵 السعر: {price_text} | 🚨 سهم كبير/مرتفع السعر | شرط الإرسال: {required_score}/10"
 
 
 def format_alert(item, analysis):
-    ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
+    ticker = normalize_common_ticker(analysis.get("ticker") or item.get("ticker", ""))
     category = normalize_category(analysis.get("category", "Other"))
     direction = normalize_direction(analysis.get("direction", "mixed"))
     score = analysis.get("impact_score", "?")
@@ -1454,6 +1576,7 @@ def format_alert(item, analysis):
     source = item.get("source")
     age = human_age(item.get("published_at"))
     form = get_sec_form_from_item(item)
+    cik = get_cik_from_item(item)
 
     if not ticker:
         ticker = "السوق الأمريكي"
@@ -1475,7 +1598,9 @@ def format_alert(item, analysis):
 
     sec_line = ""
     if form:
-        sec_line = f"📄 نموذج SEC: {form}\n"
+        sec_line += f"📄 نموذج SEC: {form}\n"
+    if cik:
+        sec_line += f"🆔 CIK: {cik}\n"
 
     msg = f"""{label}
 
@@ -1567,14 +1692,14 @@ def process_news_item(item, state):
     alert = format_alert(item, analysis)
     send_telegram(alert)
 
-    ticker = clean_text(analysis.get("ticker") or item.get("ticker", "")).upper()
+    ticker = normalize_common_ticker(analysis.get("ticker") or item.get("ticker", ""))
     sec_form = get_sec_form_from_item(item)
 
     if ticker:
         state.setdefault("ticker_last_alert", {})[ticker] = now_utc().isoformat()
 
-    if ticker and sec_form:
-        key = make_sec_form_cooldown_key(ticker, sec_form)
+    if sec_form:
+        key = make_sec_form_cooldown_key(item, ticker, sec_form)
         if key:
             state.setdefault("sec_form_last_alert", {})[key] = now_utc().isoformat()
 
@@ -1660,7 +1785,8 @@ def startup_checks():
     print(f"SEC_FORM_COOLDOWN_MINUTES: {SEC_FORM_COOLDOWN_MINUTES}", flush=True)
     print("SMALL_CAP_SOURCES: ON", flush=True)
     print("SEC_ADVANCED_FORMS: ON", flush=True)
-    print("SEC_CIK_TO_TICKER: ON", flush=True)
+    print("SEC_CIK_TO_COMMON_TICKER: ON", flush=True)
+    print("SEC_CIK_FORM_COOLDOWN: ON", flush=True)
     print("FORM_4_PURCHASE_FILTER: ON", flush=True)
     print("===================================", flush=True)
 
