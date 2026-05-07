@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.7 Smart News
+# AlphaBot Pro v5.8 Smart News
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Low Price Stock Priority Mode + SEC Cleanup + CIK/Form Cooldown + Common Ticker Preference
+# Low Price Stock Priority Mode + SEC Cleanup + CIK/Form Cooldown + Ticker Accuracy Upgrade
 
 import os
 import re
@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.7 Smart News"
+VERSION = "v5.8 Smart News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -40,8 +40,6 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 TICKER_COOLDOWN_MINUTES = 45
-
-# منع تكرار نفس نموذج SEC لنفس الشركة
 SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
@@ -89,44 +87,15 @@ SMALL_CAP_RSS_SOURCES = [
 ]
 
 SEC_FORMS = [
-    "8-K",
-    "S-1",
-    "S-3",
-    "F-1",
-    "F-3",
-    "424B5",
-    "424B3",
-    "424B4",
-    "EFFECT",
-    "FWP",
-    "4",
-    "SC 13D",
-    "SC 13G",
-    "DEF 14A",
-    "PRE 14A",
-    "NT 10-Q",
-    "NT 10-K",
-    "10-Q",
-    "10-K"
+    "8-K", "S-1", "S-3", "F-1", "F-3", "424B5", "424B3", "424B4",
+    "EFFECT", "FWP", "4", "SC 13D", "SC 13G", "DEF 14A", "PRE 14A",
+    "NT 10-Q", "NT 10-K", "10-Q", "10-K"
 ]
 
 SEC_IMPORTANT_FORMS = [
-    "424B5",
-    "424B3",
-    "424B4",
-    "S-1",
-    "S-3",
-    "F-1",
-    "F-3",
-    "EFFECT",
-    "FWP",
-    "4",
-    "SC 13D",
-    "SC 13G",
-    "DEF 14A",
-    "PRE 14A",
-    "NT 10-Q",
-    "NT 10-K"
+    "424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3",
+    "EFFECT", "FWP", "4", "SC 13D", "SC 13G", "DEF 14A", "PRE 14A",
+    "NT 10-Q", "NT 10-K"
 ]
 
 BLOCK_WORDS = [
@@ -139,8 +108,7 @@ IMPORTANT_KEYWORDS = [
     "raises guidance", "cuts guidance", "beats", "misses",
     "fda", "approval", "rejection", "phase 1", "phase 2", "phase 3",
     "merger", "acquisition", "acquires", "buyout",
-    "offering", "public offering", "registered direct",
-    "private placement",
+    "offering", "public offering", "registered direct", "private placement",
     "bankruptcy", "chapter 11", "investigation", "sec investigation",
     "contract", "agreement", "partnership", "order",
     "downgrade", "upgrade", "price target",
@@ -149,79 +117,23 @@ IMPORTANT_KEYWORDS = [
 ]
 
 SMALL_CAP_KEYWORDS = [
-    "offering",
-    "registered direct",
-    "private placement",
-    "at-the-market",
-    "atm offering",
-    "fda",
-    "approval",
-    "clearance",
-    "rejection",
-    "complete response letter",
-    "clinical trial",
-    "phase 1",
-    "phase 2",
-    "phase 3",
-    "trial results",
-    "topline results",
-    "contract",
-    "purchase order",
-    "strategic partnership",
-    "partnership",
-    "agreement",
-    "merger",
-    "acquisition",
-    "nasdaq compliance",
-    "compliance",
-    "delisting",
-    "reverse split",
-    "stock split",
-    "warrant",
-    "debt financing",
-    "credit facility",
-    "bankruptcy",
-    "chapter 11",
-    "going concern",
-    "material weakness",
-    "restatement"
+    "offering", "registered direct", "private placement", "at-the-market", "atm offering",
+    "fda", "approval", "clearance", "rejection", "complete response letter",
+    "clinical trial", "phase 1", "phase 2", "phase 3", "trial results", "topline results",
+    "contract", "purchase order", "strategic partnership", "partnership", "agreement",
+    "merger", "acquisition", "nasdaq compliance", "compliance", "delisting",
+    "reverse split", "stock split", "warrant", "debt financing", "credit facility",
+    "bankruptcy", "chapter 11", "going concern", "material weakness", "restatement"
 ]
 
 SEC_URGENT_WORDS = [
-    "common stock",
-    "ordinary shares",
-    "offering",
-    "public offering",
-    "registered direct",
-    "private placement",
-    "at-the-market",
-    "atm",
-    "warrant",
-    "units",
-    "prospectus supplement",
-    "424b5",
-    "424b3",
-    "424b4",
-    "effect",
-    "free writing prospectus",
-    "form 4",
-    "insider",
-    "beneficial ownership",
-    "13d",
-    "13g",
-    "late filing",
-    "nt 10-q",
-    "nt 10-k",
-    "delisting",
-    "reverse split",
-    "increase authorized shares",
-    "nasdaq compliance",
-    "material weakness",
-    "going concern",
-    "bankruptcy",
-    "chapter 11",
-    "restatement",
-    "default"
+    "common stock", "ordinary shares", "offering", "public offering", "registered direct",
+    "private placement", "at-the-market", "atm", "warrant", "units",
+    "prospectus supplement", "424b5", "424b3", "424b4", "effect",
+    "free writing prospectus", "form 4", "insider", "beneficial ownership",
+    "13d", "13g", "late filing", "nt 10-q", "nt 10-k", "delisting",
+    "reverse split", "increase authorized shares", "nasdaq compliance", "material weakness",
+    "going concern", "bankruptcy", "chapter 11", "restatement", "default"
 ]
 
 US_MARKET_KEYWORDS = [
@@ -251,7 +163,6 @@ def current_date_key():
 
 def get_chat_ids():
     ids = []
-
     raw_chat_ids = os.getenv("CHAT_IDS", "").strip()
 
     if raw_chat_ids:
@@ -320,6 +231,12 @@ def startup_message():
 
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
+
+دقة رمز السهم:
+✅ استخراج الرمز الرسمي من نص الخبر مثل NYSE American: ARMP
+✅ منع التقاط رموز المنتجات مثل AP-SA02 كرمز سهم
+✅ التحقق بالسعر من Finnhub عند الإمكان
+✅ أخبار SEC تعتمد على CIK والسهم العادي قدر الإمكان
 
 تنظيف SEC:
 ✅ قراءة النموذج الحقيقي من العنوان
@@ -454,7 +371,7 @@ def human_age(published_at):
 
 
 # =========================
-# 7) BASIC FILTERS
+# 7) BASIC FILTERS + TICKERS
 # =========================
 
 def clean_text(text):
@@ -472,6 +389,7 @@ def strip_html(text):
     text = re.sub(r"&nbsp;", " ", text)
     text = re.sub(r"&amp;", "&", text)
     text = re.sub(r"&quot;", '"', text)
+    text = re.sub(r"&#039;", "'", text)
     return clean_text(text)
 
 
@@ -614,10 +532,7 @@ def is_warrant_or_right_ticker(ticker):
     if "-" in t or "." in t or "^" in t:
         return True
 
-    suffixes = [
-        "WS", "WT", "WTA", "W",
-        "Z", "R", "U"
-    ]
+    suffixes = ["WS", "WT", "WTA", "W", "Z", "R", "U"]
 
     for s in suffixes:
         if len(t) > 2 and t.endswith(s):
@@ -652,23 +567,19 @@ def ticker_quality_score(ticker):
 def normalize_common_ticker(ticker, available_tickers=None):
     t = clean_text(ticker).upper()
 
-    if not t:
-        return ""
-
     if available_tickers:
         candidates = [clean_text(x).upper() for x in available_tickers if clean_text(x)]
-
-        normal_candidates = [
-            x for x in candidates
-            if not is_warrant_or_right_ticker(x)
-        ]
+        normal_candidates = [x for x in candidates if not is_warrant_or_right_ticker(x)]
 
         if normal_candidates:
             normal_candidates.sort(key=ticker_quality_score, reverse=True)
             return normal_candidates[0]
 
         candidates.sort(key=ticker_quality_score, reverse=True)
-        return candidates[0]
+        return candidates[0] if candidates else ""
+
+    if not t:
+        return ""
 
     if "-" in t:
         return t.split("-")[0]
@@ -698,7 +609,6 @@ def load_sec_ticker_map():
         return SEC_TICKER_MAP
 
     SEC_TICKER_MAP = {}
-
     headers = {
         "User-Agent": SEC_USER_AGENT,
         "Accept-Encoding": "gzip, deflate"
@@ -747,9 +657,62 @@ def get_ticker_from_cik(cik):
     return normalize_common_ticker("", tickers)
 
 
+def remove_product_codes(text):
+    """
+    يمنع التقاط رموز منتجات مثل AP-SA02 على أنها ticker.
+    """
+    if not text:
+        return ""
+
+    text = re.sub(r"\b[A-Z]{1,6}-[A-Z0-9]{2,}\b", " ", text)
+    text = re.sub(r"\b[A-Z]{1,6}-\d+[A-Z0-9-]*\b", " ", text)
+    return text
+
+
+def extract_official_ticker(text):
+    """
+    أدق طريقة للأخبار الصحفية: يلتقط الرمز الرسمي من نص مثل:
+    (NYSE American: ARMP), Nasdaq: NVDA, NYSE: DIS, OTCQB: ABCD
+    """
+    if not text:
+        return ""
+
+    patterns = [
+        r"\bNYSE\s+American\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bNYSE\s+AMERICAN\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bNYSE\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bNASDAQ\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bNasdaq\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bAMEX\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bOTCQB\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bOTCQX\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bOTC\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\((?:NYSE\s+American|NYSE|NASDAQ|Nasdaq|AMEX|OTCQB|OTCQX|OTC)\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\)",
+        r"\bTicker\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b",
+        r"\bSymbol\s*[:：]\s*([A-Z][A-Z0-9.\-]{0,9})\b"
+    ]
+
+    bad = {"USA", "SEC", "FDA", "IPO", "ETF"}
+
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for m in matches:
+            ticker = normalize_common_ticker(m)
+            if ticker and ticker not in bad:
+                return ticker
+
+    return ""
+
+
 def extract_possible_ticker(text):
     if not text:
         return ""
+
+    official = extract_official_ticker(text)
+    if official:
+        return official
+
+    text = remove_product_codes(text)
 
     patterns = [
         r"\bNASDAQ:\s*([A-Z]{1,5})\b",
@@ -772,9 +735,9 @@ def extract_possible_ticker(text):
     for pattern in patterns:
         matches = re.findall(pattern, text)
         for m in matches:
-            ticker = m.strip().upper()
+            ticker = normalize_common_ticker(m)
             if ticker not in bad_words:
-                return normalize_common_ticker(ticker)
+                return ticker
 
     return ""
 
@@ -790,10 +753,24 @@ def extract_ticker_for_sec(title, url=""):
     return extract_possible_ticker(title)
 
 
+def likely_product_code_conflict(ticker, text):
+    """
+    مثال: AP-SA02 لا يعني أن AP هو رمز سهم.
+    إذا الرمز جاء كجزء من كود منتج ولم يوجد رمز رسمي، نرفضه.
+    """
+    ticker = clean_text(ticker).upper()
+    if not ticker or not text:
+        return False
+
+    text_upper = text.upper()
+    pattern = rf"\b{re.escape(ticker)}-[A-Z0-9]{{2,}}\b"
+    return re.search(pattern, text_upper) is not None
+
+
 def make_sec_form_cooldown_key(item, ticker, form):
     cik = get_cik_from_item(item)
     form = canonical_sec_form(form)
-    ticker = clean_text(ticker).upper()
+    ticker = normalize_common_ticker(ticker)
 
     if cik and form:
         return f"CIK:{cik}|{form}"
@@ -1025,13 +1002,15 @@ def fetch_rss_group(sources, group_name, limit_per_source=30):
                     continue
 
                 combined = f"{title} {summary}"
+                official = extract_official_ticker(combined)
 
                 items.append({
                     "source": src["name"],
                     "title": title,
                     "url": url,
                     "published_at": published_at,
-                    "ticker": extract_possible_ticker(combined),
+                    "ticker": official or extract_possible_ticker(combined),
+                    "official_ticker": official,
                     "raw": summary,
                     "sec_form": "",
                     "cik": ""
@@ -1104,13 +1083,15 @@ def fetch_finnhub_news():
                 continue
 
             full_text = f"{title} {summary}"
+            official = extract_official_ticker(full_text)
 
             items.append({
                 "source": f"Finnhub / {source}",
                 "title": title,
                 "url": news_url,
                 "published_at": published_at,
-                "ticker": extract_possible_ticker(full_text),
+                "ticker": official or extract_possible_ticker(full_text),
+                "official_ticker": official,
                 "raw": summary,
                 "sec_form": "",
                 "cik": ""
@@ -1178,6 +1159,7 @@ def fetch_sec_news():
                     "url": filing_url,
                     "published_at": published_at,
                     "ticker": ticker_guess,
+                    "official_ticker": ticker_guess,
                     "raw": f"SEC filing form {actual_form}",
                     "sec_form": actual_form,
                     "cik": cik
@@ -1193,7 +1175,6 @@ def fetch_sec_news():
 
 def find_sec_doc_links(index_html, base_url):
     links = []
-
     hrefs = re.findall(r'href="([^"]+)"', index_html, flags=re.IGNORECASE)
 
     for href in hrefs:
@@ -1244,7 +1225,6 @@ def enrich_sec_item(item):
         return item
 
     url = item.get("url", "")
-
     headers = {
         "User-Agent": SEC_USER_AGENT,
         "Accept-Encoding": "gzip, deflate",
@@ -1258,9 +1238,7 @@ def enrich_sec_item(item):
 
         index_html = r.text
         index_text = strip_html(index_html)
-
         doc_texts = []
-
         links = find_sec_doc_links(index_html, url)
 
         for link in links:
@@ -1291,6 +1269,53 @@ def enrich_sec_item(item):
     return item
 
 
+def enrich_non_sec_item(item):
+    """
+    للأخبار الصحفية: نحاول قراءة الصفحة نفسها لاستخراج الرمز الرسمي مثل (NYSE American: ARMP).
+    هذا يمنع أخطاء مثل AP-SA02 -> AP.
+    """
+    if is_sec_source(item.get("source", "")):
+        return item
+
+    url = item.get("url", "")
+
+    if not url:
+        return item
+
+    # إذا عندنا رمز رسمي بالفعل لا نحتاج تحميل الصفحة إلا إذا raw قصير جداً.
+    if item.get("official_ticker") and len(item.get("raw", "")) > 300:
+        return item
+
+    try:
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "AlphaBot News Bot",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            timeout=12
+        )
+
+        if r.status_code != 200:
+            return item
+
+        text = strip_html(r.text)
+        official = extract_official_ticker(text)
+
+        if official:
+            item["official_ticker"] = official
+            item["ticker"] = official
+
+        if text:
+            existing = clean_text(item.get("raw", ""))
+            item["raw"] = (existing + "\n\nArticle text:\n" + text[:4000]).strip()[:6000]
+
+    except Exception as e:
+        print(f"Non-SEC enrich error: {e}", flush=True)
+
+    return item
+
+
 # =========================
 # 12) OPENROUTER AI
 # =========================
@@ -1304,6 +1329,7 @@ def analyze_with_ai(item):
     source = item.get("source", "")
     raw = item.get("raw", "")
     ticker = item.get("ticker", "")
+    official_ticker = item.get("official_ticker", "")
     sec_form = get_sec_form_from_item(item)
     cik = get_cik_from_item(item)
 
@@ -1314,6 +1340,9 @@ def analyze_with_ai(item):
 
 المطلوب:
 - إذا الخبر لا يخص سهم أمريكي أو حدث قوي يؤثر على السوق الأمريكي، اجعل send=false.
+- لا تختر رمز سهم من اسم منتج أو علاج. مثال: AP-SA02 ليس رمز سهم، ولا يعني AP.
+- إذا وجدت رمزًا رسميًا داخل النص مثل NYSE American: ARMP أو NASDAQ: RDW، استخدمه فقط.
+- إذا Official ticker موجود، استخدمه كما هو.
 - ركز على الأخبار التي قد تحرك السهم فعلياً.
 - ركز أكثر على الأسهم منخفضة السعر والشركات الصغيرة إذا الخبر عن: offering, FDA, contract, clinical trial, Nasdaq compliance, delisting, reverse split.
 - حلل إفصاحات SEC بذكاء:
@@ -1361,6 +1390,7 @@ Source: {source}
 SEC Form: {sec_form}
 CIK: {cik}
 Ticker guess: {ticker}
+Official ticker: {official_ticker}
 Title: {title}
 Extra: {raw}
 """
@@ -1440,6 +1470,31 @@ def daily_limit_ok(state):
     return int(daily.get("count", 0)) < MAX_DAILY_ALERTS
 
 
+def resolve_final_ticker(item, analysis):
+    # 1) SEC: استخدم CIK إلى السهم العادي
+    if is_sec_source(item.get("source", "")):
+        ticker = normalize_common_ticker(item.get("ticker") or analysis.get("ticker", ""))
+        return ticker
+
+    # 2) الأخبار الصحفية: الرمز الرسمي داخل النص هو الأعلى أولوية
+    official = normalize_common_ticker(item.get("official_ticker", ""))
+    if official:
+        return official
+
+    ai_ticker = normalize_common_ticker(analysis.get("ticker", ""))
+    item_ticker = normalize_common_ticker(item.get("ticker", ""))
+
+    # إذا الرمز متورط في كود منتج مثل AP-SA02 ولم يوجد official، لا نثق به
+    combined = f"{item.get('title','')} {item.get('raw','')}"
+    if ai_ticker and likely_product_code_conflict(ai_ticker, combined):
+        return ""
+
+    if item_ticker and likely_product_code_conflict(item_ticker, combined):
+        item_ticker = ""
+
+    return ai_ticker or item_ticker
+
+
 def should_send_alert(item, analysis, state):
     if not analysis:
         return False, "AI analysis failed"
@@ -1452,12 +1507,12 @@ def should_send_alert(item, analysis, state):
     except Exception:
         score = 0
 
-    ticker = normalize_common_ticker(analysis.get("ticker") or item.get("ticker", ""))
+    ticker = resolve_final_ticker(item, analysis)
     category = normalize_category(analysis.get("category", ""))
     sec_form = get_sec_form_from_item(item)
 
     if not ticker and category != "Macro":
-        return False, "no ticker"
+        return False, "no reliable ticker"
 
     if is_sec_source(item.get("source", "")) and sec_form:
         if not sec_form_cooldown_ok(state, item, ticker, sec_form):
@@ -1484,6 +1539,11 @@ def should_send_alert(item, analysis, state):
     analysis["stock_price"] = price
     analysis["price_mode"] = price_mode
     analysis["required_score"] = required_score
+
+    # حماية إضافية: إذا خبر صحفي وليس SEC ولا يوجد official ticker ولا سعر، لا نرسله بثقة
+    if not is_sec_source(item.get("source", "")):
+        if not item.get("official_ticker") and price is None and category != "Macro":
+            return False, "non-SEC ticker not verified by official text or Finnhub price"
 
     if score < required_score:
         return False, f"score {score} below required {required_score} | price {price}"
@@ -1602,10 +1662,14 @@ def format_alert(item, analysis):
     if cik:
         sec_line += f"🆔 CIK: {cik}\n"
 
+    official_line = ""
+    if item.get("official_ticker") and not is_sec_source(source):
+        official_line = "✅ الرمز مؤكد من نص الخبر\n"
+
     msg = f"""{label}
 
 🏷️ السهم: {ticker}
-{sec_line}📌 نوع الخبر: {category}
+{sec_line}{official_line}📌 نوع الخبر: {category}
 📊 التأثير المتوقع: {direction}
 🔥 قوة الخبر: {score}/10
 {price_line}
@@ -1677,7 +1741,10 @@ def process_news_item(item, state):
     if news_id in state.get("seen", []):
         return False
 
-    item = enrich_sec_item(item)
+    if is_sec_source(source_name):
+        item = enrich_sec_item(item)
+    else:
+        item = enrich_non_sec_item(item)
 
     analysis = analyze_with_ai(item)
 
@@ -1788,6 +1855,8 @@ def startup_checks():
     print("SEC_CIK_TO_COMMON_TICKER: ON", flush=True)
     print("SEC_CIK_FORM_COOLDOWN: ON", flush=True)
     print("FORM_4_PURCHASE_FILTER: ON", flush=True)
+    print("OFFICIAL_NEWS_TICKER_EXTRACTION: ON", flush=True)
+    print("PRODUCT_CODE_TICKER_BLOCK: ON", flush=True)
     print("===================================", flush=True)
 
 
