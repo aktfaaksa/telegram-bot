@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.2
+# AlphaBot Pro v5.9.3
 # quick_report.py
 # تقرير سريع وخفيف للسهم بدون جلب أخبار ثقيلة
 

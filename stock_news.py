@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.2
+# AlphaBot Pro v5.9.3
 # stock_news.py
 # آخر الأخبار لسهم محدد عبر Finnhub Company News
 # مع ترجمة عربية مجانية باستخدام deep-translator بدون OpenRouter

@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.9.2 Translated Company News
+# AlphaBot Pro v5.9.3 Cost Optimization
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Smart News + Interactive Watchlist + Translated Company News + Cost Control
+# Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 
 import os
 import re
@@ -25,11 +25,16 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.2 Translated Company News"
+VERSION = "v5.9.3 Cost Optimization"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+# v5.9.3 Cost Optimization
+# Gemini هو الأساسي لتقليل التكلفة، و GPT-4o-mini احتياطي فقط عند فشل Gemini أو فشل JSON
+OPENROUTER_PRIMARY_MODEL = os.getenv("OPENROUTER_PRIMARY_MODEL", "google/gemini-2.5-flash-lite")
+OPENROUTER_FALLBACK_MODEL = os.getenv("OPENROUTER_FALLBACK_MODEL", "openai/gpt-4o-mini")
+
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "AlphaBot aktfaaksa@gmail.com")
 
@@ -47,9 +52,9 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 
-# v5.9.2 Cost Control
+# v5.9.3 Cost Control
 # الحد الأقصى لعدد الأخبار التي يتم إرسالها إلى OpenRouter للتحليل في كل دورة
-MAX_AI_ANALYSES_PER_CYCLE = 10
+MAX_AI_ANALYSES_PER_CYCLE = 5
 
 TICKER_COOLDOWN_MINUTES = 45
 SEC_FORM_COOLDOWN_MINUTES = 60
@@ -1332,6 +1337,48 @@ def enrich_non_sec_item(item):
 # 12) OPENROUTER AI
 # =========================
 
+def _extract_json_from_ai_content(content):
+    content = clean_text(content)
+    content = content.replace("```json", "").replace("```", "").strip()
+
+    # إذا رجع النموذج كلامًا حول JSON نحاول استخراج أول كائن JSON
+    start = content.find("{")
+    end = content.rfind("}")
+
+    if start != -1 and end != -1 and end > start:
+        content = content[start:end + 1]
+
+    return json.loads(content)
+
+
+def _call_openrouter_model(model_name, prompt):
+    r = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.2
+        },
+        timeout=25
+    )
+
+    if r.status_code != 200:
+        raise RuntimeError(f"OpenRouter status error for {model_name}: {r.status_code} | {r.text[:300]}")
+
+    data = r.json()
+    content = data["choices"][0]["message"]["content"].strip()
+    return _extract_json_from_ai_content(content)
+
+
 def analyze_with_ai(item):
     if not OPENROUTER_API_KEY:
         print("OpenRouter skipped: missing API key", flush=True)
@@ -1407,40 +1454,24 @@ Title: {title}
 Extra: {raw}
 """
 
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "openai/gpt-4o-mini",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "temperature": 0.2
-            },
-            timeout=25
-        )
+    models_to_try = [OPENROUTER_PRIMARY_MODEL]
 
-        if r.status_code != 200:
-            print(f"OpenRouter status error: {r.status_code} | {r.text[:300]}", flush=True)
-            return None
+    if OPENROUTER_FALLBACK_MODEL and OPENROUTER_FALLBACK_MODEL not in models_to_try:
+        models_to_try.append(OPENROUTER_FALLBACK_MODEL)
 
-        data = r.json()
-        content = data["choices"][0]["message"]["content"].strip()
-        content = content.replace("```json", "").replace("```", "").strip()
+    for model_name in models_to_try:
+        try:
+            parsed = _call_openrouter_model(model_name, prompt)
+            print(f"OpenRouter analysis OK using {model_name}", flush=True)
+            return parsed
 
-        parsed = json.loads(content)
-        return parsed
+        except Exception as e:
+            print(f"OpenRouter analysis failed using {model_name}: {e}", flush=True)
 
-    except Exception as e:
-        print(f"OpenRouter error: {e}", flush=True)
-        return None
+            # إذا فشل Gemini نجرب GPT-4o-mini، أما إذا فشل الاحتياطي نرجع None
+            continue
+
+    return None
 
 
 # =========================
@@ -1758,7 +1789,7 @@ def process_news_item(item, state, ai_counter=None):
     else:
         item = enrich_non_sec_item(item)
 
-    # v5.9.2 Cost Control
+    # v5.9.3 Cost Control
     # لا نرسل أكثر من عدد محدد من الأخبار إلى OpenRouter في كل دورة
     if ai_counter is not None:
         current_count = int(ai_counter.get("count", 0))
@@ -1924,7 +1955,7 @@ def run():
             news_items = collect_all_news()
             sent_count = 0
 
-            # v5.9.2 Cost Control
+            # v5.9.3 Cost Control
             # عداد تحليلات OpenRouter في هذه الدورة فقط
             ai_counter = {"count": 0}
 
@@ -1932,7 +1963,7 @@ def run():
                 if sent_count >= MAX_ALERTS_PER_CYCLE:
                     break
 
-                # v5.9.2 Cost Control
+                # v5.9.3 Cost Control
                 # إذا وصلنا حد تحليلات OpenRouter نوقف معالجة باقي أخبار هذه الدورة لتخفيف اللوق والوقت
                 if ai_counter.get("count", 0) >= MAX_AI_ANALYSES_PER_CYCLE:
                     print(

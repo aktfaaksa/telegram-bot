@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.2
+# AlphaBot Pro v5.9.3
 # telegram_buttons.py
 # استقبال رمز السهم وإظهار أزرار تفاعلية Inline Buttons
 #
