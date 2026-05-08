@@ -1,6 +1,7 @@
-# AlphaBot Pro v5.9.3 Cost Optimization
+# AlphaBot Pro v5.9.4 SEC Priority Mode
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
+# SEC Priority + Law Firm Noise Filter + Lower AI Cost
 
 import os
 import re
@@ -25,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.3 Cost Optimization"
+VERSION = "v5.9.4 SEC Priority Mode"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -52,9 +53,10 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 
-# v5.9.3 Cost Control
+# v5.9.4 SEC Priority Mode
 # الحد الأقصى لعدد الأخبار التي يتم إرسالها إلى OpenRouter للتحليل في كل دورة
-MAX_AI_ANALYSES_PER_CYCLE = 5
+# تم تخفيضه من 5 إلى 3 لتقليل الصرف
+MAX_AI_ANALYSES_PER_CYCLE = 3
 
 TICKER_COOLDOWN_MINUTES = 45
 SEC_FORM_COOLDOWN_MINUTES = 60
@@ -158,6 +160,49 @@ US_MARKET_KEYWORDS = [
     "payrolls", "interest rates", "treasury yields", "pce"
 ]
 
+# =========================
+# v5.9.4 SEC PRIORITY MODE
+# =========================
+
+IMPORTANT_SEC_FORMS = {
+    "424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3",
+    "EFFECT", "FWP", "SC 13D", "SC 13G", "NT 10-Q", "NT 10-K",
+    "DEF 14A", "PRE 14A"
+}
+
+STRONG_8K_KEYWORDS = [
+    "offering", "registered direct", "private placement", "merger",
+    "acquisition", "bankruptcy", "nasdaq compliance", "delisting",
+    "reverse split", "material agreement", "definitive agreement",
+    "asset purchase", "securities purchase agreement"
+]
+
+STRONG_10Q_10K_KEYWORDS = [
+    "going concern", "restatement", "material weakness", "default",
+    "substantial doubt", "liquidity"
+]
+
+IMPORTANT_SMALL_CAP_KEYWORDS = [
+    "fda", "clinical trial", "phase 1", "phase 2", "phase 3",
+    "topline", "approval", "clearance", "complete response letter",
+    "offering", "registered direct", "private placement",
+    "contract", "purchase order", "partnership", "agreement",
+    "merger", "acquisition", "nasdaq compliance", "reverse split",
+    "delisting", "bankruptcy", "chapter 11"
+]
+
+LOW_VALUE_LAW_KEYWORDS = [
+    "investigation launched", "shareholder alert",
+    "investors are encouraged to contact", "law firm",
+    "class action investigation", "securities fraud investigation",
+    "investor alert"
+]
+
+REAL_LEGAL_ACTION_KEYWORDS = [
+    "class action filed", "lawsuit filed", "sec investigation",
+    "doj investigation", "subpoena", "charged by the sec"
+]
+
 PRICE_CACHE = {}
 SEC_TICKER_MAP = None
 
@@ -239,7 +284,7 @@ def startup_message():
 الإصدار: {VERSION}
 الحالة: يعمل الآن
 المصادر: RSS + Small-Cap Newswires + Finnhub + SEC Advanced + OpenRouter
-وضع الإرسال: الأخبار والإفصاحات المؤثرة فقط
+وضع الإرسال: SEC Priority Mode — تحليل الأخبار الأعلى أهمية فقط
 
 وضع السعر:
 🔥 الأسهم تحت ${LOW_PRICE_MAX:.0f}: قوة {LOW_PRICE_MIN_SCORE}/10 أو أعلى
@@ -248,6 +293,15 @@ def startup_message():
 
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
+
+وضع التكلفة v5.9.4:
+✅ SEC أولوية أولى قبل OpenRouter
+✅ ترتيب الأخبار حسب الأهمية قبل التحليل
+✅ MAX_AI_ANALYSES_PER_CYCLE = 3
+✅ تخفيض/تجاهل أخبار مكاتب المحاماة الضعيفة
+✅ Gemini 2.5 Flash Lite أساسي
+✅ GPT-4o-mini احتياطي
+✅ Claude غير مستخدم
 
 دقة رمز السهم:
 ✅ استخراج الرمز الرسمي من نص الخبر مثل NYSE American: ARMP
@@ -883,8 +937,165 @@ def normalize_category(category):
     return c
 
 
+
 # =========================
-# 8) PRICE FROM FINNHUB
+# 8) v5.9.4 PRIORITY FILTER
+# =========================
+
+def clean_text_for_priority(item):
+    parts = []
+
+    for key in ["title", "summary", "description", "source", "sec_form", "form", "type", "raw"]:
+        value = item.get(key)
+        if value:
+            parts.append(str(value))
+
+    return " ".join(parts).lower()
+
+
+def get_item_source_type(item):
+    source = str(item.get("source", "")).lower()
+    item_type = str(item.get("type", "")).lower()
+
+    if "sec" in source or "sec" in item_type or item.get("sec_form") or item.get("form"):
+        return "sec"
+
+    if any(x in source for x in ["globenewswire", "pr newswire", "businesswire", "business wire"]):
+        return "small_cap_news"
+
+    if "finnhub" in source:
+        return "finnhub"
+
+    return "general_news"
+
+
+def is_low_value_law_news(item):
+    text = clean_text_for_priority(item)
+    has_law_noise = any(keyword in text for keyword in LOW_VALUE_LAW_KEYWORDS)
+    has_real_action = any(keyword in text for keyword in REAL_LEGAL_ACTION_KEYWORDS)
+    return has_law_noise and not has_real_action
+
+
+def is_important_8k(item):
+    text = clean_text_for_priority(item)
+    return any(keyword in text for keyword in STRONG_8K_KEYWORDS)
+
+
+def is_important_10q_10k(item):
+    text = clean_text_for_priority(item)
+    return any(keyword in text for keyword in STRONG_10Q_10K_KEYWORDS)
+
+
+def is_important_small_cap_news(item):
+    text = clean_text_for_priority(item)
+    return any(keyword in text for keyword in IMPORTANT_SMALL_CAP_KEYWORDS)
+
+
+def get_news_priority(item):
+    """
+    يحسب أولوية الخبر قبل OpenRouter.
+    الأعلى يتحلل أولًا، والضعيف لا يدخل التحليل.
+    """
+    source_type = get_item_source_type(item)
+    sec_form = get_sec_form_from_item(item)
+    text = clean_text_for_priority(item)
+    priority = 0
+
+    # تخفيض أخبار مكاتب المحاماة الضعيفة
+    if is_low_value_law_news(item):
+        return -10
+
+    # SEC هو الأساس في v5.9.4
+    if source_type == "sec":
+        priority += 50
+
+        if sec_form in IMPORTANT_SEC_FORMS:
+            priority += 40
+
+        elif sec_form == "8-K":
+            if is_important_8k(item):
+                priority += 35
+            else:
+                return 0
+
+        elif sec_form in ["10-Q", "10-K"]:
+            if is_important_10q_10k(item):
+                priority += 30
+            else:
+                return 0
+
+        elif sec_form == "4":
+            # Form 4 يتم فحصه لاحقًا للتأكد من الشراء الداخلي الواضح
+            priority += 15
+
+        else:
+            priority += 5
+
+    # أخبار الأسهم الصغيرة تدخل فقط إذا فيها كلمات قوية
+    elif source_type == "small_cap_news":
+        if is_important_small_cap_news(item):
+            priority += 35
+        else:
+            return 0
+
+    # الأخبار العامة و Finnhub تكون أولوية أقل
+    else:
+        if is_important_small_cap_news(item):
+            priority += 20
+        elif any(word in text for word in US_MARKET_KEYWORDS):
+            priority += 5
+        else:
+            return 0
+
+    # تعزيزات إضافية
+    if "offering" in text or "registered direct" in text:
+        priority += 15
+
+    if "fda" in text or "clinical" in text:
+        priority += 15
+
+    if "delisting" in text or "nasdaq compliance" in text:
+        priority += 15
+
+    if "bankruptcy" in text:
+        priority += 20
+
+    if "reverse split" in text:
+        priority += 10
+
+    return priority
+
+
+def sort_and_filter_news_items(news_items):
+    """
+    يفلتر الأخبار الضعيفة ويرتب الأخبار المهمة قبل دخول AI.
+    """
+    prioritized = []
+
+    for item in news_items:
+        try:
+            priority = get_news_priority(item)
+            if priority > 0:
+                item["_priority"] = priority
+                prioritized.append(item)
+        except Exception as e:
+            print(f"Priority filter error: {e}", flush=True)
+
+    prioritized.sort(key=lambda x: x.get("_priority", 0), reverse=True)
+
+    print(f"v5.9.4 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
+
+    for i, item in enumerate(prioritized[:10], start=1):
+        print(
+            f"Priority #{i}: {item.get('_priority')} | {item.get('source')} | {item.get('ticker')} | {item.get('title', '')[:90]}",
+            flush=True
+        )
+
+    return prioritized
+
+
+# =========================
+# 9) PRICE FROM FINNHUB
 # =========================
 
 def get_stock_price(ticker):
@@ -1759,25 +1970,16 @@ def process_news_item(item, state, ai_counter=None):
         return False
 
     source_name = item.get("source", "")
-    source_form = get_sec_form_from_item(item)
 
-    if source_name in ["SEC 10-Q", "SEC 10-K"]:
-        title_l = title.lower()
-        if not any(w in title_l for w in SEC_URGENT_WORDS):
-            return False
+    # v5.9.4 SEC Priority Mode
+    # فلتر الأولوية صار هو البوابة الأساسية قبل OpenRouter بدل الترتيب الزمني فقط.
+    priority = item.get("_priority")
+    if priority is None:
+        priority = get_news_priority(item)
+        item["_priority"] = priority
 
-    if is_sec_source(source_name) and source_form in [canonical_sec_form(x) for x in SEC_IMPORTANT_FORMS]:
-        pass
-    elif is_small_cap_source(source_name):
-        if not has_small_cap_keyword(title) and not has_important_keyword(title):
-            return False
-    else:
-        if (
-            not has_important_keyword(title)
-            and not has_us_market_keyword(title)
-            and "SEC" not in source_name
-        ):
-            return False
+    if priority <= 0:
+        return False
 
     news_id = make_news_id(item)
 
@@ -1789,8 +1991,8 @@ def process_news_item(item, state, ai_counter=None):
     else:
         item = enrich_non_sec_item(item)
 
-    # v5.9.3 Cost Control
-    # لا نرسل أكثر من عدد محدد من الأخبار إلى OpenRouter في كل دورة
+    # v5.9.4 Cost Control
+    # لا نرسل أكثر من 3 أخبار مختارة بالأولوية إلى OpenRouter في كل دورة
     if ai_counter is not None:
         current_count = int(ai_counter.get("count", 0))
 
@@ -1882,12 +2084,11 @@ def collect_all_news():
         if x.get("published_at") is not None
     ]
 
-    all_items.sort(
-        key=lambda x: x.get("published_at"),
-        reverse=True
-    )
+    # v5.9.4: لا نعتمد على الترتيب الزمني فقط.
+    # نرتب الأخبار حسب الأولوية قبل دخول OpenRouter.
+    all_items = sort_and_filter_news_items(all_items)
 
-    print(f"Total collected with dates: {len(all_items)}", flush=True)
+    print(f"Total collected after priority filter: {len(all_items)}", flush=True)
 
     return all_items
 
@@ -1914,6 +2115,12 @@ def startup_checks():
     print("FORM_4_PURCHASE_FILTER: ON", flush=True)
     print("OFFICIAL_NEWS_TICKER_EXTRACTION: ON", flush=True)
     print("PRODUCT_CODE_TICKER_BLOCK: ON", flush=True)
+    print("SEC_PRIORITY_MODE: ON", flush=True)
+    print("LAW_FIRM_NOISE_FILTER: ON", flush=True)
+    print(f"MAX_AI_ANALYSES_PER_CYCLE: {MAX_AI_ANALYSES_PER_CYCLE}", flush=True)
+    print(f"OPENROUTER_PRIMARY_MODEL: {OPENROUTER_PRIMARY_MODEL}", flush=True)
+    print(f"OPENROUTER_FALLBACK_MODEL: {OPENROUTER_FALLBACK_MODEL}", flush=True)
+    print("CLAUDE: OFF", flush=True)
     print("===================================", flush=True)
 
 
@@ -1955,16 +2162,16 @@ def run():
             news_items = collect_all_news()
             sent_count = 0
 
-            # v5.9.3 Cost Control
-            # عداد تحليلات OpenRouter في هذه الدورة فقط
+            # v5.9.4 Cost Control
+            # عداد تحليلات OpenRouter في هذه الدورة فقط بعد فلتر الأولوية
             ai_counter = {"count": 0}
 
             for item in news_items:
                 if sent_count >= MAX_ALERTS_PER_CYCLE:
                     break
 
-                # v5.9.3 Cost Control
-                # إذا وصلنا حد تحليلات OpenRouter نوقف معالجة باقي أخبار هذه الدورة لتخفيف اللوق والوقت
+                # v5.9.4 Cost Control
+                # إذا وصلنا حد تحليلات OpenRouter نوقف معالجة باقي الأخبار لتقليل الصرف
                 if ai_counter.get("count", 0) >= MAX_AI_ANALYSES_PER_CYCLE:
                     print(
                         f"AI limit reached, stopping news processing for this cycle: {ai_counter.get('count', 0)}/{MAX_AI_ANALYSES_PER_CYCLE}",
