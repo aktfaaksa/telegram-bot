@@ -1,0 +1,25 @@
+{
+  "version": "v5.9",
+  "updated_at": "",
+  "watchlist": [
+    "CRMD",
+    "CRML",
+    "UAMY",
+    "ANNA",
+    "ELAB",
+    "TMC",
+    "RDW",
+    "RKLB",
+    "SOUN"
+  ],
+  "notes": {
+    "RKLB": {
+      "sharia": "متوافق حسب فلتر بنك البلاد وبنك الراجحي",
+      "purification": "2.54%"
+    },
+    "SOUN": {
+      "sharia": "متوافق حسب فلتر بنك البلاد وبنك الراجحي",
+      "purification": "4.34%"
+    }
+  }
+}

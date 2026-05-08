@@ -13,12 +13,19 @@ from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin
 
+# v5.9 Interactive Watchlist
+try:
+    from telegram_buttons import start_buttons_polling
+except Exception as e:
+    start_buttons_polling = None
+    print(f"telegram_buttons import error: {e}", flush=True)
+
 
 # =========================
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.8 Smart News"
+VERSION = "v5.9 Interactive Watchlist"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -1867,6 +1874,27 @@ def startup_checks():
 def run():
     startup_checks()
     startup_message()
+
+    # =========================
+    # v5.9 Interactive Watchlist
+    # تشغيل الأزرار في مسار مستقل حتى لا تتأثر دورة الأخبار
+    # =========================
+    try:
+        if start_buttons_polling:
+            start_buttons_polling(
+                bot_token=BOT_TOKEN,
+                chat_ids=CHAT_IDS,
+                get_stock_price_func=get_stock_price,
+                collect_all_news_func=collect_all_news,
+                analyze_with_ai_func=analyze_with_ai,
+                normalize_common_ticker_func=normalize_common_ticker,
+                send_telegram_func=send_telegram
+            )
+            print("Interactive Watchlist polling started", flush=True)
+        else:
+            print("Interactive Watchlist disabled: telegram_buttons not available", flush=True)
+    except Exception as e:
+        print(f"Interactive Watchlist startup error: {e}", flush=True)
 
     state = load_state()
 
