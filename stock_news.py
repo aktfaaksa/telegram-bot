@@ -1,6 +1,7 @@
-# AlphaBot Pro v5.9.1
+# AlphaBot Pro v5.9.2
 # stock_news.py
-# آخر الأخبار لسهم محدد عبر Finnhub Company News مع fallback خفيف
+# آخر الأخبار لسهم محدد عبر Finnhub Company News
+# مع ترجمة عربية مجانية باستخدام deep-translator بدون OpenRouter
 
 import os
 import requests
@@ -11,11 +12,66 @@ from watchlist_storage import normalize_ticker
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
+_TRANSLATION_CACHE = {}
+
 
 def _clean(text):
     if not text:
         return ""
-    return " ".join(str(text).split())
+    text = str(text)
+    text = (
+        text.replace("&amp;", "&")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+        .replace("&#039;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+    )
+    return " ".join(text.split())
+
+
+def _contains_arabic(text):
+    if not text:
+        return False
+    return any("\u0600" <= ch <= "\u06FF" for ch in str(text))
+
+
+def translate_to_ar(text, max_chars=320):
+    """
+    ترجمة مجانية عبر deep-translator.
+    لا تستخدم OpenRouter ولا تضيف تكلفة على OpenRouter.
+    إذا فشلت الترجمة نرجع نصًا فارغًا حتى لا يتوقف البوت.
+    """
+    text = _clean(text)
+
+    if not text:
+        return ""
+
+    if _contains_arabic(text):
+        return text
+
+    # نقلل طول النص حتى تكون الترجمة أسرع وأثبت
+    text = text[:max_chars].strip()
+
+    cache_key = text
+    if cache_key in _TRANSLATION_CACHE:
+        return _TRANSLATION_CACHE[cache_key]
+
+    try:
+        from deep_translator import GoogleTranslator
+
+        translated = GoogleTranslator(source="auto", target="ar").translate(text)
+        translated = _clean(translated)
+
+        if translated and translated.lower() != text.lower():
+            _TRANSLATION_CACHE[cache_key] = translated
+            return translated
+
+    except Exception as e:
+        print(f"translation error: {e}", flush=True)
+
+    return ""
 
 
 def _age_text(dt):
@@ -54,10 +110,6 @@ def _date_range(days=7):
 
 
 def fetch_finnhub_company_news(ticker, days=7, limit=5):
-    """
-    جلب أخبار السهم مباشرة من Finnhub Company News.
-    هذا أسرع وأدق من جمع كل أخبار السوق ثم البحث داخلها.
-    """
     ticker = normalize_ticker(ticker)
 
     if not ticker:
@@ -124,7 +176,7 @@ def fetch_finnhub_company_news(ticker, days=7, limit=5):
         return []
 
 
-def format_company_news(ticker, days=7, limit=5):
+def format_company_news(ticker, days=7, limit=5, translate=True):
     ticker = normalize_ticker(ticker)
 
     if not ticker:
@@ -149,33 +201,47 @@ def format_company_news(ticker, days=7, limit=5):
         summary = _clean(item.get("summary"))
         age = _age_text(item.get("published_at"))
 
+        title_ar = translate_to_ar(title, max_chars=220) if translate else ""
+        summary_short = summary[:260].strip() if summary else ""
+        if summary and len(summary) > 260:
+            summary_short += "..."
+
+        summary_ar = translate_to_ar(summary_short, max_chars=320) if translate and summary_short else ""
+
         lines.append(f"{i}. {title}")
+
+        if title_ar:
+            lines.append(f"🌍 الترجمة: {title_ar}")
+
         lines.append(f"المصدر: {source}")
         lines.append(f"الوقت: {age}")
 
-        if summary:
-            short_summary = summary[:220].strip()
-            if len(summary) > 220:
-                short_summary += "..."
-            lines.append(f"الملخص: {short_summary}")
+        if summary_short:
+            lines.append(f"الملخص: {summary_short}")
+
+        if summary_ar:
+            lines.append(f"🌍 ترجمة الملخص: {summary_ar}")
 
         if url:
             lines.append(f"الرابط: {url}")
 
         lines.append("")
 
+    lines.append("ملاحظة: الترجمة مجانية عبر deep-translator ولا تستخدم OpenRouter.")
     return "\n".join(lines).strip()
 
 
 def format_latest_news_for_ticker(ticker, collect_all_news_func=None, limit=5):
     """
     الدالة الرئيسية التي يستخدمها زر آخر الأخبار.
-    في v5.9.1 نعتمد أولًا على Finnhub Company News.
-    collect_all_news_func أبقيناه للتوافق فقط ولا نعتمد عليه افتراضيًا.
+    في v5.9.2:
+    - مصدر الأخبار: Finnhub Company News
+    - الترجمة: deep-translator
+    - لا يستخدم OpenRouter
     """
     ticker = normalize_ticker(ticker)
 
     if not ticker:
         return "رمز السهم غير صحيح."
 
-    return format_company_news(ticker, days=7, limit=limit)
+    return format_company_news(ticker, days=7, limit=limit, translate=True)

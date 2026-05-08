@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.9.1 Stability & Cost Control
+# AlphaBot Pro v5.9.2 Translated Company News
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Smart News + Interactive Watchlist + Faster Reports + Cost Control
+# Smart News + Interactive Watchlist + Translated Company News + Cost Control
 
 import os
 import re
@@ -25,7 +25,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.1 Stability & Cost Control"
+VERSION = "v5.9.2 Translated Company News"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -47,7 +47,7 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
 
-# v5.9.1 Cost Control
+# v5.9.2 Cost Control
 # الحد الأقصى لعدد الأخبار التي يتم إرسالها إلى OpenRouter للتحليل في كل دورة
 MAX_AI_ANALYSES_PER_CYCLE = 10
 
@@ -1758,7 +1758,7 @@ def process_news_item(item, state, ai_counter=None):
     else:
         item = enrich_non_sec_item(item)
 
-    # v5.9.1 Cost Control
+    # v5.9.2 Cost Control
     # لا نرسل أكثر من عدد محدد من الأخبار إلى OpenRouter في كل دورة
     if ai_counter is not None:
         current_count = int(ai_counter.get("count", 0))
@@ -1924,12 +1924,21 @@ def run():
             news_items = collect_all_news()
             sent_count = 0
 
-            # v5.9.1 Cost Control
+            # v5.9.2 Cost Control
             # عداد تحليلات OpenRouter في هذه الدورة فقط
             ai_counter = {"count": 0}
 
             for item in news_items:
                 if sent_count >= MAX_ALERTS_PER_CYCLE:
+                    break
+
+                # v5.9.2 Cost Control
+                # إذا وصلنا حد تحليلات OpenRouter نوقف معالجة باقي أخبار هذه الدورة لتخفيف اللوق والوقت
+                if ai_counter.get("count", 0) >= MAX_AI_ANALYSES_PER_CYCLE:
+                    print(
+                        f"AI limit reached, stopping news processing for this cycle: {ai_counter.get('count', 0)}/{MAX_AI_ANALYSES_PER_CYCLE}",
+                        flush=True
+                    )
                     break
 
                 sent = process_news_item(item, state, ai_counter=ai_counter)

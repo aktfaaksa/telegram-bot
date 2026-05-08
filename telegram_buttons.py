@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9
+# AlphaBot Pro v5.9.2
 # telegram_buttons.py
 # استقبال رمز السهم وإظهار أزرار تفاعلية Inline Buttons
 #
@@ -190,7 +190,7 @@ def handle_text_message(message):
 
     clean_text = str(text or "").strip()
 
-    # v5.9.1: أوامر مباشرة لعرض القائمة
+    # v5.9.2: أوامر مباشرة لعرض القائمة
     if clean_text.lower() in ["/list", "list"] or clean_text in ["القائمة", "قائمة", "عرض القائمة"]:
         send_message(chat_id, format_watchlist())
         return
