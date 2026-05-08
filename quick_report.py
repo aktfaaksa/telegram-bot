@@ -1,15 +1,15 @@
-# AlphaBot Pro v5.9
+# AlphaBot Pro v5.9.1
 # quick_report.py
-# تقرير سريع لسهم محدد
+# تقرير سريع وخفيف للسهم بدون جلب أخبار ثقيلة
 
 from watchlist_storage import normalize_ticker, is_in_watchlist
 from sharia_checker import check_sharia
-from stock_news import format_latest_news_for_ticker
 
 
 def _format_price(price):
     if price is None:
         return "غير متوفر"
+
     try:
         price = float(price)
         if price < 0.01:
@@ -24,12 +24,23 @@ def build_quick_report(
     get_stock_price_func=None,
     collect_all_news_func=None,
 ):
+    """
+    في v5.9.1 التقرير السريع صار خفيف:
+    - السعر
+    - حالة القائمة
+    - الشرعية
+    - نسبة التطهير
+
+    لا يجلب الأخبار هنا حتى يكون أسرع.
+    الأخبار لها زر مستقل: 📰 آخر الأخبار
+    """
     ticker = normalize_ticker(ticker)
 
     if not ticker:
         return "رمز السهم غير صحيح."
 
     price = None
+
     if get_stock_price_func:
         try:
             price = get_stock_price_func(ticker)
@@ -39,29 +50,36 @@ def build_quick_report(
     sharia = check_sharia(ticker)
     in_wl = is_in_watchlist(ticker)
 
+    status = sharia.get("status", "unknown")
+    label = sharia.get("label", "غير معروف")
+    source = sharia.get("source", "غير متوفر")
+    purification = sharia.get("purification", "غير متوفر")
+    note = sharia.get("note", "")
+
+    if status == "compliant":
+        sharia_icon = "✅"
+    elif status == "non_compliant":
+        sharia_icon = "❌"
+    elif status == "unknown":
+        sharia_icon = "⚠️"
+    else:
+        sharia_icon = "ℹ️"
+
     report = f"""📊 تقرير سريع: {ticker}
 
 💵 السعر الحالي: {_format_price(price)}
 📋 حالة القائمة: {"موجود في قائمة المراقبة" if in_wl else "غير موجود في قائمة المراقبة"}
 
 🕌 الشرعية:
-الحالة: {sharia.get("label", "غير معروف")}
-المصدر: {sharia.get("source", "غير متوفر")}
-نسبة التطهير: {sharia.get("purification", "غير متوفر")}
+{sharia_icon} الحالة: {label}
+المصدر: {source}
+نسبة التطهير: {purification}
 
 📌 ملاحظة:
-هذا تقرير سريع للمراقبة فقط، وليس توصية شراء أو بيع.
-"""
+{note or "هذا تقرير سريع للمراقبة فقط، وليس توصية شراء أو بيع."}
 
-    # نضيف أحدث خبر واحد فقط حتى لا تصير الرسالة طويلة
-    try:
-        news_text = format_latest_news_for_ticker(
-            ticker,
-            collect_all_news_func=collect_all_news_func,
-            limit=1
-        )
-        report += "\n\n" + news_text
-    except Exception as e:
-        print(f"quick_report news error {ticker}: {e}", flush=True)
+📰 لعرض الأخبار:
+اضغط زر "آخر الأخبار" من خيارات السهم.
+"""
 
     return report

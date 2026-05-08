@@ -1,6 +1,6 @@
-# AlphaBot Pro v5.8 Smart News
+# AlphaBot Pro v5.9.1 Stability & Cost Control
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
-# Low Price Stock Priority Mode + SEC Cleanup + CIK/Form Cooldown + Ticker Accuracy Upgrade
+# Smart News + Interactive Watchlist + Faster Reports + Cost Control
 
 import os
 import re
@@ -25,7 +25,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9 Interactive Watchlist"
+VERSION = "v5.9.1 Stability & Cost Control"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -46,6 +46,11 @@ UNKNOWN_PRICE_MIN_SCORE = 7
 
 MAX_ALERTS_PER_CYCLE = 3
 MAX_DAILY_ALERTS = 80
+
+# v5.9.1 Cost Control
+# الحد الأقصى لعدد الأخبار التي يتم إرسالها إلى OpenRouter للتحليل في كل دورة
+MAX_AI_ANALYSES_PER_CYCLE = 10
+
 TICKER_COOLDOWN_MINUTES = 45
 SEC_FORM_COOLDOWN_MINUTES = 60
 
@@ -1709,7 +1714,7 @@ def format_alert(item, analysis):
 # 15) PROCESS NEWS
 # =========================
 
-def process_news_item(item, state):
+def process_news_item(item, state, ai_counter=None):
     title = clean_text(item.get("title"))
     url = clean_text(item.get("url"))
 
@@ -1752,6 +1757,20 @@ def process_news_item(item, state):
         item = enrich_sec_item(item)
     else:
         item = enrich_non_sec_item(item)
+
+    # v5.9.1 Cost Control
+    # لا نرسل أكثر من عدد محدد من الأخبار إلى OpenRouter في كل دورة
+    if ai_counter is not None:
+        current_count = int(ai_counter.get("count", 0))
+
+        if current_count >= MAX_AI_ANALYSES_PER_CYCLE:
+            print(
+                f"AI analysis limit reached this cycle: {current_count}/{MAX_AI_ANALYSES_PER_CYCLE} | {title}",
+                flush=True
+            )
+            return False
+
+        ai_counter["count"] = current_count + 1
 
     analysis = analyze_with_ai(item)
 
@@ -1905,18 +1924,22 @@ def run():
             news_items = collect_all_news()
             sent_count = 0
 
+            # v5.9.1 Cost Control
+            # عداد تحليلات OpenRouter في هذه الدورة فقط
+            ai_counter = {"count": 0}
+
             for item in news_items:
                 if sent_count >= MAX_ALERTS_PER_CYCLE:
                     break
 
-                sent = process_news_item(item, state)
+                sent = process_news_item(item, state, ai_counter=ai_counter)
 
                 if sent:
                     sent_count += 1
                     time.sleep(2)
 
             print(
-                f"Cycle done. Sent: {sent_count}. Total items: {len(news_items)}",
+                f"Cycle done. Sent: {sent_count}. AI analyses: {ai_counter.get('count', 0)}/{MAX_AI_ANALYSES_PER_CYCLE}. Total items: {len(news_items)}",
                 flush=True
             )
 

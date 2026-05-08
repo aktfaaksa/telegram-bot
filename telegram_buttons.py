@@ -188,10 +188,18 @@ def handle_text_message(message):
         print(f"Unauthorized chat ignored: {chat_id}", flush=True)
         return
 
-    if not is_ticker_message(text):
+    clean_text = str(text or "").strip()
+
+    # v5.9.1: أوامر مباشرة لعرض القائمة
+    if clean_text.lower() in ["/list", "list"] or clean_text in ["القائمة", "قائمة", "عرض القائمة"]:
+        send_message(chat_id, format_watchlist())
         return
 
-    ticker = normalize_ticker(text)
+    # تجاهل أي نص ليس رمز سهم
+    if not is_ticker_message(clean_text):
+        return
+
+    ticker = normalize_ticker(clean_text)
 
     exists = "موجود في قائمة المراقبة" if is_in_watchlist(ticker) else "غير موجود في قائمة المراقبة"
 
