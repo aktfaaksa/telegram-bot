@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5.4 Smart Radar Filter + Alert Context"
+VERSION = "v5.9.5.5 Smart Cleanup"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -275,11 +275,21 @@ STRONG_10Q_10K_KEYWORDS = [
 LOW_VALUE_LAW_KEYWORDS = [
     "investigation launched",
     "shareholder alert",
+    "shareholder update",
+    "investor alert",
+    "investor update",
     "investors are encouraged to contact",
     "law firm",
     "class action investigation",
+    "class action",
     "securities fraud investigation",
-    "investor alert",
+    "sued after",
+    "hagens berman",
+    "rosen law",
+    "levi & korsinsky",
+    "glancy prongay",
+    "pomerantz",
+    "bragar eagel",
 ]
 
 REAL_LEGAL_ACTION_KEYWORDS = [
@@ -2023,6 +2033,11 @@ def resolve_final_ticker(item, analysis):
     if official:
         return official
 
+    # v5.9.5.5: إذا العنوان يحتوي رمزًا واضحًا مثل (IBRX) فهو أوثق من تخمين AI.
+    title_ticker = extract_parenthetical_ticker_from_title(item.get("title", ""))
+    if title_ticker:
+        return title_ticker
+
     ai_ticker = normalize_common_ticker(analysis.get("ticker", ""))
     item_ticker = normalize_common_ticker(item.get("ticker", ""))
 
@@ -2073,6 +2088,98 @@ def text_has_strong_opportunity_words(item):
         "acquisition", "merger", "buyout", "definitive agreement",
     ]
     return any(w in text_l for w in strong_words)
+
+
+
+def text_has_positive_catalyst_words(item):
+    """
+    v5.9.5.5 Positive Catalyst Boost:
+    يحافظ على فرص مثل CLIK: سعر منخفض + رمز مؤكد + خبر إيجابي واضح.
+    """
+    text_l = clean_text_for_priority(item)
+    positive_words = [
+        "swings to profit", "swing to profit", "turns profitable", "returns to profit",
+        "profitability", "positive ebitda", "adjusted ebitda", "net income turns positive",
+        "record revenue", "record revenues", "record sales",
+        "strong revenue growth", "revenue growth", "revenues increased", "sales increased",
+        "raises guidance", "raises outlook", "increases guidance", "increases outlook",
+        "raises revenue target", "updates revenue target", "revenue target",
+        "fda approval", "fda clearance", "fast track designation", "breakthrough therapy",
+        "positive phase", "met primary endpoint", "topline results", "positive topline",
+        "major contract", "awarded contract", "purchase order", "government contract",
+        "strategic partnership", "commercial agreement", "deployment agreement",
+        "non-dilutive funding", "grant", "government funding",
+        "acquisition offer", "buyout proposal", "merger agreement", "definitive agreement",
+    ]
+    return any(w in text_l for w in positive_words)
+
+
+def extract_parenthetical_ticker_from_title(title):
+    """
+    يلتقط رمزًا واضحًا داخل العنوان مثل ImmunityBio (IBRX).
+    لا يلتقط CIK أو كلمات عامة.
+    """
+    title = clean_text(title).upper()
+    if not title:
+        return ""
+    bad = {"CEO", "CFO", "FDA", "SEC", "USA", "NYSE", "NASDAQ", "AMEX", "OTC", "EPS", "IPO"}
+    for m in re.findall(r"\(([A-Z]{1,5})\)", title):
+        ticker = normalize_common_ticker(m)
+        if ticker and ticker not in bad and is_valid_common_ticker_symbol(ticker):
+            return ticker
+    # عناوين مكاتب المحاماة غالبًا تبدأ هكذا: IBRX SHAREHOLDER UPDATE
+    m = re.match(r"^([A-Z]{1,5})\s+(SHAREHOLDER|INVESTOR)\s+(ALERT|UPDATE)", title)
+    if m:
+        ticker = normalize_common_ticker(m.group(1))
+        if ticker and ticker not in bad and is_valid_common_ticker_symbol(ticker):
+            return ticker
+    return ""
+
+
+def is_law_firm_noise_item(item):
+    text_l = clean_text_for_priority(item)
+    return any(keyword in text_l for keyword in LOW_VALUE_LAW_KEYWORDS)
+
+
+def is_debt_only_sec_item(item):
+    """
+    يخفف ضوضاء SEC خارج القائمة: سندات عادية/medium-term notes ليست مثل common stock أو warrants أو convertible.
+    """
+    text_l = clean_text_for_priority(item)
+    debt_words = [
+        "medium-term note", "medium term note", "notes due", "senior notes",
+        "floating rate notes", "fixed rate notes", "debt securities", "sofr", "bond", "bonds"
+    ]
+    equity_or_convertible_words = [
+        "convertible", "common stock", "ordinary shares", "warrant", "warrants",
+        "units", "registered direct", "private placement", "at-the-market", "atm offering",
+        "resale", "selling stockholder", "selling stockholders", "equity"
+    ]
+    return any(w in text_l for w in debt_words) and not any(w in text_l for w in equity_or_convertible_words)
+
+
+def ksa_time_label_ar(dt=None):
+    dt = dt or now_ksa()
+    hour24 = int(dt.strftime("%H"))
+    minute = dt.strftime("%M")
+    suffix = "ص" if hour24 < 12 else "م"
+    hour12 = hour24 % 12
+    if hour12 == 0:
+        hour12 = 12
+    return f"{hour12}:{minute} {suffix}"
+
+
+def last_scheduled_report_minutes_ago(state):
+    try:
+        raw = state.get("last_scheduled_report_time")
+        if not raw:
+            return None
+        last = datetime.fromisoformat(raw)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return (now_utc() - last.astimezone(timezone.utc)).total_seconds() / 60
+    except Exception:
+        return None
 
 
 def category_is_financial_results(category):
@@ -2132,7 +2239,19 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
 
     # خارج القائمة من أخبار صحفية: لازم الرمز مؤكد من نص الخبر.
     if not is_sec_source(source_name) and not non_sec_ticker_is_official(item, ticker):
+        title_ticker = extract_parenthetical_ticker_from_title(item.get("title", ""))
+        if title_ticker and title_ticker != ticker:
+            return False, f"outside watchlist ticker mismatch title={title_ticker} extracted={ticker}"
         return False, f"outside watchlist non-SEC ticker not officially confirmed: {ticker}"
+
+    # v5.9.5.5: أخبار مكاتب المحاماة خارج القائمة غالبًا ضوضاء، حتى لو فيها lawsuit.
+    if not is_sec_source(source_name) and is_law_firm_noise_item(item):
+        title_ticker = extract_parenthetical_ticker_from_title(item.get("title", ""))
+        if title_ticker and title_ticker != ticker:
+            return False, f"law-firm ticker mismatch title={title_ticker} extracted={ticker}"
+        # لا نرسل خارج القائمة إلا إذا كان معها محفز رسمي/تشغيلي قوي جدًا، وليس مجرد مكتب محاماة.
+        if not (score >= 9 and text_has_positive_catalyst_words(item)):
+            return False, "outside watchlist law-firm/investor-alert noise"
 
     # خارج القائمة وسعر غير معروف: لا نرسل إلا SEC شديد الأهمية جدًا.
     if price is None:
@@ -2142,6 +2261,12 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
 
     # SEC خارج القائمة: امنع 8-K / نتائج مالية محايدة بقوة منخفضة.
     if is_sec_source(source_name):
+        if is_debt_only_sec_item(item) and score <= 6:
+            return False, "outside watchlist debt-only SEC noise"
+
+        if form in ["FWP", "424B3", "424B5", "424B4"] and is_debt_only_sec_item(item) and score < 8:
+            return False, "outside watchlist debt-only prospectus below 8/10"
+
         if form == "8-K" and category_is_financial_results(category):
             if direction != "إيجابي" or score < 8:
                 return False, "outside watchlist neutral/low-score 8-K financial results"
@@ -2158,14 +2283,18 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
     except Exception:
         price_float = None
 
-    strong_text = text_has_strong_opportunity_words(item)
-    low_price = price_float is not None and price_float <= LOW_PRICE_MAX
-    very_low_price = price_float is not None and price_float <= 5
+    strong_text = text_has_strong_opportunity_words(item) or text_has_positive_catalyst_words(item)
+    low_price = price_float is not None and price_float <= RADAR_MAX_LOW_PRICE
+    good_price = price_float is not None and price_float <= RADAR_GOOD_PRICE_MAX
+    very_low_price = price_float is not None and price_float <= RADAR_STRONG_LOW_PRICE_MAX
 
-    if direction == "إيجابي" and low_price and strong_text and score >= 6:
-        return True, "outside watchlist low-price positive catalyst"
+    if direction == "إيجابي" and very_low_price and strong_text and score >= 6:
+        return True, "outside watchlist sub-$5 positive catalyst"
 
-    if direction == "إيجابي" and very_low_price and score >= 6 and normalize_category(category) in ["Guidance", "Financial Results", "Contract / Partnership", "FDA / Clinical"]:
+    if direction == "إيجابي" and good_price and strong_text and score >= 7:
+        return True, "outside watchlist sub-$10 positive catalyst"
+
+    if direction == "إيجابي" and very_low_price and score >= 6 and normalize_category(category) in ["Guidance", "Financial Results", "Contract / Partnership", "FDA / Clinical", "M&A"]:
         return True, "outside watchlist very-low-price positive event"
 
     if category_is_urgent_or_high_signal(category) and direction == "إيجابي" and low_price and score >= 7:
@@ -2353,7 +2482,7 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.5.4: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.5.5: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
@@ -2878,6 +3007,8 @@ def maybe_send_scheduled_report(state):
     scheduled_hhmm, report_title = scheduled
     msg = build_scheduled_report(report_title, state, scheduled_hhmm=scheduled_hhmm)
     send_telegram(msg)
+    state["last_scheduled_report_time"] = now_utc().isoformat()
+    state["last_scheduled_report_hhmm"] = scheduled_hhmm
     print(f"Scheduled report sent: {scheduled_hhmm} | {report_title}", flush=True)
     save_state(state)
     return True
@@ -2888,6 +3019,11 @@ def should_run_market_pulse(state):
         return False
 
     if not is_market_time_ksa():
+        return False
+
+    report_age = last_scheduled_report_minutes_ago(state)
+    if report_age is not None and 0 <= report_age < MARKET_PULSE_SKIP_AFTER_REPORT_MINUTES:
+        print(f"Market Pulse skipped: scheduled report sent {report_age:.1f} minutes ago", flush=True)
         return False
 
     now_dt = now_ksa()
@@ -2921,12 +3057,27 @@ def detect_watchlist_changes(state):
         new_status = data["status"]
 
         if old_status and old_status != new_status:
+            reason = data["reason"]
+            decision = data["decision"]
+
+            if old_status == STATUS_RISK and new_status == STATUS_NEUTRAL:
+                reason = "خرج من حالة الخطر اللحظي، لكن لا توجد إشارة إيجابية واضحة بعد."
+                decision = "لا دخول؛ مراقبة فقط حتى يظهر ثبات وفوليوم."
+
+            elif old_status == STATUS_OPPORTUNITY and new_status == STATUS_NEUTRAL:
+                reason = "خرج من حالة المتابعة الإيجابية، والزخم لم يعد كافيًا حاليًا."
+                decision = "إلغاء المتابعة النشطة مؤقتًا؛ مراقبة فقط."
+
+            elif old_status == STATUS_MOMENTUM and new_status in [STATUS_OPPORTUNITY, STATUS_NEUTRAL]:
+                reason = "الزخم القوي بدأ يهدأ؛ نراقب الثبات بدل المطاردة."
+                decision = "لا مطاردة؛ انتظر ثباتًا جديدًا أو رجوعًا لمستوى دعم."
+
             changes.append({
                 "ticker": ticker,
                 "old": old_status,
                 "new": new_status,
-                "reason": data["reason"],
-                "decision": data["decision"],
+                "reason": reason,
+                "decision": decision,
                 "levels": data["levels"],
             })
 
@@ -2940,10 +3091,10 @@ def build_market_pulse_message(changes, state):
     if not changes:
         if SMART_SILENCE_ENABLED:
             return ""
-        return f"⚡ تحديث {now_ksa().strftime('%I:%M %p')} — لا يوجد تغيير مهم\nالأفضل: انتظار."
+        return f"⚡ تحديث {ksa_time_label_ar()} — لا يوجد تغيير مهم\nالأفضل: انتظار."
 
     lines = [
-        f"⚡ تحديث {now_ksa().strftime('%I:%M %p')} — نبض السوق",
+        f"⚡ تحديث {ksa_time_label_ar()} — نبض السوق",
         "",
         "🔔 تغيرات مهمة في القائمة:",
     ]
