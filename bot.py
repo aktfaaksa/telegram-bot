@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5.3 Alert Buttons + Price Label Fix
+# AlphaBot Pro v5.9.5.4 Smart Radar Filter + Alert Context
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5.3 Alert Buttons + Price Label Fix"
+VERSION = "v5.9.5.4 Smart Radar Filter + Alert Context"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -62,6 +62,7 @@ SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
 WATCHLIST_FILE = "watchlist.json"
+ALERT_CONTEXT_FILE = "alert_context.json"
 
 
 # =========================
@@ -2036,6 +2037,145 @@ def resolve_final_ticker(item, analysis):
     return ai_ticker or item_ticker
 
 
+
+# =========================
+# v5.9.5.4 SMART RADAR FILTER
+# =========================
+
+def is_valid_common_ticker_symbol(ticker):
+    """
+    يمنع إرسال تنبيهات برمز غير واضح مثل اسم شركة كامل.
+    نسمح بالرموز الأمريكية الشائعة فقط مثل CLIK / RDW / TLS.
+    """
+    t = normalize_common_ticker(ticker)
+    if not t:
+        return False
+    if " " in t:
+        return False
+    return re.fullmatch(r"[A-Z][A-Z0-9]{0,4}", t) is not None
+
+
+def is_watchlist_symbol(ticker):
+    t = normalize_common_ticker(ticker)
+    return bool(t and t in load_watchlist_symbols())
+
+
+def text_has_strong_opportunity_words(item):
+    text_l = clean_text_for_priority(item)
+    strong_words = [
+        "swings to profit", "swing to profit", "turns profitable", "profitability",
+        "strong revenue growth", "record revenue", "record revenues", "revenue growth",
+        "raises guidance", "raises outlook", "increases guidance", "increases revenue target",
+        "updates revenue target", "revenue target", "annual revenue",
+        "fda approval", "fda clearance", "fast track", "breakthrough therapy",
+        "phase 3", "positive topline", "topline results", "clinical trial",
+        "contract", "purchase order", "strategic partnership", "partnership",
+        "acquisition", "merger", "buyout", "definitive agreement",
+    ]
+    return any(w in text_l for w in strong_words)
+
+
+def category_is_financial_results(category):
+    c = clean_text(category).lower()
+    return c in ["financial results", "earnings"] or "financial result" in c or "earning" in c
+
+
+def category_is_urgent_or_high_signal(category):
+    c = normalize_category(category)
+    return c in [
+        "Offering / Prospectus",
+        "Registration Effective",
+        "FDA / Clinical",
+        "Contract / Partnership",
+        "M&A",
+        "Bankruptcy",
+        "Nasdaq Compliance",
+        "Guidance",
+        "Late Filing",
+        "Proxy / Vote",
+    ]
+
+
+def non_sec_ticker_is_official(item, ticker):
+    """
+    للأخبار الصحفية خارج SEC: لا نقبل رمزًا استنتجه AI فقط.
+    لازم يكون الرمز مؤكدًا من نص الخبر مثل NASDAQ: CLIK.
+    هذا يمنع أخطاء مثل ربط خبر NextVision بـ RDW.
+    """
+    if is_sec_source(item.get("source", "")):
+        return True
+
+    official = normalize_common_ticker(item.get("official_ticker", ""))
+    ticker = normalize_common_ticker(ticker)
+    return bool(official and official == ticker)
+
+
+def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, score):
+    """
+    فلتر الرادار العام:
+    - لا يضيق على أسهم القائمة.
+    - يحافظ على فرص مثل CLIK: رمز مؤكد + سعر منخفض + خبر إيجابي واضح.
+    - يمنع الضوضاء: 8-K محايد، سعر غير معروف، رمز غير واضح، أو خبر غير أمريكي مرتبط غلط.
+    """
+    ticker = normalize_common_ticker(ticker)
+    source_name = item.get("source", "")
+    form = get_sec_form_from_item(item)
+
+    if category == "Macro":
+        return True, "macro item"
+
+    if is_watchlist_symbol(ticker):
+        return True, "watchlist ticker"
+
+    if not is_valid_common_ticker_symbol(ticker):
+        return False, f"outside watchlist with invalid/unreliable ticker: {ticker}"
+
+    # خارج القائمة من أخبار صحفية: لازم الرمز مؤكد من نص الخبر.
+    if not is_sec_source(source_name) and not non_sec_ticker_is_official(item, ticker):
+        return False, f"outside watchlist non-SEC ticker not officially confirmed: {ticker}"
+
+    # خارج القائمة وسعر غير معروف: لا نرسل إلا SEC شديد الأهمية جدًا.
+    if price is None:
+        if is_sec_source(source_name) and form in ["424B5", "424B3", "424B4", "EFFECT"] and score >= 8:
+            return True, "very important SEC with unknown price"
+        return False, "outside watchlist with unknown price"
+
+    # SEC خارج القائمة: امنع 8-K / نتائج مالية محايدة بقوة منخفضة.
+    if is_sec_source(source_name):
+        if form == "8-K" and category_is_financial_results(category):
+            if direction != "إيجابي" or score < 8:
+                return False, "outside watchlist neutral/low-score 8-K financial results"
+
+        if direction in ["محايد", "مختلط", "غير واضح"] and score < 8 and not category_is_urgent_or_high_signal(category):
+            return False, "outside watchlist neutral SEC below 8/10"
+
+        return True, "important SEC passed smart radar"
+
+    # أخبار الرادار العام خارج القائمة: اسمح بفرص CLIK وما يشبهها.
+    price_float = None
+    try:
+        price_float = float(price)
+    except Exception:
+        price_float = None
+
+    strong_text = text_has_strong_opportunity_words(item)
+    low_price = price_float is not None and price_float <= LOW_PRICE_MAX
+    very_low_price = price_float is not None and price_float <= 5
+
+    if direction == "إيجابي" and low_price and strong_text and score >= 6:
+        return True, "outside watchlist low-price positive catalyst"
+
+    if direction == "إيجابي" and very_low_price and score >= 6 and normalize_category(category) in ["Guidance", "Financial Results", "Contract / Partnership", "FDA / Clinical"]:
+        return True, "outside watchlist very-low-price positive event"
+
+    if category_is_urgent_or_high_signal(category) and direction == "إيجابي" and low_price and score >= 7:
+        return True, "outside watchlist high-signal positive event"
+
+    if score >= 8 and low_price:
+        return True, "outside watchlist high-score low-price event"
+
+    return False, "outside watchlist did not pass smart radar filter"
+
 def should_send_alert(item, analysis, state):
     if not analysis:
         return False, "AI analysis failed"
@@ -2088,6 +2228,10 @@ def should_send_alert(item, analysis, state):
 
     if score < required_score:
         return False, f"score {score} below required {required_score} | price {price}"
+
+    radar_ok, radar_reason = smart_radar_filter_ok(item, analysis, ticker, price, category, normalize_direction(analysis.get("direction", "")), score)
+    if not radar_ok:
+        return False, radar_reason
 
     if not ticker_cooldown_ok(state, ticker):
         urgent_categories = [
@@ -2209,11 +2353,12 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.4.1: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.5.4: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
 🏷️ السهم: {ticker}
+⭐ حالة القائمة: {'داخل القائمة الخاصة' if is_watchlist_symbol(ticker) else 'خارج القائمة / رادار عام'}
 {sec_line}{official_line}📌 نوع الخبر: {category}
 📊 التأثير المتوقع: {direction}
 🔥 قوة الخبر: {score}/10
@@ -2846,15 +2991,42 @@ def record_alert_context(state, item, analysis):
             return
 
         context = {
-            "title": clean_text(item.get("title", ""))[:160],
+            "ticker": ticker,
+            "title": clean_text(item.get("title", ""))[:180],
             "category": normalize_category(analysis.get("category", "")),
             "direction": normalize_direction(analysis.get("direction", "")),
             "score": analysis.get("impact_score", ""),
             "source": item.get("source", ""),
+            "sec_form": get_sec_form_from_item(item),
+            "cik": get_cik_from_item(item),
+            "price": analysis.get("stock_price"),
+            "price_mode": analysis.get("price_mode"),
+            "required_score": analysis.get("required_score"),
+            "watchlist": is_watchlist_symbol(ticker),
+            "why": clean_text(analysis.get("why_important_ar", ""))[:500],
+            "summary": clean_text(analysis.get("summary_ar", ""))[:500],
+            "url": item.get("url", ""),
             "age": human_age(item.get("published_at")),
             "time": now_utc().isoformat(),
         }
         state.setdefault("last_alert_context", {})[ticker] = context
+
+        # ملف مستقل تقرأه أزرار telegram_buttons.py لشرح سبب التنبيه الحقيقي.
+        try:
+            alert_context = {}
+            if os.path.exists(ALERT_CONTEXT_FILE):
+                with open(ALERT_CONTEXT_FILE, "r", encoding="utf-8") as f:
+                    alert_context = json.load(f)
+            if not isinstance(alert_context, dict):
+                alert_context = {}
+            alert_context[ticker] = context
+            # احتفظ بآخر 200 رمز فقط.
+            if len(alert_context) > 200:
+                alert_context = dict(list(alert_context.items())[-200:])
+            with open(ALERT_CONTEXT_FILE, "w", encoding="utf-8") as f:
+                json.dump(alert_context, f, ensure_ascii=False, indent=2)
+        except Exception as file_error:
+            print(f"alert_context write error: {file_error}", flush=True)
 
         if is_sec_source(item.get("source", "")):
             daily = state.setdefault("daily", {})

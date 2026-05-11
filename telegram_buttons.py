@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5.1 SEC Button Fix
+# AlphaBot Pro v5.9.5.4 Alert Context
 # telegram_buttons.py
 # واجهة أزرار مختصرة: 6 أزرار رئيسية + قوائم فرعية منظمة
 # متوافق مع AlphaBot v5.9.5 Scheduled Reports + Smart Alerts
@@ -28,6 +28,7 @@ from stock_news import format_latest_news_for_ticker
 POLL_INTERVAL_SECONDS = 2
 REQUEST_TIMEOUT_SECONDS = 20
 BUTTONS_STATE_FILE = "telegram_buttons_state.json"
+ALERT_CONTEXT_FILE = "alert_context.json"
 MAX_TELEGRAM_TEXT = 3900
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "AlphaBot aktfaaksa@gmail.com")
 _SEC_TICKER_CACHE = None
@@ -355,8 +356,78 @@ def get_price_text(ticker):
         return f"تعذر جلب السعر لـ {ticker}: {e}"
 
 
+
+def load_alert_context():
+    if not os.path.exists(ALERT_CONTEXT_FILE):
+        return {}
+    try:
+        with open(ALERT_CONTEXT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"load_alert_context error: {e}", flush=True)
+        return {}
+
+
+def format_context_price(context):
+    price = context.get("price")
+    try:
+        if price is None:
+            return "السعر: غير معروف"
+        p = float(price)
+        if p < 0.01:
+            return f"آخر سعر متاح: ${p:.6f}"
+        return f"آخر سعر متاح: ${p:.2f}"
+    except Exception:
+        return "السعر: غير معروف"
+
+
+def build_alert_context_reason_text(ticker, context):
+    ticker = normalize_ticker(ticker)
+    watch_state = "داخل القائمة الخاصة" if context.get("watchlist") else "خارج القائمة / رادار عام"
+    sec_form = context.get("sec_form") or "-"
+    category = context.get("category") or "غير محدد"
+    direction = context.get("direction") or "غير واضح"
+    score = context.get("score") or "?"
+    required = context.get("required_score") or "?"
+    source = context.get("source") or "غير معروف"
+    title = context.get("title") or "-"
+    why = context.get("why") or "تم إرسال التنبيه لأنه اجتاز فلتر الخبر/الإفصاح المهم."
+    summary = context.get("summary") or ""
+    price_line = format_context_price(context)
+
+    return f"""❓ سبب تنبيه {ticker}
+
+الحالة: {watch_state}
+{price_line}
+
+📄 نموذج SEC: {sec_form}
+📌 نوع الخبر: {category}
+📊 التأثير: {direction}
+🔥 القوة: {score}/10 | شرط الإرسال: {required}/10
+📰 المصدر: {source}
+
+العنوان:
+{title}
+
+لماذا أرسله البوت؟
+{why}
+
+الملخص:
+{summary}
+
+القرار:
+مراقبة فقط، ولا إضافة للقائمة إلا بعد فحص الشرعية ووضوح السعر/الفوليوم.
+"""
+
 def build_reason_text(ticker):
     ticker = normalize_ticker(ticker)
+
+    # إذا كان هناك تنبيه تلقائي محفوظ لهذا السهم، اعرض سبب التنبيه الحقيقي.
+    alert_context = load_alert_context().get(ticker)
+    if alert_context:
+        return build_alert_context_reason_text(ticker, alert_context)
+
     exists = "موجود في قائمة المراقبة" if is_in_watchlist(ticker) else "غير موجود في قائمة المراقبة"
     price_line = get_price_text(ticker)
 
