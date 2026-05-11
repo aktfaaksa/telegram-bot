@@ -1,7 +1,7 @@
-# AlphaBot Pro v5.9.4.1 S-1 Smart Filter
+# AlphaBot Pro v5.9.5 Scheduled Reports + Smart Alerts
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
-# SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter
+# SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
 
 import os
 import re
@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.4.1 S-1 Smart Filter"
+VERSION = "v5.9.5 Scheduled Reports + Smart Alerts"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -62,6 +62,54 @@ SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
 WATCHLIST_FILE = "watchlist.json"
+
+
+# =========================
+# v5.9.5 Scheduled Reports + Smart Alerts
+# =========================
+
+SAUDI_TZ_OFFSET = 3
+AI_MODE = os.getenv("AI_MODE", "minimal").lower()  # minimal / off
+
+MARKET_PULSE_ENABLED = os.getenv("MARKET_PULSE_ENABLED", "true").lower() == "true"
+SMART_SILENCE_ENABLED = os.getenv("SMART_SILENCE_ENABLED", "true").lower() == "true"
+MARKET_PULSE_INTERVAL_MINUTES = 30
+MARKET_OPEN_KSA = "16:30"
+MARKET_CLOSE_KSA = "23:00"
+
+MAX_MARKET_PULSE_ALERTS_PER_DAY = int(os.getenv("MAX_MARKET_PULSE_ALERTS_PER_DAY", "12"))
+MAX_NEW_OPPORTUNITY_ALERTS_PER_DAY = int(os.getenv("MAX_NEW_OPPORTUNITY_ALERTS_PER_DAY", "5"))
+MAX_SEC_ALERTS_PER_DAY = int(os.getenv("MAX_SEC_ALERTS_PER_DAY", "10"))
+
+REPORT_TIMES_KSA = {
+    "11:00": "🚨 تقرير 11:00 ص — رصد مبكر",
+    "13:30": "🚨 تقرير 1:30 م — تحديث البري ماركت المبكر",
+    "15:30": "🚨 تقرير 3:30 م — رادار البري ماركت الرئيسي",
+    "16:10": "🚨 تقرير 4:10 م — خطة قبل الافتتاح",
+    "17:00": "🚨 تقرير 5:00 م — تأكيد بعد الافتتاح",
+    "19:00": "🚨 تقرير 7:00 م — متابعة منتصف الجلسة المبكرة",
+    "21:00": "🚨 تقرير 9:00 م — فلتر ما قبل النصف الثاني",
+    "22:45": "🚨 تقرير 10:45 م — فلتر آخر الجلسة",
+    "23:30": "🚨 تقرير 11:30 م — ملخص الإغلاق وخطة اليوم التالي",
+    "23:45": "🚨 تقرير 11:45 م — فحص الأخبار بعد الإغلاق",
+}
+
+STATUS_OPPORTUNITY = "🟢 فرصة مراقبة"
+STATUS_MOMENTUM = "🔥 زخم قوي"
+STATUS_WAIT = "🟡 انتظار"
+STATUS_RISK = "🔴 خطر"
+STATUS_WARNING = "⚠️ تحذير"
+STATUS_NEUTRAL = "⚪ بدون إشارة"
+STATUS_POSITION = "🔵 إدارة مركز"
+
+OWNED_TICKERS = {
+    "IQST": {
+        "note": "سهم مملوك مؤقتًا — الهدف الرجوع لرأس المال ثم الخروج",
+        "breakeven": 2.32,
+    }
+}
+
+QUOTE_CACHE = {}
 
 RSS_SOURCES = [
     {
@@ -253,6 +301,34 @@ def current_date_key():
     return now_utc().strftime("%Y-%m-%d")
 
 
+
+def now_ksa():
+    return now_utc() + timedelta(hours=SAUDI_TZ_OFFSET)
+
+
+def current_ksa_date_key():
+    return now_ksa().strftime("%Y-%m-%d")
+
+
+def current_ksa_time_hhmm():
+    return now_ksa().strftime("%H:%M")
+
+
+def minutes_from_hhmm(value):
+    try:
+        h, m = value.split(":")
+        return int(h) * 60 + int(m)
+    except Exception:
+        return 0
+
+
+def is_market_time_ksa():
+    current = minutes_from_hhmm(current_ksa_time_hhmm())
+    start = minutes_from_hhmm(MARKET_OPEN_KSA)
+    end = minutes_from_hhmm(MARKET_CLOSE_KSA)
+    return start <= current <= end
+
+
 # =========================
 # 3) CHAT IDS
 # =========================
@@ -288,7 +364,7 @@ CHAT_IDS = get_chat_ids()
 # 4) TELEGRAM
 # =========================
 
-def send_telegram(message):
+def send_telegram(message, reply_markup=None):
     if not BOT_TOKEN:
         print("BOT_TOKEN missing", flush=True)
         return
@@ -299,13 +375,18 @@ def send_telegram(message):
 
     for chat_id in CHAT_IDS:
         try:
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "disable_web_page_preview": True
+            }
+
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+
             requests.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": message,
-                    "disable_web_page_preview": True
-                },
+                json=payload,
                 timeout=15
             )
         except Exception as e:
@@ -317,8 +398,9 @@ def startup_message():
 
 الإصدار: {VERSION}
 الحالة: يعمل الآن
-المصادر: RSS + Small-Cap Newswires + Finnhub + SEC Advanced + OpenRouter
-وضع الإرسال: SEC Priority Mode — تحليل الأخبار الأعلى أهمية فقط
+المصادر: RSS + Small-Cap Newswires + Finnhub + SEC Advanced + Telegram
+وضع الإرسال: Scheduled Reports + Smart Alerts + SEC Priority Mode
+OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 
 وضع السعر:
 🔥 الأسهم تحت ${LOW_PRICE_MAX:.0f}: قوة {LOW_PRICE_MIN_SCORE}/10 أو أعلى
@@ -328,11 +410,15 @@ def startup_message():
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.4.1:
+وضع التكلفة v5.9.5:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
 ✅ MAX_AI_ANALYSES_PER_CYCLE = {MAX_AI_ANALYSES_PER_CYCLE}
+✅ Market Pulse كل 30 دقيقة وقت السوق بشرط وجود تغيير مهم
+✅ Smart Silence عند عدم وجود تغيير
+✅ تقارير ثابتة بتوقيت السعودية
+✅ ألوان الحالات مفعلة
 ✅ تخفيض/تجاهل أخبار مكاتب المحاماة الضعيفة
 ✅ Gemini 2.5 Flash Lite أساسي
 ✅ GPT-4o-mini احتياطي
@@ -368,9 +454,19 @@ def load_state():
         "seen": [],
         "ticker_last_alert": {},
         "sec_form_last_alert": {},
+        "scheduled_reports_sent": {},
+        "last_market_pulse_at": "",
+        "ticker_status": {},
+        "ticker_levels": {},
+        "muted_tickers": {},
+        "last_alert_context": {},
         "daily": {
             "date": current_date_key(),
-            "count": 0
+            "ksa_date": current_ksa_date_key(),
+            "count": 0,
+            "pulse_count": 0,
+            "new_opportunity_count": 0,
+            "sec_count": 0,
         }
     }
 
@@ -384,10 +480,33 @@ def load_state():
         state.setdefault("seen", [])
         state.setdefault("ticker_last_alert", {})
         state.setdefault("sec_form_last_alert", {})
-        state.setdefault("daily", {"date": current_date_key(), "count": 0})
+        state.setdefault("scheduled_reports_sent", {})
+        state.setdefault("last_market_pulse_at", "")
+        state.setdefault("ticker_status", {})
+        state.setdefault("ticker_levels", {})
+        state.setdefault("muted_tickers", {})
+        state.setdefault("last_alert_context", {})
+        state.setdefault("daily", {
+            "date": current_date_key(),
+            "ksa_date": current_ksa_date_key(),
+            "count": 0,
+            "pulse_count": 0,
+            "new_opportunity_count": 0,
+            "sec_count": 0,
+        })
 
         if state["daily"].get("date") != current_date_key():
-            state["daily"] = {"date": current_date_key(), "count": 0}
+            old_scheduled = state.get("scheduled_reports_sent", {})
+            today_ksa = current_ksa_date_key()
+            state["scheduled_reports_sent"] = {k: v for k, v in old_scheduled.items() if str(k).startswith(today_ksa)}
+            state["daily"] = {
+                "date": current_date_key(),
+                "ksa_date": today_ksa,
+                "count": 0,
+                "pulse_count": 0,
+                "new_opportunity_count": 0,
+                "sec_count": 0,
+            }
 
         return state
 
@@ -2198,9 +2317,10 @@ def process_news_item(item, state, ai_counter=None):
         return False
 
     alert = format_alert(item, analysis)
-    send_telegram(alert)
-
     ticker = normalize_common_ticker(analysis.get("ticker") or item.get("ticker", ""))
+    record_alert_context(state, item, analysis)
+    send_telegram(alert, reply_markup=make_alert_buttons(ticker))
+
     sec_form = get_sec_form_from_item(item)
 
     if ticker:
@@ -2274,6 +2394,462 @@ def collect_all_news():
     return all_items
 
 
+
+# =========================
+# 16.5) v5.9.5 SCHEDULED REPORTS + MARKET PULSE
+# =========================
+
+def get_stock_quote(ticker):
+    """
+    Finnhub quote موسع للتقارير والـ Market Pulse.
+    لا يغير وظيفة get_stock_price القديمة حتى لا نكسر منطق الأخبار الحالي.
+    """
+    ticker = normalize_common_ticker(ticker)
+
+    if not ticker or not FINNHUB_API_KEY:
+        return None
+
+    cached = QUOTE_CACHE.get(ticker)
+    if cached and cached.get("time") and now_utc() - cached["time"] < timedelta(minutes=5):
+        return cached.get("quote")
+
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={"symbol": ticker, "token": FINNHUB_API_KEY},
+            timeout=10
+        )
+
+        if r.status_code != 200:
+            print(f"Quote error {ticker}: {r.status_code}", flush=True)
+            return None
+
+        data = r.json()
+        current = data.get("c")
+
+        if current is None or float(current) <= 0:
+            return None
+
+        quote = {
+            "price": float(data.get("c") or 0),
+            "change": float(data.get("d") or 0),
+            "change_percent": float(data.get("dp") or 0),
+            "previous_close": float(data.get("pc") or 0),
+            "open": float(data.get("o") or 0),
+            "high": float(data.get("h") or 0),
+            "low": float(data.get("l") or 0),
+        }
+
+        QUOTE_CACHE[ticker] = {"quote": quote, "time": now_utc()}
+        return quote
+
+    except Exception as e:
+        print(f"get_stock_quote error {ticker}: {e}", flush=True)
+        return None
+
+
+def price_text_from_quote(quote):
+    if not quote or quote.get("price") is None:
+        return "غير معروف"
+
+    price = quote.get("price")
+    change_percent = quote.get("change_percent", 0)
+    sign = "+" if change_percent > 0 else ""
+
+    if price < 0.01:
+        price_text = f"${price:.6f}"
+    else:
+        price_text = f"${price:.2f}"
+
+    return f"{price_text} | {sign}{change_percent:.2f}%"
+
+
+def get_latest_ticker_context(state, ticker):
+    ticker = normalize_common_ticker(ticker)
+    return state.get("last_alert_context", {}).get(ticker, {})
+
+
+def classify_watchlist_ticker(ticker, state=None):
+    ticker = normalize_common_ticker(ticker)
+    quote = get_stock_quote(ticker)
+    context = get_latest_ticker_context(state or {}, ticker)
+
+    status = STATUS_NEUTRAL
+    reason = "لا يوجد خبر أو زخم واضح حاليًا"
+    decision = "مراقبة فقط"
+    alert_type = "neutral"
+
+    if ticker in OWNED_TICKERS:
+        status = STATUS_POSITION
+        reason = OWNED_TICKERS[ticker].get("note", "سهم مملوك — إدارة مركز")
+        decision = "إدارة مركز — راقب مستويات الخروج والدعم"
+        alert_type = "position"
+
+    if context:
+        last_category = context.get("category", "")
+        last_direction = context.get("direction", "")
+        last_age = context.get("age", "")
+        if last_category:
+            reason = f"آخر محفز: {last_category} | التأثير: {last_direction} | {last_age}"
+            if last_direction == "سلبي":
+                status = STATUS_RISK
+                decision = "حذر — راقب ردة فعل السعر ولا تطارد"
+                alert_type = "risk"
+            elif last_direction == "إيجابي" and status != STATUS_POSITION:
+                status = STATUS_OPPORTUNITY
+                decision = "فرصة مراقبة مشروطة بالثبات والفوليوم"
+                alert_type = "opportunity"
+
+    if quote:
+        dp = quote.get("change_percent", 0)
+        price = quote.get("price", 0)
+        high = quote.get("high", 0)
+        low = quote.get("low", 0)
+        previous_close = quote.get("previous_close", 0)
+
+        if ticker in OWNED_TICKERS:
+            breakeven = float(OWNED_TICKERS[ticker].get("breakeven", 0) or 0)
+            if breakeven and price >= breakeven * 0.97:
+                status = STATUS_POSITION
+                reason = f"اقترب من منطقة رأس المال {breakeven:.2f}"
+                decision = "راقب الاختراق أو الرفض عند منطقة رأس المال"
+                alert_type = "near_target"
+
+        elif dp <= -6:
+            status = STATUS_RISK
+            reason = f"هبوط قوي {dp:.2f}%"
+            decision = "تجنب مؤقت حتى تظهر إشارة ثبات"
+            alert_type = "risk"
+
+        elif dp >= 20:
+            status = STATUS_WARNING
+            reason = f"ارتفاع قوي جدًا {dp:.2f}% — احتمال مطاردة مرتفع"
+            decision = "لا تطارد؛ انتظر تهدئة أو رجوع لمستوى دعم"
+            alert_type = "do_not_chase"
+
+        elif dp >= 10:
+            status = STATUS_MOMENTUM
+            reason = f"زخم سعري قوي {dp:.2f}%"
+            decision = "مراقبة فقط؛ الدخول لا يكون إلا مع ثبات وفوليوم"
+            alert_type = "momentum"
+
+        elif dp >= 4 and status not in [STATUS_RISK, STATUS_WARNING, STATUS_POSITION]:
+            status = STATUS_OPPORTUNITY
+            reason = f"تحسن سعري واضح {dp:.2f}%"
+            decision = "فرصة مراقبة بشرط استمرار الزخم"
+            alert_type = "opportunity"
+
+        elif -2 <= dp <= 2 and not context and status != STATUS_POSITION:
+            status = STATUS_NEUTRAL
+            reason = "حركة هادئة قرب الإغلاق السابق"
+            decision = "بدون إشارة قوية"
+            alert_type = "neutral"
+
+        levels = []
+        if low:
+            levels.append(f"دعم تقريبي {low:.2f}")
+        if high:
+            levels.append(f"مقاومة تقريبيّة {high:.2f}")
+        if previous_close:
+            levels.append(f"إغلاق سابق {previous_close:.2f}")
+        levels_text = " | ".join(levels) if levels else "غير متوفر"
+    else:
+        levels_text = "غير متوفر"
+
+    return {
+        "ticker": ticker,
+        "quote": quote,
+        "price_text": price_text_from_quote(quote),
+        "status": status,
+        "reason": reason,
+        "decision": decision,
+        "levels": levels_text,
+        "alert_type": alert_type,
+    }
+
+
+def build_market_summary_line():
+    # المرحلة الأولى الآمنة: لا نضيف API جديد للمؤشرات حتى لا نرفع التعقيد.
+    # يمكن لاحقًا ربط Nasdaq/S&P/Dow/VIX من مصدر أسعار مستقل.
+    if is_market_time_ksa():
+        return "السوق مفتوح الآن — استخدم Nasdaq / S&P / VIX كفلتر للحذر قبل الدخول."
+    return "خارج وقت السوق الرسمي — التركيز على البري ماركت/الأخبار/SEC حسب وقت التقرير."
+
+
+def build_watchlist_section(state, compact=False):
+    watchlist = sorted(load_watchlist_symbols())
+    lines = []
+
+    if not watchlist:
+        return ["⭐ القائمة الخاصة", "لا توجد أسهم في watchlist.json"]
+
+    lines.append("⭐ القائمة الخاصة")
+
+    for i, ticker in enumerate(watchlist, start=1):
+        data = classify_watchlist_ticker(ticker, state=state)
+
+        if compact:
+            lines.append(f"{ticker}: {data['status']} — {data['reason']}")
+        else:
+            lines.append(
+                f"{i}) {ticker} — {data['status']}\n"
+                f"السعر: {data['price_text']}\n"
+                f"السبب: {data['reason']}\n"
+                f"المستويات: {data['levels']}\n"
+                f"القرار: {data['decision']}"
+            )
+
+    return lines
+
+
+def get_top_watchlist_ideas(state, limit=3):
+    priority = {
+        STATUS_MOMENTUM: 1,
+        STATUS_OPPORTUNITY: 2,
+        STATUS_POSITION: 3,
+        STATUS_WAIT: 4,
+        STATUS_WARNING: 5,
+        STATUS_NEUTRAL: 6,
+        STATUS_RISK: 7,
+    }
+    ideas = []
+
+    for ticker in sorted(load_watchlist_symbols()):
+        data = classify_watchlist_ticker(ticker, state=state)
+        ideas.append(data)
+
+    ideas.sort(key=lambda x: priority.get(x.get("status"), 99))
+    return ideas[:limit]
+
+
+def build_tomorrow_plan(state):
+    lines = ["📌 خطة الغد المختصرة"]
+    top = get_top_watchlist_ideas(state, limit=5)
+
+    if not top:
+        lines.append("لا توجد أسهم في القائمة الخاصة.")
+        return lines
+
+    for data in top:
+        lines.append(
+            f"{data['ticker']}: {data['status']}\n"
+            f"المستويات: {data['levels']}\n"
+            f"الخطة: {data['decision']}"
+        )
+
+    return lines
+
+
+def build_scheduled_report(report_title, state):
+    hhmm = current_ksa_time_hhmm()
+    compact = hhmm in ["19:00", "21:00", "22:45", "23:45"]
+
+    lines = [
+        report_title,
+        f"📅 {now_ksa().strftime('%Y-%m-%d')} | 🇸🇦 توقيت السعودية",
+        "",
+        "📊 حالة السوق العامة",
+        build_market_summary_line(),
+        "",
+    ]
+
+    lines.extend(build_watchlist_section(state, compact=compact))
+
+    top = get_top_watchlist_ideas(state, limit=3)
+    if top:
+        lines.extend(["", "🔥 أفضل 3 للمتابعة الآن"])
+        for i, data in enumerate(top, start=1):
+            lines.append(f"{i}) {data['ticker']} — {data['status']} | {data['decision']}")
+
+    if hhmm in ["23:30", "23:45"]:
+        lines.extend(["", *build_tomorrow_plan(state)])
+
+    lines.extend([
+        "",
+        "⚠️ قواعد سريعة",
+        "لا مطاردة بعد ارتفاع قوي. الأفضل انتظار ثبات وفوليوم أو رجوع لمنطقة دعم.",
+        "",
+        "🎨 مفتاح الألوان:",
+        "🟢 فرصة | 🔥 زخم | 🟡 انتظار | 🔴 خطر | ⚠️ تحذير | ⚪ بدون إشارة | 🔵 إدارة مركز",
+    ])
+
+    return "\n\n".join(lines)
+
+
+def should_send_scheduled_report(state):
+    hhmm = current_ksa_time_hhmm()
+
+    if hhmm not in REPORT_TIMES_KSA:
+        return None
+
+    date_key = current_ksa_date_key()
+    report_key = f"{date_key}|{hhmm}"
+    sent = state.setdefault("scheduled_reports_sent", {})
+
+    if sent.get(report_key):
+        return None
+
+    sent[report_key] = True
+    return REPORT_TIMES_KSA[hhmm]
+
+
+def maybe_send_scheduled_report(state):
+    report_title = should_send_scheduled_report(state)
+
+    if not report_title:
+        return False
+
+    msg = build_scheduled_report(report_title, state)
+    send_telegram(msg)
+    save_state(state)
+    return True
+
+
+def should_run_market_pulse(state):
+    if not MARKET_PULSE_ENABLED:
+        return False
+
+    if not is_market_time_ksa():
+        return False
+
+    now_dt = now_ksa()
+
+    if now_dt.minute not in [0, 30]:
+        return False
+
+    pulse_key = now_dt.strftime("%Y-%m-%d %H:%M")
+    if state.get("last_market_pulse_at") == pulse_key:
+        return False
+
+    daily = state.setdefault("daily", {})
+    if int(daily.get("pulse_count", 0)) >= MAX_MARKET_PULSE_ALERTS_PER_DAY:
+        return False
+
+    state["last_market_pulse_at"] = pulse_key
+    return True
+
+
+def detect_watchlist_changes(state):
+    changes = []
+    statuses = state.setdefault("ticker_status", {})
+
+    for ticker in sorted(load_watchlist_symbols()):
+        data = classify_watchlist_ticker(ticker, state=state)
+        old_status = statuses.get(ticker)
+        new_status = data["status"]
+
+        if old_status and old_status != new_status:
+            changes.append({
+                "ticker": ticker,
+                "old": old_status,
+                "new": new_status,
+                "reason": data["reason"],
+                "decision": data["decision"],
+                "levels": data["levels"],
+            })
+
+        # أول تشغيل: نحفظ الحالة ولا نرسل تنبيه تغير حتى لا يزعجك برسالة طويلة.
+        statuses[ticker] = new_status
+
+    return changes
+
+
+def build_market_pulse_message(changes, state):
+    if not changes:
+        if SMART_SILENCE_ENABLED:
+            return ""
+        return f"⚡ تحديث {now_ksa().strftime('%I:%M %p')} — لا يوجد تغيير مهم\nالأفضل: انتظار."
+
+    lines = [
+        f"⚡ تحديث {now_ksa().strftime('%I:%M %p')} — نبض السوق",
+        "",
+        "🔔 تغيرات مهمة في القائمة:",
+    ]
+
+    for ch in changes[:5]:
+        lines.append(
+            f"{ch['ticker']}\n"
+            f"من: {ch['old']}\n"
+            f"إلى: {ch['new']}\n"
+            f"السبب: {ch['reason']}\n"
+            f"المستويات: {ch['levels']}\n"
+            f"القرار: {ch['decision']}"
+        )
+
+    top = get_top_watchlist_ideas(state, limit=3)
+    if top:
+        lines.extend(["", "🔥 أفضل 3 الآن:"])
+        for i, data in enumerate(top, start=1):
+            lines.append(f"{i}) {data['ticker']} — {data['status']}")
+
+    return "\n\n".join(lines)
+
+
+def maybe_send_market_pulse(state):
+    if not should_run_market_pulse(state):
+        return False
+
+    changes = detect_watchlist_changes(state)
+    msg = build_market_pulse_message(changes, state)
+
+    if not msg:
+        save_state(state)
+        return False
+
+    send_telegram(msg)
+    state.setdefault("daily", {})["pulse_count"] = int(state.get("daily", {}).get("pulse_count", 0)) + 1
+    save_state(state)
+    return True
+
+
+def record_alert_context(state, item, analysis):
+    try:
+        ticker = normalize_common_ticker(analysis.get("ticker") or item.get("ticker", ""))
+        if not ticker:
+            return
+
+        context = {
+            "title": clean_text(item.get("title", ""))[:160],
+            "category": normalize_category(analysis.get("category", "")),
+            "direction": normalize_direction(analysis.get("direction", "")),
+            "score": analysis.get("impact_score", ""),
+            "source": item.get("source", ""),
+            "age": human_age(item.get("published_at")),
+            "time": now_utc().isoformat(),
+        }
+        state.setdefault("last_alert_context", {})[ticker] = context
+
+        if is_sec_source(item.get("source", "")):
+            daily = state.setdefault("daily", {})
+            daily["sec_count"] = int(daily.get("sec_count", 0)) + 1
+
+    except Exception as e:
+        print(f"record_alert_context error: {e}", flush=True)
+
+
+def make_alert_buttons(ticker):
+    ticker = normalize_common_ticker(ticker)
+    if not ticker:
+        return None
+
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "❓ السبب", "callback_data": f"reason:{ticker}"},
+                {"text": "📊 تقرير", "callback_data": f"report:{ticker}"},
+            ],
+            [
+                {"text": "📰 الأخبار", "callback_data": f"news:{ticker}"},
+                {"text": "📄 SEC", "callback_data": f"sec:{ticker}"},
+            ],
+            [
+                {"text": "⭐ مراقبة", "callback_data": f"watch:{ticker}"},
+                {"text": "🔕 تجاهل", "callback_data": f"mute:{ticker}"},
+            ],
+        ]
+    }
+
+
 # =========================
 # 17) STARTUP CHECKS
 # =========================
@@ -2301,6 +2877,10 @@ def startup_checks():
     print("FORM_4_PURCHASE_FILTER: ON", flush=True)
     print("OFFICIAL_NEWS_TICKER_EXTRACTION: ON", flush=True)
     print("PRODUCT_CODE_TICKER_BLOCK: ON", flush=True)
+    print(f"AI_MODE: {AI_MODE}", flush=True)
+    print(f"MARKET_PULSE_ENABLED: {MARKET_PULSE_ENABLED}", flush=True)
+    print(f"SMART_SILENCE_ENABLED: {SMART_SILENCE_ENABLED}", flush=True)
+    print("SCHEDULED_REPORTS_KSA: ON", flush=True)
     print("===================================", flush=True)
 
 
@@ -2338,6 +2918,9 @@ def run():
     while True:
         try:
             print("Starting new cycle...", flush=True)
+
+            maybe_send_scheduled_report(state)
+            maybe_send_market_pulse(state)
 
             news_items = collect_all_news()
             sent_count = 0
