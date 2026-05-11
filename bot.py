@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5 Scheduled Reports + Smart Alerts
+# AlphaBot Pro v5.9.5.2 Ticker Fix
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5 Scheduled Reports + Smart Alerts"
+VERSION = "v5.9.5.2 Ticker Fix"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -759,13 +759,17 @@ def is_warrant_or_right_ticker(ticker):
     if not t:
         return False
 
+    # v5.9.5.2 Ticker Fix:
+    # لا نعتبر أي رمز ينتهي بحرف W أو Z أو R أو U تلقائيًا warrant/right/unit،
+    # لأن هذا كسر رموزًا عادية مثل RDW وحولها إلى RD في تقارير القائمة.
+    # نعتمد فقط على الصيغ الواضحة مثل RDW.WS أو RDW-WS أو RDW.WT أو RDW.WTA.
     if "-" in t or "." in t or "^" in t:
         return True
 
-    suffixes = ["WS", "WT", "WTA", "W", "Z", "R", "U"]
+    explicit_warrant_suffixes = ["WS", "WT", "WTA"]
 
-    for s in suffixes:
-        if len(t) > 2 and t.endswith(s):
+    for s in explicit_warrant_suffixes:
+        if len(t) > len(s) and t.endswith(s):
             return True
 
     return False
@@ -823,12 +827,8 @@ def normalize_common_ticker(ticker, available_tickers=None):
     if len(t) > 2 and t.endswith("WT"):
         return t[:-2]
 
-    if len(t) > 1 and t.endswith("W"):
-        return t[:-1]
-
-    if len(t) > 1 and t.endswith("Z"):
-        return t[:-1]
-
+    # v5.9.5.2 Ticker Fix:
+    # لا نحذف W/Z مفردة من نهاية الرمز لأن رموزًا عادية مثل RDW قد تنتهي بهذه الأحرف.
     return t
 
 
