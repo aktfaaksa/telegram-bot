@@ -94,6 +94,11 @@ REPORT_TIMES_KSA = {
     "23:45": "🚨 تقرير 11:45 م — فحص الأخبار بعد الإغلاق",
 }
 
+# لا نعتمد على مطابقة الدقيقة بالضبط لأن دورة البوت كل 90 ثانية وقد تفوّت 11:00:00.
+# لذلك نسمح بإرسال التقرير خلال نافذة قصيرة بعد وقته، مرة واحدة فقط يوميًا.
+REPORT_SEND_WINDOW_MINUTES = int(os.getenv("REPORT_SEND_WINDOW_MINUTES", "20"))
+MARKET_PULSE_WINDOW_MINUTES = int(os.getenv("MARKET_PULSE_WINDOW_MINUTES", "5"))
+
 STATUS_OPPORTUNITY = "🟢 فرصة مراقبة"
 STATUS_MOMENTUM = "🔥 زخم قوي"
 STATUS_WAIT = "🟡 انتظار"
@@ -1276,7 +1281,7 @@ def get_news_priority(item):
         # S-1 Smart Filter
         if form in S_REGISTRATION_FORMS:
             if not is_s_registration_allowed_for_ai(item):
-                print(f"S-1 Smart Filter skipped: {ticker or 'NO_TICKER'} | {form} | {item.get('title')}", flush=True)
+                print(f"v5.9.5 S-1 Smart Filter skipped: {ticker or 'NO_TICKER'} | {form} | {item.get('title')}", flush=True)
                 return 0
             priority += 35
 
@@ -1361,7 +1366,7 @@ def sort_and_filter_news_items(news_items):
         reverse=True
     )
 
-    print(f"v5.9.4.1 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
+    print(f"v5.9.5 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
 
     for i, item in enumerate(prioritized[:10], start=1):
         print(
@@ -2640,8 +2645,8 @@ def build_tomorrow_plan(state):
     return lines
 
 
-def build_scheduled_report(report_title, state):
-    hhmm = current_ksa_time_hhmm()
+def build_scheduled_report(report_title, state, scheduled_hhmm=None):
+    hhmm = scheduled_hhmm or current_ksa_time_hhmm()
     compact = hhmm in ["19:00", "21:00", "22:45", "23:45"]
 
     lines = [
@@ -2677,30 +2682,54 @@ def build_scheduled_report(report_title, state):
 
 
 def should_send_scheduled_report(state):
-    hhmm = current_ksa_time_hhmm()
-
-    if hhmm not in REPORT_TIMES_KSA:
-        return None
-
+    """
+    يرسل التقرير إذا دخلنا نافذة وقته بتوقيت السعودية.
+    السبب: دورة البوت كل 90 ثانية تقريبًا، ومطابقة HH:MM بالضبط قد تجعل التقرير يفوت.
+    يرجع: (scheduled_hhmm, report_title) أو None.
+    """
+    current_minutes = minutes_from_hhmm(current_ksa_time_hhmm())
     date_key = current_ksa_date_key()
-    report_key = f"{date_key}|{hhmm}"
     sent = state.setdefault("scheduled_reports_sent", {})
 
-    if sent.get(report_key):
-        return None
+    # تنظيف مفاتيح قديمة حتى لا يكبر ملف الحالة
+    try:
+        state["scheduled_reports_sent"] = {
+            k: v for k, v in sent.items() if str(k).startswith(date_key + "|")
+        }
+        sent = state["scheduled_reports_sent"]
+    except Exception:
+        pass
 
-    sent[report_key] = True
-    return REPORT_TIMES_KSA[hhmm]
+    for scheduled_hhmm, title in sorted(REPORT_TIMES_KSA.items(), key=lambda x: minutes_from_hhmm(x[0])):
+        scheduled_minutes = minutes_from_hhmm(scheduled_hhmm)
+        diff = current_minutes - scheduled_minutes
+
+        if 0 <= diff <= REPORT_SEND_WINDOW_MINUTES:
+            report_key = f"{date_key}|{scheduled_hhmm}"
+
+            if sent.get(report_key):
+                continue
+
+            sent[report_key] = True
+            print(
+                f"Scheduled report due: {scheduled_hhmm} | current {current_ksa_time_hhmm()} KSA | {title}",
+                flush=True,
+            )
+            return scheduled_hhmm, title
+
+    return None
 
 
 def maybe_send_scheduled_report(state):
-    report_title = should_send_scheduled_report(state)
+    scheduled = should_send_scheduled_report(state)
 
-    if not report_title:
+    if not scheduled:
         return False
 
-    msg = build_scheduled_report(report_title, state)
+    scheduled_hhmm, report_title = scheduled
+    msg = build_scheduled_report(report_title, state, scheduled_hhmm=scheduled_hhmm)
     send_telegram(msg)
+    print(f"Scheduled report sent: {scheduled_hhmm} | {report_title}", flush=True)
     save_state(state)
     return True
 
@@ -2713,11 +2742,14 @@ def should_run_market_pulse(state):
         return False
 
     now_dt = now_ksa()
+    current_minutes = minutes_from_hhmm(now_dt.strftime("%H:%M"))
 
-    if now_dt.minute not in [0, 30]:
+    # تشغيل حول :00 و :30 بنافذة بسيطة، بدل شرط الدقيقة المطابقة بالضبط.
+    slot_start = (current_minutes // MARKET_PULSE_INTERVAL_MINUTES) * MARKET_PULSE_INTERVAL_MINUTES
+    if current_minutes - slot_start > MARKET_PULSE_WINDOW_MINUTES:
         return False
 
-    pulse_key = now_dt.strftime("%Y-%m-%d %H:%M")
+    pulse_key = f"{current_ksa_date_key()}|{slot_start}"
     if state.get("last_market_pulse_at") == pulse_key:
         return False
 
@@ -2726,6 +2758,7 @@ def should_run_market_pulse(state):
         return False
 
     state["last_market_pulse_at"] = pulse_key
+    print(f"Market Pulse window: slot {slot_start} | current {now_dt.strftime('%H:%M')} KSA", flush=True)
     return True
 
 
