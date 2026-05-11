@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5.2 Ticker Fix
+# AlphaBot Pro v5.9.5.3 Alert Buttons + Price Label Fix
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5.2 Ticker Fix"
+VERSION = "v5.9.5.3 Alert Buttons + Price Label Fix"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -2144,7 +2144,7 @@ def safe_trading_note(note):
 
 def format_price_line(price, price_mode, required_score):
     if price is None:
-        return f"💵 السعر: غير معروف | شرط الإرسال: {required_score}/10"
+        return f"💵 آخر سعر متاح: غير معروف | شرط الإرسال: {required_score}/10"
 
     if price < 0.01:
         price_text = f"${price:.6f}"
@@ -2152,9 +2152,9 @@ def format_price_line(price, price_mode, required_score):
         price_text = f"${price:.2f}"
 
     if price_mode == "LOW":
-        return f"💵 السعر: {price_text} | 🔥 سهم منخفض السعر | شرط الإرسال: {required_score}/10"
+        return f"💵 آخر سعر متاح: {price_text} | 🔥 سهم منخفض السعر | شرط الإرسال: {required_score}/10"
 
-    return f"💵 السعر: {price_text} | 🚨 سهم كبير/مرتفع السعر | شرط الإرسال: {required_score}/10"
+    return f"💵 آخر سعر متاح: {price_text} | 🚨 سهم كبير/مرتفع السعر | شرط الإرسال: {required_score}/10"
 
 
 def format_alert(item, analysis):
@@ -2598,7 +2598,7 @@ def build_watchlist_section(state, compact=False):
         else:
             lines.append(
                 f"{i}) {ticker} — {data['status']}\n"
-                f"السعر: {data['price_text']}\n"
+                f"آخر سعر متاح: {data['price_text']}\n"
                 f"السبب: {data['reason']}\n"
                 f"المستويات: {data['levels']}\n"
                 f"القرار: {data['decision']}"
@@ -2655,14 +2655,18 @@ def build_scheduled_report(report_title, state, scheduled_hhmm=None):
         "",
         "📊 حالة السوق العامة",
         build_market_summary_line(),
-        "",
     ]
+
+    if not is_market_time_ksa():
+        lines.append("ملاحظة السعر: الأسعار المعروضة هي آخر سعر متاح من Finnhub وقد لا تمثل سعر البري ماركت الحقيقي.")
+
+    lines.append("")
 
     lines.extend(build_watchlist_section(state, compact=compact))
 
     top = get_top_watchlist_ideas(state, limit=3)
     if top:
-        lines.extend(["", "🔥 أفضل 3 للمتابعة الآن"])
+        lines.extend(["", "🔥 أهم 3 للمتابعة الآن"])
         for i, data in enumerate(top, start=1):
             lines.append(f"{i}) {data['ticker']} — {data['status']} | {data['decision']}")
 
@@ -2811,7 +2815,7 @@ def build_market_pulse_message(changes, state):
 
     top = get_top_watchlist_ideas(state, limit=3)
     if top:
-        lines.extend(["", "🔥 أفضل 3 الآن:"])
+        lines.extend(["", "🔥 أهم 3 الآن:"])
         for i, data in enumerate(top, start=1):
             lines.append(f"{i}) {data['ticker']} — {data['status']}")
 
@@ -2861,6 +2865,12 @@ def record_alert_context(state, item, analysis):
 
 
 def make_alert_buttons(ticker):
+    """
+    v5.9.5.3 Alert Buttons Fix
+    يجب أن تكون callback_data بنفس الصيغة التي يدعمها telegram_buttons.py:
+    action|TICKER
+    وليس action:TICKER، حتى تعمل أزرار التنبيهات التلقائية.
+    """
     ticker = normalize_common_ticker(ticker)
     if not ticker:
         return None
@@ -2868,16 +2878,16 @@ def make_alert_buttons(ticker):
     return {
         "inline_keyboard": [
             [
-                {"text": "❓ السبب", "callback_data": f"reason:{ticker}"},
-                {"text": "📊 تقرير", "callback_data": f"report:{ticker}"},
+                {"text": "❓ السبب", "callback_data": f"reason|{ticker}"},
+                {"text": "📊 تقرير", "callback_data": f"report_menu|{ticker}"},
             ],
             [
-                {"text": "📰 الأخبار", "callback_data": f"news:{ticker}"},
-                {"text": "📄 SEC", "callback_data": f"sec:{ticker}"},
+                {"text": "📰 الأخبار", "callback_data": f"news_menu|{ticker}"},
+                {"text": "📄 SEC", "callback_data": f"sec_menu|{ticker}"},
             ],
             [
-                {"text": "⭐ مراقبة", "callback_data": f"watch:{ticker}"},
-                {"text": "🔕 تجاهل", "callback_data": f"mute:{ticker}"},
+                {"text": "⭐ مراقبة", "callback_data": f"watch_menu|{ticker}"},
+                {"text": "🔕 تجاهل", "callback_data": f"mute_menu|{ticker}"},
             ],
         ]
     }
