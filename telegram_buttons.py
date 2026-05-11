@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5
+# AlphaBot Pro v5.9.5.1 SEC Button Fix
 # telegram_buttons.py
 # واجهة أزرار مختصرة: 6 أزرار رئيسية + قوائم فرعية منظمة
 # متوافق مع AlphaBot v5.9.5 Scheduled Reports + Smart Alerts
@@ -29,6 +29,9 @@ POLL_INTERVAL_SECONDS = 2
 REQUEST_TIMEOUT_SECONDS = 20
 BUTTONS_STATE_FILE = "telegram_buttons_state.json"
 MAX_TELEGRAM_TEXT = 3900
+SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "AlphaBot aktfaaksa@gmail.com")
+_SEC_TICKER_CACHE = None
+
 
 _runtime = {
     "bot_token": None,
@@ -475,16 +478,163 @@ def _collect_items_safe():
         return []
 
 
+def _sec_headers():
+    return {
+        "User-Agent": SEC_USER_AGENT,
+        "Accept-Encoding": "gzip, deflate",
+    }
+
+
+def _load_sec_ticker_cache():
+    """
+    تحميل خريطة SEC الرسمية: ticker -> CIK.
+    هذه أفضل من الاعتماد على آخر دورة أخبار، لذلك زر SEC يعطي نتيجة مباشرة للسهم.
+    """
+    global _SEC_TICKER_CACHE
+    if _SEC_TICKER_CACHE is not None:
+        return _SEC_TICKER_CACHE
+
+    _SEC_TICKER_CACHE = {}
+    try:
+        r = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=_sec_headers(),
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"SEC ticker cache status error: {r.status_code}", flush=True)
+            return _SEC_TICKER_CACHE
+
+        data = r.json()
+        for _, row in data.items():
+            ticker = normalize_ticker(row.get("ticker", ""))
+            cik = str(int(row.get("cik_str"))).zfill(10)
+            title = str(row.get("title", "")).strip()
+            if ticker and cik:
+                _SEC_TICKER_CACHE[ticker] = {"cik": cik, "title": title}
+
+        print(f"SEC ticker cache loaded in buttons: {len(_SEC_TICKER_CACHE)} tickers", flush=True)
+    except Exception as e:
+        print(f"SEC ticker cache error in buttons: {e}", flush=True)
+
+    return _SEC_TICKER_CACHE
+
+
+def _get_sec_company_for_ticker(ticker):
+    ticker = normalize_ticker(ticker)
+    return _load_sec_ticker_cache().get(ticker)
+
+
+def _get_sec_submissions_for_ticker(ticker):
+    company = _get_sec_company_for_ticker(ticker)
+    if not company:
+        return None, []
+
+    cik = company.get("cik")
+    try:
+        r = requests.get(
+            f"https://data.sec.gov/submissions/CIK{cik}.json",
+            headers=_sec_headers(),
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"SEC submissions status error {ticker}: {r.status_code}", flush=True)
+            return company, []
+
+        data = r.json()
+        recent = data.get("filings", {}).get("recent", {})
+        forms = recent.get("form", []) or []
+        filing_dates = recent.get("filingDate", []) or []
+        report_dates = recent.get("reportDate", []) or []
+        accessions = recent.get("accessionNumber", []) or []
+        docs = recent.get("primaryDocument", []) or []
+        descriptions = recent.get("primaryDocDescription", []) or []
+
+        filings = []
+        for i, form in enumerate(forms[:40]):
+            form = str(form or "").strip().upper()
+            accession = str(accessions[i] if i < len(accessions) else "").strip()
+            accession_no_dash = accession.replace("-", "")
+            doc = str(docs[i] if i < len(docs) else "").strip()
+            url = ""
+            if accession and doc:
+                url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_no_dash}/{doc}"
+            filings.append({
+                "form": form,
+                "filing_date": str(filing_dates[i] if i < len(filing_dates) else ""),
+                "report_date": str(report_dates[i] if i < len(report_dates) else ""),
+                "description": str(descriptions[i] if i < len(descriptions) else "").strip(),
+                "url": url,
+            })
+        return company, filings
+    except Exception as e:
+        print(f"SEC submissions error {ticker}: {e}", flush=True)
+        return company, []
+
+
 def build_sec_text(ticker, important_only=False):
     ticker = normalize_ticker(ticker)
-    items = _collect_items_safe()
-    sec_items = []
-
-    important_forms = [
+    important_forms = {
         "424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3",
         "EFFECT", "FWP", "4", "SC 13D", "SC 13G", "DEF 14A", "PRE 14A",
-        "NT 10-Q", "NT 10-K", "8-K"
-    ]
+        "NT 10-Q", "NT 10-K", "8-K", "10-Q", "10-K"
+    }
+
+    # v5.9.5.1: البحث المباشر من SEC حسب ticker/CIK بدل الاعتماد على آخر دورة أخبار فقط.
+    company, filings = _get_sec_submissions_for_ticker(ticker)
+
+    if company:
+        if important_only:
+            filings = [f for f in filings if f.get("form") in important_forms]
+
+        if not filings:
+            return f"""📄 SEC — {ticker}
+
+الشركة: {company.get('title', ticker)}
+CIK: {company.get('cik', 'غير معروف')}
+
+لا توجد إفصاحات SEC مهمة مطابقة ضمن آخر الإفصاحات الأخيرة."""
+
+        title = company.get("title", ticker)
+        cik = company.get("cik", "")
+        lines = [
+            f"📄 SEC — {ticker}",
+            f"الشركة: {title}",
+            f"CIK: {cik}",
+            "",
+            "آخر الإفصاحات:" if not important_only else "الإفصاحات المهمة:",
+        ]
+
+        for f in filings[:7]:
+            form = f.get("form", "")
+            filing_date = f.get("filing_date", "") or "تاريخ غير معروف"
+            report_date = f.get("report_date", "")
+            desc = f.get("description", "")
+            url = f.get("url", "")
+
+            note = ""
+            if form in {"424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3", "EFFECT", "FWP"}:
+                note = "\n⚠️ ملاحظة: راقب احتمال طرح/تخفيف أو تفعيل تسجيل حسب تفاصيل الإفصاح."
+            elif form == "4":
+                note = "\nℹ️ ملاحظة: Form 4 يحتاج تمييز شراء داخلي فعلي من بيع/منح." 
+            elif form in {"10-Q", "10-K", "8-K"}:
+                note = "\nℹ️ ملاحظة: راقب البنود المهمة داخل الإفصاح."
+
+            item_text = f"• {form} | تاريخ الإيداع: {filing_date}"
+            if report_date:
+                item_text += f" | فترة التقرير: {report_date}"
+            if desc:
+                item_text += f"\n{desc}"
+            if url:
+                item_text += f"\n{url}"
+            item_text += note
+            lines.append(item_text)
+
+        return "\n\n".join(lines)
+
+    # fallback: لو لم نجد ticker في SEC mapping، نستخدم آخر بيانات البوت الحالية.
+    items = _collect_items_safe()
+    sec_items = []
 
     for item in items:
         source = str(item.get("source", ""))
@@ -498,7 +648,7 @@ def build_sec_text(ticker, important_only=False):
         sec_items.append(item)
 
     if not sec_items:
-        return f"📄 SEC — {ticker}\n\nلا توجد إفصاحات SEC مطابقة الآن ضمن البيانات الحالية."
+        return f"📄 SEC — {ticker}\n\nلم أجد السهم في خريطة SEC الرسمية، ولا توجد إفصاحات مطابقة ضمن بيانات البوت الحالية."
 
     lines = [f"📄 SEC — {ticker}", ""]
     for item in sec_items[:5]:
@@ -509,7 +659,6 @@ def build_sec_text(ticker, important_only=False):
         lines.append(f"• {form} | {age}\n{title}\n{url}")
 
     return "\n\n".join(lines)
-
 
 def build_news_summary_text(ticker):
     ticker = normalize_ticker(ticker)
