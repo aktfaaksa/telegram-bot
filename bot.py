@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5.6 After-hours SEC Quiet Mode + Report Polish
+# AlphaBot Pro v5.9.5.7 Market Pulse Display Fix
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5.6 After-hours SEC Quiet Mode + Report Polish"
+VERSION = "v5.9.5.7 Market Pulse Display Fix"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -438,7 +438,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.5:
+وضع التكلفة v5.9.5.7:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -1390,7 +1390,7 @@ def sort_and_filter_news_items(news_items):
         reverse=True
     )
 
-    print(f"v5.9.5.6 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
+    print(f"v5.9.5.7 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
 
     for i, item in enumerate(prioritized[:10], start=1):
         print(
@@ -2597,7 +2597,7 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.5.6: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.5.7: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
@@ -2843,19 +2843,79 @@ def get_stock_quote(ticker):
 
 
 def price_text_from_quote(quote):
+    """
+    v5.9.5.7 Market Pulse Display Fix
+    يعرض السعر والنسبة دائمًا بصيغة واضحة للجوال:
+    $3.47 | صعود +7.10%
+    $11.22 | هبوط -8.72%
+    ويمنع ظهور رقم النسبة بدون % أو بدون كلمة صعود/هبوط.
+    """
     if not quote or quote.get("price") is None:
-        return "غير معروف"
+        return "السعر غير معروف | التغير غير معروف"
 
-    price = quote.get("price")
-    change_percent = quote.get("change_percent", 0)
-    sign = "+" if change_percent > 0 else ""
+    try:
+        price = float(quote.get("price") or 0)
+    except Exception:
+        price = 0.0
 
-    if price < 0.01:
+    try:
+        change_percent = float(quote.get("change_percent") or 0)
+    except Exception:
+        change_percent = 0.0
+
+    if price < 0.01 and price > 0:
         price_text = f"${price:.6f}"
     else:
         price_text = f"${price:.2f}"
 
-    return f"{price_text} | {sign}{change_percent:.2f}%"
+    if change_percent > 0:
+        change_text = f"صعود +{change_percent:.2f}%"
+    elif change_percent < 0:
+        change_text = f"هبوط {change_percent:.2f}%"
+    else:
+        change_text = "ثبات 0.00%"
+
+    return f"{price_text} | {change_text}"
+
+
+def watchlist_mobile_line(data, include_reason=False, include_decision=False):
+    """سطر مختصر وموحد لعرض القائمة/Market Pulse على الجوال."""
+    line = f"{data['ticker']}: {data['status']} — {data['price_text']}"
+
+    if include_reason and data.get("reason"):
+        line += f" | {data['reason']}"
+
+    if include_decision and data.get("decision"):
+        line += f"\nالقرار: {data['decision']}"
+
+    return line
+
+
+def market_pulse_change_line(ch):
+    """
+    v5.9.5.7: صيغة موحدة لتغيرات Market Pulse.
+    تمنع ظهور رقم التغير منفردًا، وتعرض السعر/النسبة أو سبب الخروج من الخطر بشكل واضح.
+    """
+    price_text = ch.get("price_text") or "السعر غير معروف | التغير غير معروف"
+    reason = clean_text(ch.get("reason", ""))
+
+    # عند الخروج من الخطر اللحظي، السبب أهم من نسبة التغير اللحظية.
+    if ch.get("old") == STATUS_RISK and ch.get("new") == STATUS_NEUTRAL:
+        try:
+            price_only = price_text.split("|")[0].strip()
+        except Exception:
+            price_only = price_text
+        return f"{ch['ticker']}: {ch['new']} — {price_only} | خرج من الخطر اللحظي"
+
+    return f"{ch['ticker']}: {ch['new']} — {price_text}"
+
+
+def is_opportunity_status(status):
+    return status in [STATUS_MOMENTUM, STATUS_OPPORTUNITY, STATUS_POSITION, STATUS_WAIT]
+
+
+def is_warning_status(status):
+    return status in [STATUS_RISK, STATUS_WARNING]
 
 
 def get_latest_ticker_context(state, ticker):
@@ -2917,19 +2977,19 @@ def classify_watchlist_ticker(ticker, state=None):
 
         elif dp >= 20:
             status = STATUS_WARNING
-            reason = f"ارتفاع قوي جدًا {dp:.2f}% — احتمال مطاردة مرتفع"
+            reason = f"صعود قوي جدًا +{dp:.2f}% — احتمال مطاردة مرتفع"
             decision = "لا تطارد؛ انتظر تهدئة أو رجوع لمستوى دعم"
             alert_type = "do_not_chase"
 
         elif dp >= 10:
             status = STATUS_MOMENTUM
-            reason = f"زخم سعري قوي {dp:.2f}%"
+            reason = f"زخم سعري قوي +{dp:.2f}%"
             decision = "مراقبة فقط؛ الدخول لا يكون إلا مع ثبات وفوليوم"
             alert_type = "momentum"
 
         elif dp >= 4 and status not in [STATUS_RISK, STATUS_WARNING, STATUS_POSITION]:
             status = STATUS_OPPORTUNITY
-            reason = f"تحسن سعري واضح {dp:.2f}%"
+            reason = f"تحسن سعري واضح +{dp:.2f}%"
             decision = "فرصة مراقبة بشرط استمرار الزخم"
             alert_type = "opportunity"
 
@@ -2989,11 +3049,12 @@ def build_watchlist_section(state, compact=False):
         data = classify_watchlist_ticker(ticker, state=state)
 
         if compact:
-            lines.append(f"{ticker}: {data['status']} — {data['reason']}")
+            # v5.9.5.7: حتى التقرير المختصر يعرض السعر والنسبة بوضوح.
+            lines.append(watchlist_mobile_line(data, include_reason=True))
         else:
             lines.append(
-                f"{i}) {ticker} — {data['status']}\n"
-                f"آخر سعر متاح: {data['price_text']}\n"
+                f"{i}) {data['ticker']} — {data['status']}\n"
+                f"السعر/التغير: {data['price_text']}\n"
                 f"السبب: {data['reason']}\n"
                 f"المستويات: {data['levels']}\n"
                 f"القرار: {data['decision']}"
@@ -3002,14 +3063,14 @@ def build_watchlist_section(state, compact=False):
     return lines
 
 
-def get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=True):
+def get_all_watchlist_ideas(state):
     priority = {
         STATUS_MOMENTUM: 1,
         STATUS_OPPORTUNITY: 2,
         STATUS_POSITION: 3,
-        STATUS_RISK: 4,
-        STATUS_WARNING: 5,
-        STATUS_WAIT: 6,
+        STATUS_WAIT: 4,
+        STATUS_RISK: 5,
+        STATUS_WARNING: 6,
         STATUS_NEUTRAL: 99,
     }
     ideas = []
@@ -3019,7 +3080,15 @@ def get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=True):
         ideas.append(data)
 
     ideas.sort(key=lambda x: priority.get(x.get("status"), 99))
+    return ideas
+
+
+def get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=True, include_warnings=True):
+    ideas = get_all_watchlist_ideas(state)
     active = [x for x in ideas if x.get("status") != STATUS_NEUTRAL]
+
+    if not include_warnings:
+        active = [x for x in active if not is_warning_status(x.get("status"))]
 
     if active:
         return active[:limit]
@@ -3030,17 +3099,36 @@ def get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=True):
     return []
 
 
+def get_top_opportunities_and_warnings(state, limit_opportunities=3, limit_warnings=3):
+    ideas = get_all_watchlist_ideas(state)
+    opportunities = [x for x in ideas if is_opportunity_status(x.get("status"))]
+    warnings = [x for x in ideas if is_warning_status(x.get("status"))]
+    return opportunities[:limit_opportunities], warnings[:limit_warnings]
+
+
 def build_tomorrow_plan(state):
     lines = ["📌 خطة الغد المختصرة"]
-    active = get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=False)
+    opportunities, warnings = get_top_opportunities_and_warnings(state, limit_opportunities=3, limit_warnings=3)
 
-    if active:
-        for data in active:
+    if opportunities:
+        lines.append("🔥 للمتابعة:")
+        for data in opportunities:
             lines.append(
-                f"{data['ticker']}: {data['status']}\n"
+                f"{data['ticker']}: {data['status']} — {data['price_text']}\n"
                 f"المستويات: {data['levels']}\n"
                 f"الخطة: {data['decision']}"
             )
+
+    if warnings:
+        lines.append("⚠️ تحذيرات:")
+        for data in warnings:
+            lines.append(
+                f"{data['ticker']}: {data['status']} — {data['price_text']}\n"
+                f"المستويات: {data['levels']}\n"
+                f"الخطة: {data['decision']}"
+            )
+
+    if opportunities or warnings:
         neutral_count = 0
         for ticker in sorted(load_watchlist_symbols()):
             d = classify_watchlist_ticker(ticker, state=state)
@@ -3055,18 +3143,34 @@ def build_tomorrow_plan(state):
 
 
 def build_top_watchlist_section(state, limit=3):
-    lines = ["🔥 أهم 3 للمتابعة الآن"]
-    top = get_top_watchlist_ideas(state, limit=limit, include_neutral_if_empty=False)
+    opportunities, warnings = get_top_opportunities_and_warnings(
+        state,
+        limit_opportunities=limit,
+        limit_warnings=limit,
+    )
 
-    if not top:
-        lines.append("لا يوجد سهم بإشارة قوية حاليًا.")
-        return lines
+    lines = ["🔥 أهم الفرص/المتابعة:"]
 
-    for i, data in enumerate(top, start=1):
-        lines.append(f"{i}) {data['ticker']} — {data['status']} | {data['decision']}")
+    if opportunities:
+        for i, data in enumerate(opportunities, start=1):
+            lines.append(
+                f"{i}) {data['ticker']} — {data['status']} — {data['price_text']}\n"
+                f"القرار: {data['decision']}"
+            )
+    else:
+        lines.append("لا يوجد سهم بفرصة/متابعة قوية حاليًا.")
 
-    if len(top) < limit:
-        lines.append(f"{len(top) + 1}) لا يوجد سهم إضافي بإشارة قوية")
+    lines.append("")
+    lines.append("⚠️ أهم التحذيرات:")
+
+    if warnings:
+        for data in warnings:
+            lines.append(
+                f"{data['ticker']} — {data['status']} — {data['price_text']}\n"
+                f"القرار: {data['decision']}"
+            )
+    else:
+        lines.append("لا توجد تحذيرات قوية حاليًا.")
 
     return lines
 
@@ -3090,7 +3194,7 @@ def build_after_hours_news_report(report_title, state, scheduled_hhmm=None):
 
     for ticker in sorted(load_watchlist_symbols()):
         data = classify_watchlist_ticker(ticker, state=state)
-        lines.append(f"{ticker}: {data['status']} — {data['reason']}")
+        lines.append(watchlist_mobile_line(data, include_reason=True))
 
     lines.extend(["", *build_top_watchlist_section(state, limit=3)])
     lines.extend([
@@ -3262,6 +3366,7 @@ def detect_watchlist_changes(state):
                 "reason": reason,
                 "decision": decision,
                 "levels": data["levels"],
+                "price_text": data.get("price_text", "السعر غير معروف | التغير غير معروف"),
             })
 
         # أول تشغيل: نحفظ الحالة ولا نرسل تنبيه تغير حتى لا يزعجك برسالة طويلة.
@@ -3284,19 +3389,28 @@ def build_market_pulse_message(changes, state):
 
     for ch in changes[:5]:
         lines.append(
-            f"{ch['ticker']}\n"
-            f"من: {ch['old']}\n"
-            f"إلى: {ch['new']}\n"
+            f"{market_pulse_change_line(ch)}\n"
+            f"من: {ch['old']} → إلى: {ch['new']}\n"
             f"السبب: {ch['reason']}\n"
             f"المستويات: {ch['levels']}\n"
             f"القرار: {ch['decision']}"
         )
 
-    top = get_top_watchlist_ideas(state, limit=3)
-    if top:
-        lines.extend(["", "🔥 أهم 3 الآن:"])
-        for i, data in enumerate(top, start=1):
-            lines.append(f"{i}) {data['ticker']} — {data['status']}")
+    opportunities, warnings = get_top_opportunities_and_warnings(state, limit_opportunities=3, limit_warnings=3)
+
+    lines.extend(["", "🔥 أهم الفرص/المتابعة:"])
+    if opportunities:
+        for i, data in enumerate(opportunities, start=1):
+            lines.append(f"{i}) {data['ticker']} — {data['status']} — {data['price_text']}")
+    else:
+        lines.append("لا توجد فرصة/متابعة قوية الآن.")
+
+    lines.extend(["", "⚠️ أهم التحذيرات:"])
+    if warnings:
+        for data in warnings:
+            lines.append(f"{data['ticker']} — {data['status']} — {data['price_text']}")
+    else:
+        lines.append("لا توجد تحذيرات قوية الآن.")
 
     return "\n\n".join(lines)
 
