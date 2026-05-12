@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5.4 Smart Radar Filter + Alert Context
+# AlphaBot Pro v5.9.5.6 After-hours SEC Quiet Mode + Report Polish
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -26,7 +26,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5.5 Smart Cleanup"
+VERSION = "v5.9.5.6 After-hours SEC Quiet Mode + Report Polish"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -99,6 +99,18 @@ REPORT_TIMES_KSA = {
 # لذلك نسمح بإرسال التقرير خلال نافذة قصيرة بعد وقته، مرة واحدة فقط يوميًا.
 REPORT_SEND_WINDOW_MINUTES = int(os.getenv("REPORT_SEND_WINDOW_MINUTES", "20"))
 MARKET_PULSE_WINDOW_MINUTES = int(os.getenv("MARKET_PULSE_WINDOW_MINUTES", "5"))
+
+# v5.9.5.6 Cleanup / Quiet Mode settings
+MARKET_PULSE_SKIP_AFTER_REPORT_MINUTES = int(os.getenv("MARKET_PULSE_SKIP_AFTER_REPORT_MINUTES", "10"))
+AFTER_HOURS_QUIET_ENABLED = os.getenv("AFTER_HOURS_QUIET_ENABLED", "true").lower() == "true"
+AFTER_HOURS_QUIET_START_KSA = os.getenv("AFTER_HOURS_QUIET_START_KSA", "23:45")
+AFTER_HOURS_QUIET_END_KSA = os.getenv("AFTER_HOURS_QUIET_END_KSA", "09:00")
+
+# Smart Radar price tiers
+RADAR_STRONG_LOW_PRICE_MAX = float(os.getenv("RADAR_STRONG_LOW_PRICE_MAX", "5.0"))
+RADAR_GOOD_PRICE_MAX = float(os.getenv("RADAR_GOOD_PRICE_MAX", "10.0"))
+RADAR_MAX_LOW_PRICE = float(os.getenv("RADAR_MAX_LOW_PRICE", "30.0"))
+
 
 STATUS_OPPORTUNITY = "🟢 فرصة مراقبة"
 STATUS_MOMENTUM = "🔥 زخم قوي"
@@ -436,6 +448,7 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ تقارير ثابتة بتوقيت السعودية
 ✅ ألوان الحالات مفعلة
 ✅ تخفيض/تجاهل أخبار مكاتب المحاماة الضعيفة
+✅ After-hours SEC Quiet Mode لتقليل ضوضاء SEC بعد الإغلاق
 ✅ Gemini 2.5 Flash Lite أساسي
 ✅ GPT-4o-mini احتياطي
 ✅ Claude غير مستخدم
@@ -1377,7 +1390,7 @@ def sort_and_filter_news_items(news_items):
         reverse=True
     )
 
-    print(f"v5.9.5 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
+    print(f"v5.9.5.6 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
 
     for i, item in enumerate(prioritized[:10], start=1):
         print(
@@ -2033,7 +2046,7 @@ def resolve_final_ticker(item, analysis):
     if official:
         return official
 
-    # v5.9.5.5: إذا العنوان يحتوي رمزًا واضحًا مثل (IBRX) فهو أوثق من تخمين AI.
+    # v5.9.5.6: إذا العنوان يحتوي رمزًا واضحًا مثل (IBRX) فهو أوثق من تخمين AI.
     title_ticker = extract_parenthetical_ticker_from_title(item.get("title", ""))
     if title_ticker:
         return title_ticker
@@ -2093,7 +2106,7 @@ def text_has_strong_opportunity_words(item):
 
 def text_has_positive_catalyst_words(item):
     """
-    v5.9.5.5 Positive Catalyst Boost:
+    v5.9.5.6 Positive Catalyst Boost:
     يحافظ على فرص مثل CLIK: سعر منخفض + رمز مؤكد + خبر إيجابي واضح.
     """
     text_l = clean_text_for_priority(item)
@@ -2156,6 +2169,96 @@ def is_debt_only_sec_item(item):
         "resale", "selling stockholder", "selling stockholders", "equity"
     ]
     return any(w in text_l for w in debt_words) and not any(w in text_l for w in equity_or_convertible_words)
+def is_after_hours_quiet_time_ksa(hhmm=None):
+    """
+    وضع الهدوء الليلي: بعد الإغلاق وحتى الصباح، نخفف SEC خارج القائمة.
+    يدعم نطاق يعبر منتصف الليل مثل 23:45 -> 09:00.
+    """
+    if not AFTER_HOURS_QUIET_ENABLED:
+        return False
+    hhmm = hhmm or current_ksa_time_hhmm()
+    start = AFTER_HOURS_QUIET_START_KSA
+    end = AFTER_HOURS_QUIET_END_KSA
+    if start <= end:
+        return start <= hhmm < end
+    return hhmm >= start or hhmm < end
+
+
+def sec_text_has_equity_or_convertible_terms(item):
+    text_l = clean_text_for_priority(item)
+    terms = [
+        "common stock", "ordinary shares", "class a common", "class b common",
+        "resale", "selling stockholder", "selling stockholders",
+        "warrant", "warrants", "units", "ads", "american depositary shares",
+        "registered direct", "private placement", "at-the-market", "atm offering", "atm program",
+        "convertible", "convertible notes", "convertible senior notes",
+    ]
+    return any(t in text_l for t in terms)
+
+
+def is_generic_registration_or_supplement(item):
+    """
+    S-3ASR/F-3/S-3/424B3 العامة أو supplement بدون طرح أسهم واضح تعتبر ضوضاء خارج القائمة، خصوصًا بعد الإغلاق.
+    """
+    form = get_sec_form_from_item(item)
+    text_l = clean_text_for_priority(item)
+    generic_words = [
+        "shelf registration", "automatic shelf", "s-3asr", "prospectus supplement",
+        "supplement no", "supplemental prospectus", "updates and supplements",
+        "updates, amends and supplements", "base prospectus",
+    ]
+    return form in ["S-3", "F-3", "424B3"] and any(w in text_l for w in generic_words) and not sec_text_has_equity_or_convertible_terms(item)
+
+
+def after_hours_sec_quiet_filter_ok(item, analysis, ticker, price, category, direction, score):
+    """
+    v5.9.5.6:
+    بعد الإغلاق، خارج القائمة، لا نرسل إلا SEC الواضح والمهم.
+    الهدف تقليل زحمة 12-2 صباحًا بدون فقد التحذيرات الجوهرية.
+    """
+    if not is_after_hours_quiet_time_ksa():
+        return True, "not quiet hours"
+    if not is_sec_source(item.get("source", "")):
+        return True, "not SEC"
+    if is_watchlist_symbol(ticker):
+        return True, "watchlist ticker"
+
+    form = get_sec_form_from_item(item)
+    category_n = normalize_category(category)
+
+    # مسموح دائمًا تقريبًا لأنه تحذير/إشارة مهمة.
+    if category_n in ["Late Filing", "Nasdaq Compliance", "Proxy / Vote", "M&A", "Bankruptcy"]:
+        return True, "quiet-hours important SEC category"
+
+    # Form 4 لا يصل أصلًا إلا مع شراء داخلي واضح حسب فلتر سابق.
+    if form == "4":
+        return True, "quiet-hours insider purchase"
+
+    # طرح أسهم/تخفيف واضح.
+    if form in ["424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3", "EFFECT", "FWP"]:
+        if is_debt_only_sec_item(item):
+            return False, "quiet-hours debt-only SEC suppressed"
+        if is_generic_registration_or_supplement(item) and score < 8:
+            return False, "quiet-hours generic registration/supplement suppressed"
+        if sec_text_has_equity_or_convertible_terms(item):
+            # فوق 30$ خارج القائمة نحتاج قوة أعلى إلا إذا هو common/convertible واضح وقوي.
+            try:
+                p = float(price) if price is not None else None
+            except Exception:
+                p = None
+            if p is not None and p > LOW_PRICE_MAX and score < 8:
+                return False, "quiet-hours high-price SEC below 8/10 suppressed"
+            return True, "quiet-hours equity/convertible SEC"
+        # نماذج تسجيل بدون كلمات تخفيف واضحة بعد الإغلاق = غالبًا ضوضاء.
+        return False, "quiet-hours SEC lacks equity/convertible terms"
+
+    # 8-K العادي بعد الإغلاق خارج القائمة لا يمر إلا إذا قوي جدًا.
+    if form == "8-K":
+        if category_n in ["Offering / Prospectus", "M&A", "Nasdaq Compliance"] and score >= 8:
+            return True, "quiet-hours strong 8-K"
+        return False, "quiet-hours outside-watchlist 8-K suppressed"
+
+    return False, "quiet-hours SEC suppressed"
 
 
 def ksa_time_label_ar(dt=None):
@@ -2223,6 +2326,7 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
     - لا يضيق على أسهم القائمة.
     - يحافظ على فرص مثل CLIK: رمز مؤكد + سعر منخفض + خبر إيجابي واضح.
     - يمنع الضوضاء: 8-K محايد، سعر غير معروف، رمز غير واضح، أو خبر غير أمريكي مرتبط غلط.
+    - v5.9.5.6: يضيف وضع هدوء SEC بعد الإغلاق.
     """
     ticker = normalize_common_ticker(ticker)
     source_name = item.get("source", "")
@@ -2244,12 +2348,11 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
             return False, f"outside watchlist ticker mismatch title={title_ticker} extracted={ticker}"
         return False, f"outside watchlist non-SEC ticker not officially confirmed: {ticker}"
 
-    # v5.9.5.5: أخبار مكاتب المحاماة خارج القائمة غالبًا ضوضاء، حتى لو فيها lawsuit.
+    # أخبار مكاتب المحاماة خارج القائمة غالبًا ضوضاء، حتى لو فيها lawsuit.
     if not is_sec_source(source_name) and is_law_firm_noise_item(item):
         title_ticker = extract_parenthetical_ticker_from_title(item.get("title", ""))
         if title_ticker and title_ticker != ticker:
             return False, f"law-firm ticker mismatch title={title_ticker} extracted={ticker}"
-        # لا نرسل خارج القائمة إلا إذا كان معها محفز رسمي/تشغيلي قوي جدًا، وليس مجرد مكتب محاماة.
         if not (score >= 9 and text_has_positive_catalyst_words(item)):
             return False, "outside watchlist law-firm/investor-alert noise"
 
@@ -2259,13 +2362,17 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
             return True, "very important SEC with unknown price"
         return False, "outside watchlist with unknown price"
 
-    # SEC خارج القائمة: امنع 8-K / نتائج مالية محايدة بقوة منخفضة.
+    # SEC خارج القائمة: تنظيف عام + وضع الهدوء بعد الإغلاق.
     if is_sec_source(source_name):
-        if is_debt_only_sec_item(item) and score <= 6:
+        quiet_ok, quiet_reason = after_hours_sec_quiet_filter_ok(item, analysis, ticker, price, category, direction, score)
+        if not quiet_ok:
+            return False, quiet_reason
+
+        if is_debt_only_sec_item(item) and score < 8:
             return False, "outside watchlist debt-only SEC noise"
 
-        if form in ["FWP", "424B3", "424B5", "424B4"] and is_debt_only_sec_item(item) and score < 8:
-            return False, "outside watchlist debt-only prospectus below 8/10"
+        if is_generic_registration_or_supplement(item) and score < 8:
+            return False, "outside watchlist generic registration/supplement noise"
 
         if form == "8-K" and category_is_financial_results(category):
             if direction != "إيجابي" or score < 8:
@@ -2273,6 +2380,14 @@ def smart_radar_filter_ok(item, analysis, ticker, price, category, direction, sc
 
         if direction in ["محايد", "مختلط", "غير واضح"] and score < 8 and not category_is_urgent_or_high_signal(category):
             return False, "outside watchlist neutral SEC below 8/10"
+
+        # الأسهم/الشركات فوق 30$ خارج القائمة تحتاج خبر أقوى، حتى لا تتحول الرادارات لأسهم كبيرة.
+        try:
+            p = float(price) if price is not None else None
+        except Exception:
+            p = None
+        if p is not None and p > LOW_PRICE_MAX and score < 8:
+            return False, "outside watchlist high-price SEC below 8/10"
 
         return True, "important SEC passed smart radar"
 
@@ -2482,7 +2597,7 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.5.5: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.5.6: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
@@ -2847,12 +2962,18 @@ def classify_watchlist_ticker(ticker, state=None):
     }
 
 
-def build_market_summary_line():
-    # المرحلة الأولى الآمنة: لا نضيف API جديد للمؤشرات حتى لا نرفع التعقيد.
-    # يمكن لاحقًا ربط Nasdaq/S&P/Dow/VIX من مصدر أسعار مستقل.
+def build_market_summary_line(scheduled_hhmm=None):
+    """
+    وصف مختصر لحالة المرحلة الزمنية. مؤشرات السوق الفعلية ستأتي لاحقًا في v5.9.6.
+    """
+    hhmm = scheduled_hhmm or current_ksa_time_hhmm()
+    if hhmm in ["23:30", "23:45"] or hhmm >= "23:00":
+        return "بعد الإغلاق — التركيز على أخبار After-hours، إفصاحات SEC، وأي حركة غير طبيعية بعد السوق."
     if is_market_time_ksa():
         return "السوق مفتوح الآن — استخدم Nasdaq / S&P / VIX كفلتر للحذر قبل الدخول."
-    return "خارج وقت السوق الرسمي — التركيز على البري ماركت/الأخبار/SEC حسب وقت التقرير."
+    if hhmm < MARKET_OPEN_KSA:
+        return "قبل الافتتاح — التركيز على البري ماركت، الأخبار، وإفصاحات SEC."
+    return "خارج وقت السوق الرسمي — التركيز على الأخبار وإفصاحات SEC."
 
 
 def build_watchlist_section(state, compact=False):
@@ -2881,15 +3002,15 @@ def build_watchlist_section(state, compact=False):
     return lines
 
 
-def get_top_watchlist_ideas(state, limit=3):
+def get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=True):
     priority = {
         STATUS_MOMENTUM: 1,
         STATUS_OPPORTUNITY: 2,
         STATUS_POSITION: 3,
-        STATUS_WAIT: 4,
+        STATUS_RISK: 4,
         STATUS_WARNING: 5,
-        STATUS_NEUTRAL: 6,
-        STATUS_RISK: 7,
+        STATUS_WAIT: 6,
+        STATUS_NEUTRAL: 99,
     }
     ideas = []
 
@@ -2898,53 +3019,115 @@ def get_top_watchlist_ideas(state, limit=3):
         ideas.append(data)
 
     ideas.sort(key=lambda x: priority.get(x.get("status"), 99))
-    return ideas[:limit]
+    active = [x for x in ideas if x.get("status") != STATUS_NEUTRAL]
+
+    if active:
+        return active[:limit]
+
+    if include_neutral_if_empty:
+        return ideas[:limit]
+
+    return []
 
 
 def build_tomorrow_plan(state):
     lines = ["📌 خطة الغد المختصرة"]
-    top = get_top_watchlist_ideas(state, limit=5)
+    active = get_top_watchlist_ideas(state, limit=3, include_neutral_if_empty=False)
 
-    if not top:
-        lines.append("لا توجد أسهم في القائمة الخاصة.")
-        return lines
-
-    for data in top:
-        lines.append(
-            f"{data['ticker']}: {data['status']}\n"
-            f"المستويات: {data['levels']}\n"
-            f"الخطة: {data['decision']}"
-        )
+    if active:
+        for data in active:
+            lines.append(
+                f"{data['ticker']}: {data['status']}\n"
+                f"المستويات: {data['levels']}\n"
+                f"الخطة: {data['decision']}"
+            )
+        neutral_count = 0
+        for ticker in sorted(load_watchlist_symbols()):
+            d = classify_watchlist_ticker(ticker, state=state)
+            if d.get("status") == STATUS_NEUTRAL:
+                neutral_count += 1
+        if neutral_count:
+            lines.append(f"⚪ البقية: {neutral_count} أسهم بدون إشارة قوية حاليًا.")
+    else:
+        lines.append("لا توجد إشارات قوية لخطة الغد حاليًا؛ الأفضل انتظار خبر/زخم جديد.")
 
     return lines
 
 
+def build_top_watchlist_section(state, limit=3):
+    lines = ["🔥 أهم 3 للمتابعة الآن"]
+    top = get_top_watchlist_ideas(state, limit=limit, include_neutral_if_empty=False)
+
+    if not top:
+        lines.append("لا يوجد سهم بإشارة قوية حاليًا.")
+        return lines
+
+    for i, data in enumerate(top, start=1):
+        lines.append(f"{i}) {data['ticker']} — {data['status']} | {data['decision']}")
+
+    if len(top) < limit:
+        lines.append(f"{len(top) + 1}) لا يوجد سهم إضافي بإشارة قوية")
+
+    return lines
+
+
+def build_after_hours_news_report(report_title, state, scheduled_hhmm=None):
+    """
+    تقرير 11:45 م: فحص أخبار/SEC بعد الإغلاق، وليس تكرارًا كاملاً لخطة 11:30.
+    """
+    lines = [
+        report_title,
+        f"📅 {now_ksa().strftime('%Y-%m-%d')} | 🇸🇦 توقيت السعودية",
+        "",
+        "📊 حالة السوق العامة",
+        build_market_summary_line(scheduled_hhmm),
+        "",
+        "📰 فحص بعد الإغلاق",
+        "أي خبر أو إفصاح SEC مهم بعد الإغلاق سيصل كتنبيه منفصل. هذا التقرير يراجع حالة القائمة وخطة المتابعة فقط.",
+        "",
+        "⭐ القائمة الخاصة",
+    ]
+
+    for ticker in sorted(load_watchlist_symbols()):
+        data = classify_watchlist_ticker(ticker, state=state)
+        lines.append(f"{ticker}: {data['status']} — {data['reason']}")
+
+    lines.extend(["", *build_top_watchlist_section(state, limit=3)])
+    lines.extend([
+        "",
+        "📌 متابعة الغد",
+        "راقب أي خبر بعد الإغلاق أو SEC جديد لأنه قد يغيّر خطة الغد قبل البري ماركت.",
+        "",
+        "🎨 مفتاح الألوان:",
+        "🟢 فرصة | 🔥 زخم | 🟡 انتظار | 🔴 خطر | ⚠️ تحذير | ⚪ بدون إشارة | 🔵 إدارة مركز",
+    ])
+    return "\n\n".join(lines)
 def build_scheduled_report(report_title, state, scheduled_hhmm=None):
     hhmm = scheduled_hhmm or current_ksa_time_hhmm()
-    compact = hhmm in ["19:00", "21:00", "22:45", "23:45"]
+
+    if hhmm == "23:45":
+        return build_after_hours_news_report(report_title, state, scheduled_hhmm=hhmm)
+
+    compact = hhmm in ["19:00", "21:00", "22:45"]
 
     lines = [
         report_title,
         f"📅 {now_ksa().strftime('%Y-%m-%d')} | 🇸🇦 توقيت السعودية",
         "",
         "📊 حالة السوق العامة",
-        build_market_summary_line(),
+        build_market_summary_line(hhmm),
     ]
 
     if not is_market_time_ksa():
-        lines.append("ملاحظة السعر: الأسعار المعروضة هي آخر سعر متاح من Finnhub وقد لا تمثل سعر البري ماركت الحقيقي.")
+        lines.append("ملاحظة السعر: الأسعار المعروضة هي آخر سعر متاح من Finnhub وقد لا تمثل سعر البري ماركت/After-hours الحقيقي.")
 
     lines.append("")
 
     lines.extend(build_watchlist_section(state, compact=compact))
 
-    top = get_top_watchlist_ideas(state, limit=3)
-    if top:
-        lines.extend(["", "🔥 أهم 3 للمتابعة الآن"])
-        for i, data in enumerate(top, start=1):
-            lines.append(f"{i}) {data['ticker']} — {data['status']} | {data['decision']}")
+    lines.extend(["", *build_top_watchlist_section(state, limit=3)])
 
-    if hhmm in ["23:30", "23:45"]:
+    if hhmm == "23:30":
         lines.extend(["", *build_tomorrow_plan(state)])
 
     lines.extend([
