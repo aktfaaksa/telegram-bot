@@ -1,7 +1,7 @@
-# AlphaBot Pro v5.9.5.4 Alert Context
+# AlphaBot Pro v5.9.7.1 Daily Opportunities Buttons
 # telegram_buttons.py
-# واجهة أزرار مختصرة: 6 أزرار رئيسية + قوائم فرعية منظمة
-# متوافق مع AlphaBot v5.9.5 Scheduled Reports + Smart Alerts
+# واجهة أزرار مختصرة + زر فرص اليوم + قوائم فرعية منظمة
+# متوافق مع AlphaBot v5.9.7 Daily Opportunities Manual Mode
 # يعمل بنظام getUpdates داخل Thread مستقل حتى لا يؤثر على دورة الأخبار الرئيسية.
 
 import json
@@ -31,6 +31,7 @@ BUTTONS_STATE_FILE = "telegram_buttons_state.json"
 ALERT_CONTEXT_FILE = "alert_context.json"
 MAX_TELEGRAM_TEXT = 3900
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "AlphaBot aktfaaksa@gmail.com")
+DAILY_OPPORTUNITIES_FILE = os.getenv("DAILY_OPPORTUNITIES_FILE", "/data/daily_opportunities.json")
 _SEC_TICKER_CACHE = None
 
 
@@ -151,6 +152,197 @@ def save_buttons_state(state):
         print(f"save_buttons_state error: {e}", flush=True)
 
 
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ksa_date_key():
+    return (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d")
+
+
+def _ensure_parent_dir(path):
+    try:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
+    except Exception as e:
+        print(f"ensure parent dir error {path}: {e}", flush=True)
+
+
+def default_daily_opportunities_data():
+    return {
+        "date": _ksa_date_key(),
+        "updated_at": _now_iso(),
+        "items": [],
+    }
+
+
+def load_daily_opportunities():
+    """
+    فرص اليوم محفوظة في Railway Volume عبر DAILY_OPPORTUNITIES_FILE.
+    هذا الملف مستقل تمامًا عن watchlist.json.
+    """
+    if not os.path.exists(DAILY_OPPORTUNITIES_FILE):
+        data = default_daily_opportunities_data()
+        save_daily_opportunities(data)
+        return data
+
+    try:
+        with open(DAILY_OPPORTUNITIES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            raise ValueError("daily opportunities data is not dict")
+
+        data.setdefault("date", _ksa_date_key())
+        data.setdefault("updated_at", _now_iso())
+        data.setdefault("items", [])
+
+        cleaned = []
+        seen = set()
+        for item in data.get("items", []):
+            if isinstance(item, str):
+                ticker = normalize_ticker(item)
+                row = {}
+            elif isinstance(item, dict):
+                ticker = normalize_ticker(item.get("ticker", ""))
+                row = dict(item)
+            else:
+                continue
+
+            if not ticker or ticker in seen:
+                continue
+
+            row["ticker"] = ticker
+            row.setdefault("status", "🟢 أولوية")
+            row.setdefault("state", "نشطة اليوم")
+            row.setdefault("reason", "مرشح من فلتر Investing Pro+ + شرعي")
+            row.setdefault("decision", "مراقبة قوية، لا مطاردة.")
+            row.setdefault("added_at", _now_iso())
+            cleaned.append(row)
+            seen.add(ticker)
+
+        data["items"] = cleaned
+        return data
+
+    except Exception as e:
+        print(f"load_daily_opportunities error: {e} | file={DAILY_OPPORTUNITIES_FILE}", flush=True)
+        data = default_daily_opportunities_data()
+        save_daily_opportunities(data)
+        return data
+
+
+def save_daily_opportunities(data):
+    try:
+        _ensure_parent_dir(DAILY_OPPORTUNITIES_FILE)
+        data["updated_at"] = _now_iso()
+        data.setdefault("date", _ksa_date_key())
+        data.setdefault("items", [])
+
+        tmp = DAILY_OPPORTUNITIES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        os.replace(tmp, DAILY_OPPORTUNITIES_FILE)
+        return True
+    except Exception as e:
+        print(f"save_daily_opportunities error: {e} | file={DAILY_OPPORTUNITIES_FILE}", flush=True)
+        return False
+
+
+def get_daily_opportunity_items():
+    return load_daily_opportunities().get("items", [])
+
+
+def is_in_daily_opportunities(ticker):
+    ticker = normalize_ticker(ticker)
+    return any(normalize_ticker(x.get("ticker", "")) == ticker for x in get_daily_opportunity_items())
+
+
+def add_daily_opportunity(ticker, status="🟢 أولوية", reason=None, decision=None, state_label="نشطة اليوم"):
+    ticker = normalize_ticker(ticker)
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+
+    data = load_daily_opportunities()
+    items = data.setdefault("items", [])
+
+    for item in items:
+        if normalize_ticker(item.get("ticker", "")) == ticker:
+            return True, f"{ticker} موجود مسبقًا في فرص اليوم"
+
+    items.append({
+        "ticker": ticker,
+        "status": status or "🟢 أولوية",
+        "state": state_label or "نشطة اليوم",
+        "reason": reason or "مرشح من فلتر Investing Pro+ + شرعي",
+        "decision": decision or "مراقبة قوية، لا مطاردة.",
+        "added_at": _now_iso(),
+    })
+
+    if not save_daily_opportunities(data):
+        return False, "تعذر حفظ فرص اليوم"
+
+    return True, f"تمت إضافة {ticker} إلى فرص اليوم"
+
+
+def remove_daily_opportunity(ticker):
+    ticker = normalize_ticker(ticker)
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+
+    data = load_daily_opportunities()
+    items = data.setdefault("items", [])
+    before = len(items)
+    data["items"] = [x for x in items if normalize_ticker(x.get("ticker", "")) != ticker]
+
+    if len(data["items"]) == before:
+        return False, f"{ticker} غير موجود في فرص اليوم"
+
+    if not save_daily_opportunities(data):
+        return False, "تعذر حفظ فرص اليوم"
+
+    return True, f"تم حذف {ticker} من فرص اليوم"
+
+
+def clear_daily_opportunities():
+    data = load_daily_opportunities()
+    count = len(data.get("items", []))
+    data["date"] = _ksa_date_key()
+    data["items"] = []
+
+    if not save_daily_opportunities(data):
+        return False, "تعذر مسح فرص اليوم"
+
+    return True, f"تم مسح فرص اليوم ({count} سهم)"
+
+
+def format_daily_opportunities_list():
+    data = load_daily_opportunities()
+    items = data.get("items", [])
+
+    if not items:
+        return "🔥 فرص اليوم من فلتر Investing Pro+\n\nلا توجد فرص يومية مضافة حاليًا."
+
+    lines = [
+        "🔥 فرص اليوم من فلتر Investing Pro+",
+        f"📅 تاريخ القائمة: {data.get('date', _ksa_date_key())}",
+        f"📌 العدد: {len(items)}",
+        "",
+    ]
+
+    for i, item in enumerate(items, start=1):
+        ticker = normalize_ticker(item.get("ticker", ""))
+        status = item.get("status", "🟢 أولوية")
+        state_label = item.get("state", "نشطة اليوم")
+        reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
+        lines.append(f"{i}. {ticker} — {status} — {state_label}\nالسبب: {reason}")
+
+    lines.append("")
+    lines.append(f"المصدر: {DAILY_OPPORTUNITIES_FILE}")
+    return "\n\n".join(lines)
+
+
 def set_mute(ticker, minutes, label):
     ticker = normalize_ticker(ticker)
     state = load_buttons_state()
@@ -183,7 +375,7 @@ def is_ticker_message(text):
 
 def main_keyboard(ticker):
     """
-    v5.9.5: ستة أزرار رئيسية فقط.
+    v5.9.7.1: الأزرار الرئيسية + زر فرص اليوم مستقل عن قائمة المراقبة.
     """
     ticker = normalize_ticker(ticker)
 
@@ -199,6 +391,9 @@ def main_keyboard(ticker):
             ],
             [
                 {"text": "⭐ مراقبة", "callback_data": f"watch_menu|{ticker}"},
+                {"text": "🔥 فرص اليوم", "callback_data": f"daily_menu|{ticker}"},
+            ],
+            [
                 {"text": "🔕 تجاهل", "callback_data": f"mute_menu|{ticker}"},
             ],
         ]
@@ -292,6 +487,49 @@ def watch_keyboard(ticker):
                 {"text": "📋 القائمة", "callback_data": "list|ALL"},
                 {"text": "⬅️ رجوع", "callback_data": f"back|{ticker}"},
             ],
+        ]
+    }
+
+
+def daily_opportunities_keyboard(ticker):
+    ticker = normalize_ticker(ticker)
+
+    if is_in_daily_opportunities(ticker):
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "➖ حذف من فرص اليوم", "callback_data": f"daily_remove|{ticker}"},
+                    {"text": "📋 فرص اليوم", "callback_data": "daily_list|ALL"},
+                ],
+                [
+                    {"text": "⬅️ رجوع", "callback_data": f"back|{ticker}"},
+                    {"text": "إلغاء", "callback_data": "cancel|ALL"},
+                ],
+            ]
+        }
+
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🧾 فحص الشرعية", "callback_data": f"daily_sharia|{ticker}"},
+                {"text": "➕ إضافة لفرص اليوم", "callback_data": f"daily_add|{ticker}"},
+            ],
+            [
+                {"text": "📋 فرص اليوم", "callback_data": "daily_list|ALL"},
+                {"text": "⬅️ رجوع", "callback_data": f"back|{ticker}"},
+            ],
+        ]
+    }
+
+
+def confirm_daily_add_keyboard(ticker):
+    ticker = normalize_ticker(ticker)
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ نعم، أضفه لفرص اليوم", "callback_data": f"confirm_daily_add|{ticker}"},
+                {"text": "إلغاء", "callback_data": "cancel|ALL"},
+            ]
         ]
     }
 
@@ -766,6 +1004,37 @@ def handle_text_message(message):
 
     clean_text = str(text or "").strip()
 
+    # أوامر فرص اليوم — مستقلة عن قائمة المراقبة الدائمة
+    parts = clean_text.split()
+    command = parts[0].lower() if parts else ""
+
+    if command == "/today_add":
+        if len(parts) < 2:
+            send_message(chat_id, "استخدم الأمر بهذا الشكل:\n/today_add SYMBOL")
+            return
+        ticker = normalize_ticker(parts[1])
+        ok, msg = add_daily_opportunity(ticker)
+        send_message(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+        return
+
+    if command == "/today_remove":
+        if len(parts) < 2:
+            send_message(chat_id, "استخدم الأمر بهذا الشكل:\n/today_remove SYMBOL")
+            return
+        ticker = normalize_ticker(parts[1])
+        ok, msg = remove_daily_opportunity(ticker)
+        send_message(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+        return
+
+    if command == "/today_list":
+        send_message(chat_id, format_daily_opportunities_list())
+        return
+
+    if command == "/today_clear":
+        ok, msg = clear_daily_opportunities()
+        send_message(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+        return
+
     # أوامر مباشرة لعرض القائمة
     if clean_text.lower() in ["/list", "list"] or clean_text in ["القائمة", "قائمة", "عرض القائمة"]:
         send_message(chat_id, format_watchlist())
@@ -846,6 +1115,69 @@ def handle_callback(callback):
 
     if action == "mute_menu":
         edit_message(chat_id, message_id, f"🔕 تجاهل {ticker}\n\nاختر مدة التجاهل:", reply_markup=mute_keyboard(ticker))
+        return
+
+    # Daily Opportunities actions
+    if action == "daily_menu":
+        exists = "موجود في فرص اليوم" if is_in_daily_opportunities(ticker) else "غير موجود في فرص اليوم"
+        msg = f"""🔥 فرص اليوم — {ticker}
+
+الحالة: {exists}
+
+هذه القائمة مستقلة عن قائمة المراقبة الدائمة.
+لا تضف السهم هنا إلا بعد فلتر Investing Pro+ وفحص الشرعية."""
+        edit_message(chat_id, message_id, msg, reply_markup=daily_opportunities_keyboard(ticker))
+        return
+
+    if action == "daily_list":
+        edit_message(chat_id, message_id, format_daily_opportunities_list(), reply_markup=back_keyboard(ticker))
+        return
+
+    if action == "daily_sharia":
+        result = check_sharia(ticker)
+        edit_message(chat_id, message_id, result.get("message", "تعذر فحص الشرعية."), reply_markup=daily_opportunities_keyboard(ticker))
+        return
+
+    if action == "daily_add":
+        result = check_sharia(ticker)
+        status = result.get("status")
+
+        if status == "non_compliant":
+            msg = f"""❌ لا يمكن إضافة {ticker} إلى فرص اليوم.
+
+السبب:
+السهم غير متوافق حسب الفحص المحفوظ.
+
+لم يتم إضافة السهم."""
+            edit_message(chat_id, message_id, msg, reply_markup=back_keyboard(ticker))
+            return
+
+        if status == "compliant":
+            msg = f"""✅ {ticker} متوافق حسب الفحص المحفوظ.
+
+هل تريد إضافته إلى فرص اليوم؟
+
+ملاحظة: لن تتم إضافته إلى قائمة المراقبة الدائمة."""
+            edit_message(chat_id, message_id, msg, reply_markup=confirm_daily_add_keyboard(ticker))
+            return
+
+        msg = f"""⚠️ شرعية {ticker} غير محسومة.
+
+حسب قاعدة فرص اليوم، لا نضيف السهم لهذا القسم إلا بعد فحص الشرعية.
+استخدم زر فحص الشرعية أو افحصه خارجيًا قبل الإضافة."""
+        edit_message(chat_id, message_id, msg, reply_markup=daily_opportunities_keyboard(ticker))
+        return
+
+    if action == "confirm_daily_add":
+        ok, msg = add_daily_opportunity(ticker)
+        icon = "✅" if ok else "⚠️"
+        edit_message(chat_id, message_id, f"{icon} {msg}\n\n{format_daily_opportunities_list()}", reply_markup=back_keyboard(ticker))
+        return
+
+    if action == "daily_remove":
+        ok, msg = remove_daily_opportunity(ticker)
+        icon = "✅" if ok else "⚠️"
+        edit_message(chat_id, message_id, f"{icon} {msg}\n\n{format_daily_opportunities_list()}", reply_markup=back_keyboard(ticker))
         return
 
     # Report sub-actions

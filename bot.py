@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7 Daily Opportunities Manual Mode
+# AlphaBot Pro v5.9.7.1 Daily Opportunities Buttons + Text Polish
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7 Daily Opportunities Manual Mode"
+VERSION = "v5.9.7.1 Daily Opportunities Buttons + Text Polish"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7:
+وضع التكلفة v5.9.7.1:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -516,6 +516,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Watchlist Volume Sync: قراءة القائمة من WATCHLIST_FILE
 ✅ Daily Opportunities Manual Mode: فرص اليوم من فلتر Investing Pro+
 ✅ أوامر فرص اليوم: /today_add /today_remove /today_list /today_clear
+✅ أزرار فرص اليوم: زر 🔥 فرص اليوم داخل بطاقة السهم
+✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
 ✅ تقارير ثابتة بتوقيت السعودية
 ✅ ألوان الحالات مفعلة
@@ -3792,9 +3794,13 @@ def build_scheduled_report(report_title, state, scheduled_hhmm=None):
 
 def build_manual_report(state):
     """
-    v5.9.6 Manual Reports:
-    تقرير عام فوري لفحص القائمة الحالية من Railway Volume مع وقت التقرير الحالي بتوقيت السعودية.
+    v5.9.7.1 Manual Report Text Polish:
+    تقرير عام فوري وخفيف لفحص القائمة الحالية وفرص اليوم مع وقت التقرير الحالي بتوقيت السعودية.
+    لا يعرض خطة الغد حتى لا يطول التقرير اليدوي؛ خطة الغد تبقى في التقارير الثابتة المناسبة.
     """
+    watchlist_count = len(load_watchlist_symbols())
+    daily_count = len(get_daily_opportunity_items())
+
     lines = [
         "🚨 تقرير يدوي — فحص القائمة الآن",
         ksa_datetime_line(),
@@ -3811,19 +3817,13 @@ def build_manual_report(state):
     lines.extend(["", *format_daily_opportunities_section(state, compact=False)])
     lines.extend(["", *build_top_watchlist_section(state, limit=3)])
 
-    # بعد الإغلاق، التقرير اليدوي يعرض أيضًا خطة مختصرة مفيدة لليوم التالي.
-    if not is_market_time_ksa():
-        lines.extend(["", *build_tomorrow_plan(state)])
-
     lines.extend([
         "",
         "⚠️ قواعد سريعة",
         "لا مطاردة بعد ارتفاع قوي. الأفضل انتظار ثبات وفوليوم أو رجوع لمنطقة دعم.",
         "",
-        "✅ فحص القائمة",
-        f"عدد أسهم القائمة الحالية: {len(load_watchlist_symbols())}",
-        f"المصدر: {WATCHLIST_FILE}",
-        f"فرص اليوم: {len(get_daily_opportunity_items())} | المصدر: {DAILY_OPPORTUNITIES_FILE}",
+        f"✅ فحص الملفات: القائمة {watchlist_count} سهم | فرص اليوم {daily_count}",
+        f"المصادر: {WATCHLIST_FILE} | {DAILY_OPPORTUNITIES_FILE}",
         "",
         "🎨 مفتاح الألوان:",
         "🟢 فرصة | 🔥 زخم | 🟡 انتظار | 🔴 خطر | ⚠️ تحذير | ⚪ بدون إشارة | 🔵 إدارة مركز",
