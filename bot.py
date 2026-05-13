@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.3 Manual Report Menu + Combined Signals
+# AlphaBot Pro v5.9.7.4 SEC On-Demand Menu + Combined Signals
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.3 Manual Report Menu + Combined Signals"
+VERSION = "v5.9.7.4 SEC On-Demand Menu + Combined Signals"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7.3:
+وضع التكلفة v5.9.7.4:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -520,6 +520,7 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ مراجعة فرص اليوم: /today_review + 🧹 مراجعة فرص اليوم
 ✅ الإضافة لفرص اليوم تعتمد على تأكيد فحص الشرعية اليدوي
 ✅ Manual Report Menu: تقرير الآن يعرض قائمة أقسام بالأزرار
+✅ SEC On-Demand Menu: فحص SEC للقائمة وخارج القائمة عند الطلب
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -3909,6 +3910,10 @@ def build_manual_report_menu_keyboard():
                 {"text": "🧾 ملخص سريع", "callback_data": "manual_section|summary"},
             ],
             [
+                {"text": "📄 SEC القائمة", "callback_data": "manual_section|sec_watchlist"},
+                {"text": "🆕 SEC خارج القائمة", "callback_data": "manual_section|sec_outside"},
+            ],
+            [
                 {"text": "🧹 مراجعة فرص اليوم", "callback_data": "manual_section|review"},
                 {"text": "📋 التقرير الكامل", "callback_data": "manual_section|full"},
             ],
@@ -4072,6 +4077,270 @@ def build_quick_summary_report(state):
     ])
 
 
+
+# =========================
+# v5.9.7.4 SEC On-Demand Menu
+# =========================
+
+SEC_ON_DEMAND_LOOKBACK_HOURS = int(os.getenv("SEC_ON_DEMAND_LOOKBACK_HOURS", "48"))
+SEC_ON_DEMAND_MAX_ITEMS = int(os.getenv("SEC_ON_DEMAND_MAX_ITEMS", "8"))
+
+
+def is_recent_for_sec_on_demand(item, hours=None):
+    hours = hours or SEC_ON_DEMAND_LOOKBACK_HOURS
+    published = item.get("published_at")
+    if not published:
+        return False
+    try:
+        if isinstance(published, str):
+            published = datetime.fromisoformat(published)
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        age = now_utc() - published
+        return timedelta(seconds=0) <= age <= timedelta(hours=hours)
+    except Exception:
+        return False
+
+
+def sec_on_demand_items():
+    """
+    يجلب SEC فقط عند الطلب. لا يستخدم AI ولا يغيّر منطق التنبيهات الأساسية.
+    """
+    try:
+        items = fetch_sec_news()
+    except Exception as e:
+        print(f"SEC on-demand fetch error: {e}", flush=True)
+        return []
+
+    recent = []
+    seen = set()
+    for item in items:
+        if not is_recent_for_sec_on_demand(item):
+            continue
+        form = get_sec_form_from_item(item)
+        ticker = normalize_common_ticker(item.get("ticker", ""))
+        key = f"{ticker}|{form}|{clean_text(item.get('title',''))[:120]}|{item.get('url','')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        recent.append(item)
+
+    recent.sort(key=lambda x: x.get("published_at") or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
+    return recent
+
+
+def sec_on_demand_importance(item, outside_watchlist=False):
+    """
+    فلتر مجاني وسريع لتمييز SEC المهم عند الطلب.
+    يرجع dict جاهز للعرض أو None إذا الإفصاح ضوضاء.
+    """
+    form = get_sec_form_from_item(item)
+    ticker = normalize_common_ticker(item.get("ticker", ""))
+    title = clean_text(item.get("title", ""))
+    url = clean_text(item.get("url", ""))
+    age = human_age(item.get("published_at"))
+    quote = get_stock_quote(ticker) if ticker else None
+    price_text = price_text_from_quote(quote)
+
+    status = "🟡 مراقبة"
+    impact = "مراقبة"
+    decision = "راجع تفاصيل الإفصاح وردة فعل السعر والفوليوم."
+    priority = 0
+
+    # Form 4: لا نعرض خارج القائمة إلا عند شراء داخلي واضح.
+    if form == "4":
+        enriched = enrich_sec_item(dict(item))
+        if form4_has_open_market_purchase(enriched.get("raw", "")):
+            status = "🟢 شراء داخلي"
+            impact = "إيجابي خفيف/متوسط"
+            decision = "رادار فقط؛ الشراء الداخلي يحتاج تأكيد حجم الصفقة والفوليوم قبل أي قرار."
+            priority = 85
+        else:
+            if outside_watchlist:
+                return None
+            status = "ℹ️ Form 4"
+            impact = "يحتاج تمييز"
+            decision = "قد يكون بيعًا/منحة/خيارات؛ لا يعتبر إيجابيًا إلا إذا كان شراء داخلي واضح."
+            priority = 35
+
+    elif form in {"424B5", "424B3", "424B4"}:
+        status = "🔴 طرح/نشرة"
+        impact = "سلبي غالبًا / تخفيف محتمل"
+        decision = "حذر؛ راقب هل الإفصاح يتضمن أسهمًا عادية أو warrants أو ATM."
+        priority = 95
+
+    elif form in {"S-1", "S-3", "F-1", "F-3", "EFFECT", "FWP"}:
+        status = "⚠️ تسجيل أوراق مالية"
+        impact = "مراقبة / احتمال تمويل أو تخفيف"
+        decision = "لا تطارد؛ راقب تفاصيل التسجيل وهل يسمح ببيع/طرح أسهم."
+        priority = 80
+
+    elif form in {"SC 13D", "SC 13G"}:
+        status = "🟡 ملكية كبيرة"
+        impact = "مراقبة"
+        decision = "قد يشير إلى دخول/تغير مالك كبير؛ يستحق متابعة بعد فحص الشرعية."
+        priority = 75
+
+    elif form in {"NT 10-Q", "NT 10-K"}:
+        status = "⚠️ تأخير تقرير"
+        impact = "سلبي/تحذيري"
+        decision = "حذر؛ تأخير التقرير قد يزيد مخاطر السهم حتى توضح الشركة السبب."
+        priority = 78
+
+    elif form in {"DEF 14A", "PRE 14A"}:
+        # غالبًا لا نعرض خارج القائمة إلا لو وجد نص مهم، والنص قد لا يكون متاحًا بدون إثراء.
+        enriched = enrich_sec_item(dict(item))
+        text_l = clean_text_for_priority(enriched)
+        if any(w in text_l for w in ["reverse split", "increase authorized", "authorized shares", "share increase"]):
+            status = "⚠️ تصويت مهم"
+            impact = "تحذيري"
+            decision = "راقب بنود reverse split أو زيادة الأسهم المصرح بها."
+            priority = 72
+        elif outside_watchlist:
+            return None
+        else:
+            status = "🟡 Proxy"
+            impact = "مراقبة"
+            decision = "راجع البنود المهمة في التصويت قبل القرار."
+            priority = 38
+
+    elif form == "8-K":
+        enriched = enrich_sec_item(dict(item))
+        text_l = clean_text_for_priority(enriched)
+        strong = any(w in text_l for w in STRONG_8K_KEYWORDS)
+        if strong:
+            status = "⚠️ 8-K مهم"
+            impact = "قد يكون مؤثرًا"
+            decision = "راجع نوع الحدث داخل 8-K وردة فعل السعر والفوليوم."
+            priority = 70
+        elif outside_watchlist:
+            return None
+        else:
+            status = "🟡 8-K"
+            impact = "مراقبة"
+            decision = "إفصاح 8-K على سهم من قائمتك؛ راجع التفاصيل إذا تحرك السعر."
+            priority = 32
+
+    elif form in {"10-Q", "10-K"}:
+        enriched = enrich_sec_item(dict(item))
+        text_l = clean_text_for_priority(enriched)
+        strong = any(w in text_l for w in STRONG_10Q_10K_KEYWORDS)
+        if strong:
+            status = "⚠️ تقرير مالي مهم"
+            impact = "تحذيري/مهم"
+            decision = "انتبه لكلمات going concern أو material weakness أو liquidity."
+            priority = 68
+        elif outside_watchlist:
+            return None
+        else:
+            status = "🟡 تقرير مالي"
+            impact = "مراقبة"
+            decision = "راجع النتائج والبنود المهمة إذا كان السهم يتحرك."
+            priority = 30
+
+    else:
+        return None
+
+    return {
+        "ticker": ticker or "NO_TICKER",
+        "form": form or "SEC",
+        "status": status,
+        "impact": impact,
+        "decision": decision,
+        "priority": priority,
+        "title": title,
+        "age": age,
+        "url": url,
+        "price_text": price_text,
+    }
+
+
+def format_sec_signal_line(signal, index=None):
+    prefix = f"{index}) " if index is not None else "• "
+    return (
+        f"{prefix}{signal['ticker']} — {signal['status']} — {signal['form']}\n"
+        f"السعر/التغير: {signal.get('price_text', 'غير متوفر')}\n"
+        f"الوقت: {signal.get('age', 'غير معروف')} | التأثير: {signal.get('impact', 'مراقبة')}\n"
+        f"العنوان: {signal.get('title', '-')}\n"
+        f"القرار: {signal.get('decision', 'مراقبة فقط')}"
+    )
+
+
+def build_sec_watchlist_report(state=None):
+    watchlist = set(load_watchlist_symbols())
+    items = sec_on_demand_items()
+    signals = []
+
+    for item in items:
+        ticker = normalize_common_ticker(item.get("ticker", ""))
+        if ticker not in watchlist:
+            continue
+        signal = sec_on_demand_importance(item, outside_watchlist=False)
+        if signal:
+            signals.append(signal)
+
+    signals.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+    signals = signals[:SEC_ON_DEMAND_MAX_ITEMS]
+
+    lines = [
+        "📄 SEC القائمة الخاصة",
+        ksa_datetime_line(),
+        "",
+        f"النطاق: آخر {SEC_ON_DEMAND_LOOKBACK_HOURS} ساعة",
+        "يعرض الإفصاحات المهمة لأسهم القائمة فقط.",
+        "",
+    ]
+
+    if not signals:
+        lines.append("لا توجد إفصاحات SEC مهمة جديدة على أسهم القائمة حاليًا.")
+    else:
+        for i, signal in enumerate(signals, start=1):
+            lines.append(format_sec_signal_line(signal, i))
+            lines.append("")
+
+    lines.extend([
+        "قاعدة: هذا فحص عند الطلب من SEC، ولا يغيّر تنبيهات SEC التلقائية.",
+        "المصدر: SEC EDGAR",
+    ])
+    return "\n".join(lines).strip()
+
+
+def build_sec_outside_report(state=None):
+    watchlist = set(load_watchlist_symbols())
+    items = sec_on_demand_items()
+    signals = []
+
+    for item in items:
+        ticker = normalize_common_ticker(item.get("ticker", ""))
+        if not ticker or ticker in watchlist:
+            continue
+        signal = sec_on_demand_importance(item, outside_watchlist=True)
+        if signal:
+            signals.append(signal)
+
+    signals.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+    signals = signals[:SEC_ON_DEMAND_MAX_ITEMS]
+
+    lines = [
+        "🆕 SEC خارج القائمة — رادار عام",
+        ksa_datetime_line(),
+        "",
+        f"النطاق: آخر {SEC_ON_DEMAND_LOOKBACK_HOURS} ساعة",
+        "يعرض فرص/تحذيرات SEC من خارج القائمة فقط بعد فلترة الضوضاء.",
+        "",
+    ]
+
+    if not signals:
+        lines.append("لا توجد فرص أو تحذيرات SEC مناسبة من خارج القائمة حاليًا.")
+    else:
+        for i, signal in enumerate(signals, start=1):
+            lines.append(format_sec_signal_line(signal, i))
+            lines.append("")
+        lines.append("ملاحظة: أي سهم خارج القائمة يظهر كرادار فقط، ولا يُضاف إلا بعد فحص الشرعية يدويًا وموافقتك.")
+
+    lines.append("المصدر: SEC EDGAR")
+    return "\n".join(lines).strip()
+
 def build_manual_report_section(section, state):
     section = str(section or "").lower()
     if section == "market":
@@ -4086,6 +4355,10 @@ def build_manual_report_section(section, state):
         return build_risks_only_report(state)
     if section == "summary":
         return build_quick_summary_report(state)
+    if section == "sec_watchlist":
+        return build_sec_watchlist_report(state)
+    if section == "sec_outside":
+        return build_sec_outside_report(state)
     if section == "review":
         return format_daily_opportunities_review()
     if section == "full":
@@ -4416,7 +4689,7 @@ def make_alert_buttons(ticker):
 
 def patch_telegram_buttons_manual_report():
     """
-    v5.9.7.3 Manual Report Menu:
+    v5.9.7.4 Manual Report Menu + SEC On-Demand:
     أمر "تقرير الآن" يعرض قائمة أقسام بالأزرار بدل إرسال التقرير الكامل مباشرة.
     كما يلتقط callbacks الخاصة بالأقسام بدون الحاجة لتغيير أساس telegram_buttons.py.
     """
