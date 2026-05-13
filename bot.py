@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.1 Daily Opportunities Buttons + Text Polish
+# AlphaBot Pro v5.9.7.2 Daily Opportunities Review + Buttons Polish
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.1 Daily Opportunities Buttons + Text Polish"
+VERSION = "v5.9.7.2 Daily Opportunities Review + Buttons Polish"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7.1:
+وضع التكلفة v5.9.7.2:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -517,6 +517,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Daily Opportunities Manual Mode: فرص اليوم من فلتر Investing Pro+
 ✅ أوامر فرص اليوم: /today_add /today_remove /today_list /today_clear
 ✅ أزرار فرص اليوم: زر 🔥 فرص اليوم داخل بطاقة السهم
+✅ مراجعة فرص اليوم: /today_review + 🧹 مراجعة فرص اليوم
+✅ الإضافة لفرص اليوم تعتمد على تأكيد فحص الشرعية اليدوي
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
 ✅ تقارير ثابتة بتوقيت السعودية
@@ -1447,6 +1449,42 @@ def format_daily_opportunities_list():
     lines.append("")
     lines.append(f"المصدر: {DAILY_OPPORTUNITIES_FILE}")
     return "\n\n".join(lines)
+
+
+def format_daily_opportunities_review():
+    data = load_daily_opportunities()
+    items = data.get("items", [])
+
+    if not items:
+        return "🔥 مراجعة فرص اليوم\n\nلا توجد فرص يومية مضافة حاليًا."
+
+    lines = [
+        "🔥 مراجعة فرص اليوم قبل البري ماركت",
+        f"📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}",
+        f"📌 العدد: {len(items)}",
+        "",
+        "الهدف: لا يبقى في فرص اليوم إلا الأسهم النشطة فقط.",
+        "",
+    ]
+
+    for i, item in enumerate(items, start=1):
+        ticker = normalize_common_ticker(item.get("ticker", ""))
+        status = item.get("status", "🟢 أولوية")
+        state_label = item.get("state", "نشطة اليوم")
+        lines.append(f"{i}) {ticker} — {status} — {state_label}")
+
+    lines.extend([
+        "",
+        "للحذف:",
+        "/today_remove SYMBOL",
+        "",
+        "لتصفير القائمة كاملة:",
+        "/today_clear",
+        "",
+        f"المصدر: {DAILY_OPPORTUNITIES_FILE}",
+    ])
+
+    return "\n".join(lines)
 
 
 def format_daily_opportunities_section(state=None, compact=False):
@@ -4161,6 +4199,10 @@ def patch_telegram_buttons_manual_report():
 
         if cmd == "/today_list":
             send_telegram_to_chat(chat_id, format_daily_opportunities_list())
+            return True
+
+        if cmd == "/today_review":
+            send_telegram_to_chat(chat_id, format_daily_opportunities_review())
             return True
 
         if cmd == "/today_clear":

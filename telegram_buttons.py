@@ -1,7 +1,7 @@
-# AlphaBot Pro v5.9.7.1 Daily Opportunities Buttons
+# AlphaBot Pro v5.9.7.2 Daily Opportunities Review + Buttons Polish
 # telegram_buttons.py
 # واجهة أزرار مختصرة + زر فرص اليوم + قوائم فرعية منظمة
-# متوافق مع AlphaBot v5.9.7 Daily Opportunities Manual Mode
+# متوافق مع AlphaBot v5.9.7.2 Daily Opportunities Review + Buttons Polish
 # يعمل بنظام getUpdates داخل Thread مستقل حتى لا يؤثر على دورة الأخبار الرئيسية.
 
 import json
@@ -343,6 +343,42 @@ def format_daily_opportunities_list():
     return "\n\n".join(lines)
 
 
+def format_daily_opportunities_review():
+    data = load_daily_opportunities()
+    items = data.get("items", [])
+
+    if not items:
+        return "🔥 مراجعة فرص اليوم\n\nلا توجد فرص يومية مضافة حاليًا."
+
+    lines = [
+        "🔥 مراجعة فرص اليوم قبل البري ماركت",
+        f"📅 تاريخ القائمة: {data.get('date', _ksa_date_key())}",
+        f"📌 العدد: {len(items)}",
+        "",
+        "الهدف: لا يبقى في فرص اليوم إلا الأسهم النشطة فقط.",
+        "",
+    ]
+
+    for i, item in enumerate(items, start=1):
+        ticker = normalize_ticker(item.get("ticker", ""))
+        status = item.get("status", "🟢 أولوية")
+        state_label = item.get("state", "نشطة اليوم")
+        lines.append(f"{i}) {ticker} — {status} — {state_label}")
+
+    lines.extend([
+        "",
+        "للحذف:",
+        "/today_remove SYMBOL",
+        "",
+        "لتصفير القائمة كاملة:",
+        "/today_clear",
+        "",
+        f"المصدر: {DAILY_OPPORTUNITIES_FILE}",
+    ])
+
+    return "\n".join(lines)
+
+
 def set_mute(ticker, minutes, label):
     ticker = normalize_ticker(ticker)
     state = load_buttons_state()
@@ -502,8 +538,8 @@ def daily_opportunities_keyboard(ticker):
                     {"text": "📋 فرص اليوم", "callback_data": "daily_list|ALL"},
                 ],
                 [
+                    {"text": "🧹 مراجعة فرص اليوم", "callback_data": "daily_review|ALL"},
                     {"text": "⬅️ رجوع", "callback_data": f"back|{ticker}"},
-                    {"text": "إلغاء", "callback_data": "cancel|ALL"},
                 ],
             ]
         }
@@ -511,23 +547,21 @@ def daily_opportunities_keyboard(ticker):
     return {
         "inline_keyboard": [
             [
-                {"text": "🧾 فحص الشرعية", "callback_data": f"daily_sharia|{ticker}"},
                 {"text": "➕ إضافة لفرص اليوم", "callback_data": f"daily_add|{ticker}"},
+                {"text": "📋 فرص اليوم", "callback_data": "daily_list|ALL"},
             ],
             [
-                {"text": "📋 فرص اليوم", "callback_data": "daily_list|ALL"},
+                {"text": "🧹 مراجعة فرص اليوم", "callback_data": "daily_review|ALL"},
                 {"text": "⬅️ رجوع", "callback_data": f"back|{ticker}"},
             ],
         ]
     }
-
-
 def confirm_daily_add_keyboard(ticker):
     ticker = normalize_ticker(ticker)
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ نعم، أضفه لفرص اليوم", "callback_data": f"confirm_daily_add|{ticker}"},
+                {"text": "✅ أؤكد وأضفه", "callback_data": f"confirm_daily_add|{ticker}"},
                 {"text": "إلغاء", "callback_data": "cancel|ALL"},
             ]
         ]
@@ -1030,6 +1064,10 @@ def handle_text_message(message):
         send_message(chat_id, format_daily_opportunities_list())
         return
 
+    if command == "/today_review":
+        send_message(chat_id, format_daily_opportunities_review())
+        return
+
     if command == "/today_clear":
         ok, msg = clear_daily_opportunities()
         send_message(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
@@ -1125,12 +1163,18 @@ def handle_callback(callback):
 الحالة: {exists}
 
 هذه القائمة مستقلة عن قائمة المراقبة الدائمة.
-لا تضف السهم هنا إلا بعد فلتر Investing Pro+ وفحص الشرعية."""
+
+⚠️ تأكيد مهم:
+الإضافة هنا تفترض أنك اخترت السهم يدويًا من فلتر Investing Pro+ وفحصت الشرعية خارج البوت."""
         edit_message(chat_id, message_id, msg, reply_markup=daily_opportunities_keyboard(ticker))
         return
 
     if action == "daily_list":
         edit_message(chat_id, message_id, format_daily_opportunities_list(), reply_markup=back_keyboard(ticker))
+        return
+
+    if action == "daily_review":
+        edit_message(chat_id, message_id, format_daily_opportunities_review(), reply_markup=back_keyboard(ticker))
         return
 
     if action == "daily_sharia":
@@ -1139,39 +1183,20 @@ def handle_callback(callback):
         return
 
     if action == "daily_add":
-        result = check_sharia(ticker)
-        status = result.get("status")
+        msg = f"""🔥 إضافة {ticker} إلى فرص اليوم؟
 
-        if status == "non_compliant":
-            msg = f"""❌ لا يمكن إضافة {ticker} إلى فرص اليوم.
+⚠️ تأكيد:
+هذه الإضافة تفترض أنك اخترت السهم يدويًا من فلتر Investing Pro+، وفحصت الشرعية خارج البوت قبل الإضافة.
 
-السبب:
-السهم غير متوافق حسب الفحص المحفوظ.
-
-لم يتم إضافة السهم."""
-            edit_message(chat_id, message_id, msg, reply_markup=back_keyboard(ticker))
-            return
-
-        if status == "compliant":
-            msg = f"""✅ {ticker} متوافق حسب الفحص المحفوظ.
-
-هل تريد إضافته إلى فرص اليوم؟
-
-ملاحظة: لن تتم إضافته إلى قائمة المراقبة الدائمة."""
-            edit_message(chat_id, message_id, msg, reply_markup=confirm_daily_add_keyboard(ticker))
-            return
-
-        msg = f"""⚠️ شرعية {ticker} غير محسومة.
-
-حسب قاعدة فرص اليوم، لا نضيف السهم لهذا القسم إلا بعد فحص الشرعية.
-استخدم زر فحص الشرعية أو افحصه خارجيًا قبل الإضافة."""
-        edit_message(chat_id, message_id, msg, reply_markup=daily_opportunities_keyboard(ticker))
+لن تتم إضافته إلى قائمة المراقبة الدائمة."""
+        edit_message(chat_id, message_id, msg, reply_markup=confirm_daily_add_keyboard(ticker))
         return
 
     if action == "confirm_daily_add":
         ok, msg = add_daily_opportunity(ticker)
         icon = "✅" if ok else "⚠️"
-        edit_message(chat_id, message_id, f"{icon} {msg}\n\n{format_daily_opportunities_list()}", reply_markup=back_keyboard(ticker))
+        note = "\n\nملاحظة: تمت الإضافة بناءً على اختيارك اليدوي بعد فلتر Investing Pro+ وفحص الشرعية."
+        edit_message(chat_id, message_id, f"{icon} {msg}{note}\n\n{format_daily_opportunities_list()}", reply_markup=back_keyboard(ticker))
         return
 
     if action == "daily_remove":
