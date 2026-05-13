@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.5.7 Market Pulse Display Fix
+# AlphaBot Pro v5.9.6 Manual Reports + Market Data Filter
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -16,8 +16,10 @@ from urllib.parse import urljoin
 
 # v5.9 Interactive Watchlist
 try:
+    import telegram_buttons as telegram_buttons_module
     from telegram_buttons import start_buttons_polling
 except Exception as e:
+    telegram_buttons_module = None
     start_buttons_polling = None
     print(f"telegram_buttons import error: {e}", flush=True)
 
@@ -26,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.5.7 Market Pulse Display Fix"
+VERSION = "v5.9.6 Manual Reports + Market Data Filter"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -37,6 +39,7 @@ OPENROUTER_PRIMARY_MODEL = os.getenv("OPENROUTER_PRIMARY_MODEL", "google/gemini-
 OPENROUTER_FALLBACK_MODEL = os.getenv("OPENROUTER_FALLBACK_MODEL", "openai/gpt-4o-mini")
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY")
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "AlphaBot aktfaaksa@gmail.com")
 
 DEFAULT_EXTRA_CHAT_IDS = [6315087880]
@@ -128,6 +131,17 @@ OWNED_TICKERS = {
 }
 
 QUOTE_CACHE = {}
+MARKET_QUOTE_CACHE = {}
+
+# v5.9.6 Market Data Filter
+MARKET_DATA_ENABLED = os.getenv("MARKET_DATA_ENABLED", "true").lower() == "true"
+MARKET_DATA_CACHE_MINUTES = int(os.getenv("MARKET_DATA_CACHE_MINUTES", "5"))
+MARKET_INDEX_SYMBOLS = [
+    {"key": "nasdaq", "name": "Nasdaq", "finnhub": os.getenv("NASDAQ_SYMBOL", "^IXIC"), "alpha": os.getenv("NASDAQ_ALPHA_SYMBOL", "IXIC"), "is_vix": False},
+    {"key": "sp500", "name": "S&P 500", "finnhub": os.getenv("SP500_SYMBOL", "^GSPC"), "alpha": os.getenv("SP500_ALPHA_SYMBOL", "SPY"), "is_vix": False},
+    {"key": "dow", "name": "Dow", "finnhub": os.getenv("DOW_SYMBOL", "^DJI"), "alpha": os.getenv("DOW_ALPHA_SYMBOL", "DIA"), "is_vix": False},
+    {"key": "vix", "name": "VIX", "finnhub": os.getenv("VIX_SYMBOL", "^VIX"), "alpha": os.getenv("VIX_ALPHA_SYMBOL", "VIXY"), "is_vix": True},
+]
 
 RSS_SOURCES = [
     {
@@ -421,6 +435,57 @@ def send_telegram(message, reply_markup=None):
             print(f"Telegram send error to {chat_id}: {e}", flush=True)
 
 
+def split_telegram_text(message, limit=3900):
+    message = str(message or "")
+    if len(message) <= limit:
+        return [message]
+
+    parts = []
+    remaining = message
+    while len(remaining) > limit:
+        cut = remaining.rfind("\n\n", 0, limit)
+        if cut == -1:
+            cut = remaining.rfind("\n", 0, limit)
+        if cut == -1 or cut < 1000:
+            cut = limit
+        parts.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+
+    if remaining:
+        parts.append(remaining)
+    return parts
+
+
+def send_telegram_to_chat(chat_id, message, reply_markup=None):
+    if not BOT_TOKEN or not chat_id:
+        return False
+
+    ok = True
+    parts = split_telegram_text(message)
+    for index, part in enumerate(parts):
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": part,
+                "disable_web_page_preview": True,
+            }
+            if reply_markup and index == len(parts) - 1:
+                payload["reply_markup"] = reply_markup
+
+            r = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json=payload,
+                timeout=15
+            )
+            if r.status_code != 200:
+                print(f"Telegram send chunk error to {chat_id}: {r.status_code} | {r.text[:200]}", flush=True)
+                ok = False
+        except Exception as e:
+            print(f"Telegram send chunk exception to {chat_id}: {e}", flush=True)
+            ok = False
+    return ok
+
+
 def startup_message():
     msg = f"""✅ AlphaBot Connected
 
@@ -438,12 +503,14 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.5.7:
+وضع التكلفة v5.9.6:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
 ✅ MAX_AI_ANALYSES_PER_CYCLE = {MAX_AI_ANALYSES_PER_CYCLE}
 ✅ Market Pulse كل 30 دقيقة وقت السوق بشرط وجود تغيير مهم
+✅ تقرير يدوي عند الطلب: تقرير الآن / التقرير العام الآن
+✅ Market Data Filter: Nasdaq / S&P 500 / Dow / VIX
 ✅ Smart Silence عند عدم وجود تغيير
 ✅ تقارير ثابتة بتوقيت السعودية
 ✅ ألوان الحالات مفعلة
@@ -2597,7 +2664,7 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.5.7: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.6: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
@@ -2844,7 +2911,7 @@ def get_stock_quote(ticker):
 
 def price_text_from_quote(quote):
     """
-    v5.9.5.7 Market Pulse Display Fix
+    v5.9.6 Manual Reports + Market Data Filter
     يعرض السعر والنسبة دائمًا بصيغة واضحة للجوال:
     $3.47 | صعود +7.10%
     $11.22 | هبوط -8.72%
@@ -3022,10 +3089,191 @@ def classify_watchlist_ticker(ticker, state=None):
     }
 
 
-def build_market_summary_line(scheduled_hhmm=None):
-    """
-    وصف مختصر لحالة المرحلة الزمنية. مؤشرات السوق الفعلية ستأتي لاحقًا في v5.9.6.
-    """
+def ksa_datetime_line():
+    dt = now_ksa()
+    return f"📅 {dt.strftime('%Y-%m-%d')} | 🕒 {ksa_time_label_ar(dt)} | 🇸🇦 توقيت السعودية"
+
+
+def get_market_quote_finnhub(symbol):
+    if not symbol or not FINNHUB_API_KEY:
+        return None
+
+    cache_key = f"finnhub:{symbol}"
+    cached = MARKET_QUOTE_CACHE.get(cache_key)
+    if cached and cached.get("time") and now_utc() - cached["time"] < timedelta(minutes=MARKET_DATA_CACHE_MINUTES):
+        return cached.get("quote")
+
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={"symbol": symbol, "token": FINNHUB_API_KEY},
+            timeout=10
+        )
+        if r.status_code != 200:
+            print(f"Market Finnhub quote error {symbol}: {r.status_code}", flush=True)
+            return None
+
+        data = r.json()
+        current = data.get("c")
+        if current is None or float(current) <= 0:
+            return None
+
+        quote = {
+            "price": float(data.get("c") or 0),
+            "change": float(data.get("d") or 0),
+            "change_percent": float(data.get("dp") or 0),
+            "source": "Finnhub",
+        }
+        MARKET_QUOTE_CACHE[cache_key] = {"quote": quote, "time": now_utc()}
+        return quote
+
+    except Exception as e:
+        print(f"get_market_quote_finnhub error {symbol}: {e}", flush=True)
+        return None
+
+
+def get_market_quote_alpha(symbol):
+    if not symbol or not ALPHA_VANTAGE_KEY:
+        return None
+
+    cache_key = f"alpha:{symbol}"
+    cached = MARKET_QUOTE_CACHE.get(cache_key)
+    if cached and cached.get("time") and now_utc() - cached["time"] < timedelta(minutes=MARKET_DATA_CACHE_MINUTES):
+        return cached.get("quote")
+
+    try:
+        r = requests.get(
+            "https://www.alphavantage.co/query",
+            params={
+                "function": "GLOBAL_QUOTE",
+                "symbol": symbol,
+                "apikey": ALPHA_VANTAGE_KEY,
+            },
+            timeout=12
+        )
+        if r.status_code != 200:
+            print(f"Market Alpha quote error {symbol}: {r.status_code}", flush=True)
+            return None
+
+        data = r.json().get("Global Quote", {})
+        price_raw = data.get("05. price")
+        change_raw = data.get("09. change")
+        percent_raw = str(data.get("10. change percent", "")).replace("%", "")
+        if not price_raw:
+            return None
+
+        quote = {
+            "price": float(price_raw),
+            "change": float(change_raw or 0),
+            "change_percent": float(percent_raw or 0),
+            "source": "Alpha Vantage",
+        }
+        MARKET_QUOTE_CACHE[cache_key] = {"quote": quote, "time": now_utc()}
+        return quote
+
+    except Exception as e:
+        print(f"get_market_quote_alpha error {symbol}: {e}", flush=True)
+        return None
+
+
+def get_market_index_quotes():
+    if not MARKET_DATA_ENABLED:
+        return []
+
+    results = []
+    for item in MARKET_INDEX_SYMBOLS:
+        quote = get_market_quote_finnhub(item.get("finnhub"))
+        if not quote:
+            quote = get_market_quote_alpha(item.get("alpha"))
+
+        if quote:
+            results.append({**item, "quote": quote})
+        else:
+            results.append({**item, "quote": None})
+
+    return results
+
+
+def format_market_index_line(item):
+    name = item.get("name", "")
+    quote = item.get("quote")
+    is_vix = bool(item.get("is_vix"))
+
+    if not quote:
+        return f"{name}: ⚪ غير متوفر حاليًا"
+
+    try:
+        dp = float(quote.get("change_percent") or 0)
+    except Exception:
+        dp = 0.0
+
+    if dp > 0:
+        direction = f"صعود +{dp:.2f}%"
+        if is_vix:
+            return f"{name}: 🔴 {direction} — الخوف أعلى"
+        return f"{name}: 🟢 {direction}"
+
+    if dp < 0:
+        direction = f"هبوط {dp:.2f}%"
+        if is_vix:
+            return f"{name}: 🟢 {direction} — الخوف أقل"
+        return f"{name}: 🔴 {direction}"
+
+    if is_vix:
+        return f"{name}: ⚪ ثبات 0.00% — الخوف مستقر"
+    return f"{name}: ⚪ ثبات 0.00%"
+
+
+def build_market_data_decision(items, scheduled_hhmm=None):
+    values = {}
+    for item in items:
+        quote = item.get("quote") or {}
+        try:
+            values[item.get("key")] = float(quote.get("change_percent") or 0)
+        except Exception:
+            values[item.get("key")] = None
+
+    nasdaq = values.get("nasdaq")
+    sp500 = values.get("sp500")
+    dow = values.get("dow")
+    vix = values.get("vix")
+
+    if nasdaq is None and sp500 is None and dow is None and vix is None:
+        return [build_market_phase_line(scheduled_hhmm)]
+
+    summary = "السوق مختلط؛ نراقب الفرص بانتقائية ولا نطارد بعد ارتفاع قوي."
+    decision = "🟡 انتقائية — الفرص القوية فقط مع خبر واضح وفوليوم."
+
+    if nasdaq is not None and sp500 is not None and vix is not None:
+        if nasdaq > 0 and sp500 > 0 and vix < 0:
+            summary = "السوق داعم؛ Nasdaq و S&P صاعدين وVIX هابط، وهذا يقوي فرص النمو والمضاربة."
+            decision = "🟢 الفرص القوية مدعومة، مع تجنب المطاردة بعد صعود حاد."
+        elif nasdaq < 0 and sp500 < 0 and vix > 0:
+            summary = "السوق ضاغط؛ Nasdaq و S&P هابطين وVIX صاعد، وهذا يرفع المخاطرة."
+            decision = "🔴 حذر عالي — لا متابعة إلا لسهم عليه محفز قوي جدًا وفوليوم واضح."
+        elif nasdaq < 0 and (vix is not None and vix < 0):
+            summary = "السوق متباين يميل للحذر؛ ضعف Nasdaq يضغط على أسهم النمو، لكن هبوط VIX يخفف الخوف."
+            decision = "🟡 راقب الفرص القوية فقط، ولا تطارد الأسهم المرتفعة بقوة."
+        elif nasdaq < 0:
+            summary = "ضعف Nasdaq يزيد الحذر خصوصًا على الأسهم الصغيرة وأسهم النمو."
+            decision = "🟡 خفف المخاطرة وانتظر ثبات السعر والفوليوم."
+        elif nasdaq > 0 and vix is not None and vix > 0:
+            summary = "Nasdaq إيجابي لكن VIX صاعد؛ يوجد دعم للسوق مع ارتفاع في الخوف."
+            decision = "🟡 مسموح متابعة الفرص، لكن وقف الخسارة والانضباط أهم."
+
+    if dow is not None and nasdaq is not None and dow > 0 and nasdaq < 0:
+        summary += " Dow أخضر مع Nasdaq أحمر يعني الميل أقرب للشركات التقليدية وليس أسهم النمو."
+
+    return [
+        "الخلاصة:",
+        summary,
+        "",
+        "تأثيره على القرار:",
+        decision,
+    ]
+
+
+def build_market_phase_line(scheduled_hhmm=None):
     hhmm = scheduled_hhmm or current_ksa_time_hhmm()
     if hhmm in ["23:30", "23:45"] or hhmm >= "23:00":
         return "بعد الإغلاق — التركيز على أخبار After-hours، إفصاحات SEC، وأي حركة غير طبيعية بعد السوق."
@@ -3034,6 +3282,21 @@ def build_market_summary_line(scheduled_hhmm=None):
     if hhmm < MARKET_OPEN_KSA:
         return "قبل الافتتاح — التركيز على البري ماركت، الأخبار، وإفصاحات SEC."
     return "خارج وقت السوق الرسمي — التركيز على الأخبار وإفصاحات SEC."
+
+
+def build_market_summary_line(scheduled_hhmm=None):
+    """
+    v5.9.6 Market Data Filter:
+    يعرض Nasdaq / S&P 500 / Dow / VIX باختصار، ويحولها إلى فلتر قرار.
+    هبوط VIX يعامل كتهدئة خوف غالبًا وليس كإشارة حمراء.
+    """
+    items = get_market_index_quotes()
+    if not items:
+        return build_market_phase_line(scheduled_hhmm)
+
+    lines = [format_market_index_line(item) for item in items]
+    lines.extend(["", *build_market_data_decision(items, scheduled_hhmm=scheduled_hhmm)])
+    return "\n".join(lines)
 
 
 def build_watchlist_section(state, compact=False):
@@ -3181,7 +3444,7 @@ def build_after_hours_news_report(report_title, state, scheduled_hhmm=None):
     """
     lines = [
         report_title,
-        f"📅 {now_ksa().strftime('%Y-%m-%d')} | 🇸🇦 توقيت السعودية",
+        ksa_datetime_line(),
         "",
         "📊 حالة السوق العامة",
         build_market_summary_line(scheduled_hhmm),
@@ -3216,7 +3479,7 @@ def build_scheduled_report(report_title, state, scheduled_hhmm=None):
 
     lines = [
         report_title,
-        f"📅 {now_ksa().strftime('%Y-%m-%d')} | 🇸🇦 توقيت السعودية",
+        ksa_datetime_line(),
         "",
         "📊 حالة السوق العامة",
         build_market_summary_line(hhmm),
@@ -3244,6 +3507,53 @@ def build_scheduled_report(report_title, state, scheduled_hhmm=None):
     ])
 
     return "\n\n".join(lines)
+
+
+def build_manual_report(state):
+    """
+    v5.9.6 Manual Reports:
+    تقرير عام فوري لفحص القائمة الحالية من Railway Volume مع وقت التقرير الحالي بتوقيت السعودية.
+    """
+    lines = [
+        "🚨 تقرير يدوي — فحص القائمة الآن",
+        ksa_datetime_line(),
+        "",
+        "📊 حالة السوق العامة",
+        build_market_summary_line(current_ksa_time_hhmm()),
+    ]
+
+    if not is_market_time_ksa():
+        lines.append("ملاحظة السعر: الأسعار المعروضة هي آخر سعر متاح من Finnhub وقد لا تمثل سعر البري ماركت/After-hours الحقيقي.")
+
+    lines.append("")
+    lines.extend(build_watchlist_section(state, compact=False))
+    lines.extend(["", *build_top_watchlist_section(state, limit=3)])
+
+    # بعد الإغلاق، التقرير اليدوي يعرض أيضًا خطة مختصرة مفيدة لليوم التالي.
+    if not is_market_time_ksa():
+        lines.extend(["", *build_tomorrow_plan(state)])
+
+    lines.extend([
+        "",
+        "⚠️ قواعد سريعة",
+        "لا مطاردة بعد ارتفاع قوي. الأفضل انتظار ثبات وفوليوم أو رجوع لمنطقة دعم.",
+        "",
+        "✅ فحص القائمة",
+        f"عدد أسهم القائمة الحالية: {len(load_watchlist_symbols())}",
+        "المصدر: watchlist.json من المسار المعتمد في WATCHLIST_FILE إذا كان مفعّلًا.",
+        "",
+        "🎨 مفتاح الألوان:",
+        "🟢 فرصة | 🔥 زخم | 🟡 انتظار | 🔴 خطر | ⚠️ تحذير | ⚪ بدون إشارة | 🔵 إدارة مركز",
+    ])
+    return "\n\n".join(lines)
+
+
+def send_manual_report_now(state=None):
+    state = state or load_state()
+    msg = build_manual_report(state)
+    send_telegram(msg)
+    print("Manual report sent", flush=True)
+    return True
 
 
 def should_send_scheduled_report(state):
@@ -3514,6 +3824,72 @@ def make_alert_buttons(ticker):
 
 
 # =========================
+# v5.9.6 Manual Report Command Hook
+# =========================
+
+def patch_telegram_buttons_manual_report():
+    """
+    يضيف أمر "تقرير الآن" بدون تعديل ملف telegram_buttons.py.
+    نستفيد من polling الموجود أصلًا في telegram_buttons، ونلتقط الأمر قبل اعتباره رمز سهم.
+    """
+    module = globals().get("telegram_buttons_module")
+    if not module:
+        return False
+
+    if getattr(module, "_manual_report_patch_applied", False):
+        return True
+
+    original_handler = getattr(module, "handle_text_message", None)
+    if not original_handler:
+        print("Manual report hook skipped: handle_text_message not found", flush=True)
+        return False
+
+    manual_commands = {
+        "تقرير الآن",
+        "تقرير الان",
+        "التقرير الآن",
+        "التقرير الان",
+        "التقرير العام الآن",
+        "التقرير العام الان",
+        "/report_now",
+        "report now",
+        "manual report",
+    }
+
+    def patched_handle_text_message(message):
+        try:
+            chat_id = message.get("chat", {}).get("id")
+            text = str(message.get("text", "") or "").strip()
+
+            if text.lower() in manual_commands or text in manual_commands:
+                allowed_fn = getattr(module, "_allowed_chat", None)
+                allowed = False
+                try:
+                    allowed = bool(allowed_fn(chat_id)) if allowed_fn else int(chat_id) in [int(x) for x in CHAT_IDS]
+                except Exception:
+                    allowed = False
+
+                if not allowed:
+                    print(f"Unauthorized manual report request ignored: {chat_id}", flush=True)
+                    return
+
+                msg = build_manual_report(load_state())
+                send_telegram_to_chat(chat_id, msg)
+                print(f"Manual report command handled for chat {chat_id}", flush=True)
+                return
+
+        except Exception as e:
+            print(f"manual report command error: {e}", flush=True)
+
+        return original_handler(message)
+
+    module.handle_text_message = patched_handle_text_message
+    module._manual_report_patch_applied = True
+    print("Manual report command hook applied: تقرير الآن", flush=True)
+    return True
+
+
+# =========================
 # 17) STARTUP CHECKS
 # =========================
 
@@ -3524,6 +3900,7 @@ def startup_checks():
     print(f"CHAT_IDS: {CHAT_IDS if CHAT_IDS else 'MISSING'}", flush=True)
     print(f"OPENROUTER_API_KEY: {'OK' if OPENROUTER_API_KEY else 'MISSING'}", flush=True)
     print(f"FINNHUB_API_KEY: {'OK' if FINNHUB_API_KEY else 'MISSING'}", flush=True)
+    print(f"ALPHA_VANTAGE_KEY: {'OK' if ALPHA_VANTAGE_KEY else 'MISSING'}", flush=True)
     print(f"SEC_USER_AGENT: {SEC_USER_AGENT}", flush=True)
     print(f"LOW_PRICE_MODE: {LOW_PRICE_MODE}", flush=True)
     print(f"LOW_PRICE_MAX: {LOW_PRICE_MAX}", flush=True)
@@ -3544,6 +3921,8 @@ def startup_checks():
     print(f"MARKET_PULSE_ENABLED: {MARKET_PULSE_ENABLED}", flush=True)
     print(f"SMART_SILENCE_ENABLED: {SMART_SILENCE_ENABLED}", flush=True)
     print("SCHEDULED_REPORTS_KSA: ON", flush=True)
+    print("MANUAL_REPORTS: ON", flush=True)
+    print(f"MARKET_DATA_FILTER: {'ON' if MARKET_DATA_ENABLED else 'OFF'}", flush=True)
     print("===================================", flush=True)
 
 
@@ -3561,15 +3940,32 @@ def run():
     # =========================
     try:
         if start_buttons_polling:
-            start_buttons_polling(
-                bot_token=BOT_TOKEN,
-                chat_ids=CHAT_IDS,
-                get_stock_price_func=get_stock_price,
-                collect_all_news_func=collect_all_news,
-                analyze_with_ai_func=analyze_with_ai,
-                normalize_common_ticker_func=normalize_common_ticker,
-                send_telegram_func=send_telegram
-            )
+            patch_telegram_buttons_manual_report()
+            button_kwargs = {
+                "bot_token": BOT_TOKEN,
+                "chat_ids": CHAT_IDS,
+                "get_stock_price_func": get_stock_price,
+                "collect_all_news_func": collect_all_news,
+                "analyze_with_ai_func": analyze_with_ai,
+                "normalize_common_ticker_func": normalize_common_ticker,
+                "send_telegram_func": send_telegram,
+            }
+
+            # v5.9.6: Hook آمن للتقرير اليدوي.
+            # إذا كان telegram_buttons.py يدعم هذه الدوال سيستخدمها، وإذا لا يدعمها لا نكسر الأزرار الحالية.
+            try:
+                import inspect
+                params = inspect.signature(start_buttons_polling).parameters
+                if "manual_report_func" in params:
+                    button_kwargs["manual_report_func"] = lambda: send_manual_report_now(load_state())
+                if "build_manual_report_func" in params:
+                    button_kwargs["build_manual_report_func"] = lambda: build_manual_report(load_state())
+                if "load_state_func" in params:
+                    button_kwargs["load_state_func"] = load_state
+            except Exception as sig_error:
+                print(f"telegram_buttons signature check error: {sig_error}", flush=True)
+
+            start_buttons_polling(**button_kwargs)
             print("Interactive Watchlist polling started", flush=True)
         else:
             print("Interactive Watchlist disabled: telegram_buttons not available", flush=True)
