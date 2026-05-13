@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.6 Manual Reports + Market Data Filter"
+VERSION = "v5.9.6.1 Watchlist Volume Sync Fix"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -64,7 +64,7 @@ TICKER_COOLDOWN_MINUTES = 45
 SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
-WATCHLIST_FILE = "watchlist.json"
+WATCHLIST_FILE = os.getenv("WATCHLIST_FILE", "watchlist.json")
 ALERT_CONTEXT_FILE = "alert_context.json"
 
 
@@ -137,10 +137,11 @@ MARKET_QUOTE_CACHE = {}
 MARKET_DATA_ENABLED = os.getenv("MARKET_DATA_ENABLED", "true").lower() == "true"
 MARKET_DATA_CACHE_MINUTES = int(os.getenv("MARKET_DATA_CACHE_MINUTES", "5"))
 MARKET_INDEX_SYMBOLS = [
-    {"key": "nasdaq", "name": "Nasdaq", "finnhub": os.getenv("NASDAQ_SYMBOL", "^IXIC"), "alpha": os.getenv("NASDAQ_ALPHA_SYMBOL", "IXIC"), "is_vix": False},
-    {"key": "sp500", "name": "S&P 500", "finnhub": os.getenv("SP500_SYMBOL", "^GSPC"), "alpha": os.getenv("SP500_ALPHA_SYMBOL", "SPY"), "is_vix": False},
-    {"key": "dow", "name": "Dow", "finnhub": os.getenv("DOW_SYMBOL", "^DJI"), "alpha": os.getenv("DOW_ALPHA_SYMBOL", "DIA"), "is_vix": False},
-    {"key": "vix", "name": "VIX", "finnhub": os.getenv("VIX_SYMBOL", "^VIX"), "alpha": os.getenv("VIX_ALPHA_SYMBOL", "VIXY"), "is_vix": True},
+    # v5.9.6.1: نحاول المؤشر المباشر أولًا، ثم ETF proxy عند عدم توفره من المزود.
+    {"key": "nasdaq", "name": "Nasdaq", "finnhub": os.getenv("NASDAQ_SYMBOL", "^IXIC,QQQ"), "alpha": os.getenv("NASDAQ_ALPHA_SYMBOL", "QQQ"), "is_vix": False},
+    {"key": "sp500", "name": "S&P 500", "finnhub": os.getenv("SP500_SYMBOL", "^GSPC,SPY"), "alpha": os.getenv("SP500_ALPHA_SYMBOL", "SPY"), "is_vix": False},
+    {"key": "dow", "name": "Dow", "finnhub": os.getenv("DOW_SYMBOL", "^DJI,DIA"), "alpha": os.getenv("DOW_ALPHA_SYMBOL", "DIA"), "is_vix": False},
+    {"key": "vix", "name": "VIX", "finnhub": os.getenv("VIX_SYMBOL", "^VIX,VIXY"), "alpha": os.getenv("VIX_ALPHA_SYMBOL", "VIXY"), "is_vix": True},
 ]
 
 RSS_SOURCES = [
@@ -503,7 +504,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.6:
+وضع التكلفة v5.9.6.1:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -511,6 +512,7 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Market Pulse كل 30 دقيقة وقت السوق بشرط وجود تغيير مهم
 ✅ تقرير يدوي عند الطلب: تقرير الآن / التقرير العام الآن
 ✅ Market Data Filter: Nasdaq / S&P 500 / Dow / VIX
+✅ Watchlist Volume Sync: قراءة القائمة من WATCHLIST_FILE
 ✅ Smart Silence عند عدم وجود تغيير
 ✅ تقارير ثابتة بتوقيت السعودية
 ✅ ألوان الحالات مفعلة
@@ -1192,43 +1194,70 @@ def normalize_category(category):
 # 7.5) WATCHLIST + v5.9.4.1 PRIORITY FILTER
 # =========================
 
-def load_watchlist_symbols():
+def _extract_watchlist_symbols_from_data(data):
     """
-    قراءة قائمة المراقبة بدون تعديل watchlist.json.
-    يدعم أكثر من صيغة محتملة للملف.
+    v5.9.6.1:
+    استخراج قائمة المراقبة من كل الصيغ المستخدمة:
+    - list مباشر
+    - {"symbols": [...]}
+    - {"watchlist": [...]} وهي صيغة watchlist_storage.py داخل Railway Volume
+    - dict مفاتيحه رموز أسهم
+    ويحافظ على ترتيب القائمة كما أضافها المستخدم.
+    """
+    symbols = []
+
+    if isinstance(data, list):
+        symbols = data
+
+    elif isinstance(data, dict):
+        if isinstance(data.get("symbols"), list):
+            symbols = data.get("symbols")
+        elif isinstance(data.get("watchlist"), list):
+            symbols = data.get("watchlist")
+        else:
+            for key, value in data.items():
+                if isinstance(value, bool) and value:
+                    symbols.append(key)
+                elif isinstance(value, dict):
+                    symbols.append(key)
+                elif isinstance(value, str):
+                    symbols.append(value)
+
+    cleaned = []
+    for t in symbols:
+        nt = normalize_common_ticker(t)
+        if nt and nt not in cleaned:
+            cleaned.append(nt)
+
+    return cleaned
+
+
+def load_watchlist_ordered_symbols():
+    """
+    قراءة قائمة المراقبة من WATCHLIST_FILE.
+    مهم: WATCHLIST_FILE يدعم Railway Volume مثل /data/watchlist.json.
     """
     if not os.path.exists(WATCHLIST_FILE):
-        return set()
+        print(f"watchlist file not found: {WATCHLIST_FILE}", flush=True)
+        return []
 
     try:
         with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        symbols = []
-
-        if isinstance(data, list):
-            symbols = data
-
-        elif isinstance(data, dict):
-            if isinstance(data.get("symbols"), list):
-                symbols = data.get("symbols")
-            elif isinstance(data.get("watchlist"), list):
-                symbols = data.get("watchlist")
-            else:
-                for key, value in data.items():
-                    if isinstance(value, bool) and value:
-                        symbols.append(key)
-                    elif isinstance(value, dict):
-                        symbols.append(key)
-                    elif isinstance(value, str):
-                        symbols.append(value)
-
-        return {normalize_common_ticker(x) for x in symbols if normalize_common_ticker(x)}
+        return _extract_watchlist_symbols_from_data(data)
 
     except Exception as e:
-        print(f"load_watchlist_symbols error: {e}", flush=True)
-        return set()
+        print(f"load_watchlist_ordered_symbols error: {e} | file={WATCHLIST_FILE}", flush=True)
+        return []
 
+
+def load_watchlist_symbols():
+    """
+    نسخة set للفلترة السريعة والعضوية.
+    التقارير تستخدم load_watchlist_ordered_symbols للحفاظ على ترتيب القائمة.
+    """
+    return set(load_watchlist_ordered_symbols())
 
 def clean_text_for_priority(item):
     parts = []
@@ -2664,7 +2693,7 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.6: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.6.1: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
@@ -3094,6 +3123,32 @@ def ksa_datetime_line():
     return f"📅 {dt.strftime('%Y-%m-%d')} | 🕒 {ksa_time_label_ar(dt)} | 🇸🇦 توقيت السعودية"
 
 
+def split_market_symbols(value):
+    """
+    يدعم متغيرات مثل NASDAQ_SYMBOL="^IXIC,QQQ" لتجربة أكثر من رمز.
+    """
+    if isinstance(value, (list, tuple)):
+        raw = value
+    else:
+        raw = str(value or "").split(",")
+
+    symbols = []
+    for item in raw:
+        sym = clean_text(item)
+        if sym and sym not in symbols:
+            symbols.append(sym)
+    return symbols
+
+
+def get_first_market_quote(symbols, provider="finnhub"):
+    for sym in split_market_symbols(symbols):
+        quote = get_market_quote_finnhub(sym) if provider == "finnhub" else get_market_quote_alpha(sym)
+        if quote:
+            quote["symbol_used"] = sym
+            return quote
+    return None
+
+
 def get_market_quote_finnhub(symbol):
     if not symbol or not FINNHUB_API_KEY:
         return None
@@ -3182,9 +3237,9 @@ def get_market_index_quotes():
 
     results = []
     for item in MARKET_INDEX_SYMBOLS:
-        quote = get_market_quote_finnhub(item.get("finnhub"))
+        quote = get_first_market_quote(item.get("finnhub"), provider="finnhub")
         if not quote:
-            quote = get_market_quote_alpha(item.get("alpha"))
+            quote = get_first_market_quote(item.get("alpha"), provider="alpha")
 
         if quote:
             results.append({**item, "quote": quote})
@@ -3300,7 +3355,7 @@ def build_market_summary_line(scheduled_hhmm=None):
 
 
 def build_watchlist_section(state, compact=False):
-    watchlist = sorted(load_watchlist_symbols())
+    watchlist = load_watchlist_ordered_symbols()
     lines = []
 
     if not watchlist:
@@ -3338,7 +3393,7 @@ def get_all_watchlist_ideas(state):
     }
     ideas = []
 
-    for ticker in sorted(load_watchlist_symbols()):
+    for ticker in load_watchlist_ordered_symbols():
         data = classify_watchlist_ticker(ticker, state=state)
         ideas.append(data)
 
@@ -3393,7 +3448,7 @@ def build_tomorrow_plan(state):
 
     if opportunities or warnings:
         neutral_count = 0
-        for ticker in sorted(load_watchlist_symbols()):
+        for ticker in load_watchlist_ordered_symbols():
             d = classify_watchlist_ticker(ticker, state=state)
             if d.get("status") == STATUS_NEUTRAL:
                 neutral_count += 1
@@ -3455,7 +3510,7 @@ def build_after_hours_news_report(report_title, state, scheduled_hhmm=None):
         "⭐ القائمة الخاصة",
     ]
 
-    for ticker in sorted(load_watchlist_symbols()):
+    for ticker in load_watchlist_ordered_symbols():
         data = classify_watchlist_ticker(ticker, state=state)
         lines.append(watchlist_mobile_line(data, include_reason=True))
 
@@ -3540,7 +3595,7 @@ def build_manual_report(state):
         "",
         "✅ فحص القائمة",
         f"عدد أسهم القائمة الحالية: {len(load_watchlist_symbols())}",
-        "المصدر: watchlist.json من المسار المعتمد في WATCHLIST_FILE إذا كان مفعّلًا.",
+        f"المصدر: {WATCHLIST_FILE}",
         "",
         "🎨 مفتاح الألوان:",
         "🟢 فرصة | 🔥 زخم | 🟡 انتظار | 🔴 خطر | ⚠️ تحذير | ⚪ بدون إشارة | 🔵 إدارة مركز",
@@ -3648,7 +3703,7 @@ def detect_watchlist_changes(state):
     changes = []
     statuses = state.setdefault("ticker_status", {})
 
-    for ticker in sorted(load_watchlist_symbols()):
+    for ticker in load_watchlist_ordered_symbols():
         data = classify_watchlist_ticker(ticker, state=state)
         old_status = statuses.get(ticker)
         new_status = data["status"]
