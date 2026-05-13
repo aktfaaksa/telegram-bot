@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.4 SEC On-Demand Menu + Combined Signals
+# AlphaBot Pro v5.9.7.5 SEC Radar Speed + Split Results
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.4 SEC On-Demand Menu + Combined Signals"
+VERSION = "v5.9.7.5 SEC Radar Speed + Split Results"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7.4:
+وضع التكلفة v5.9.7.5:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -521,6 +521,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ الإضافة لفرص اليوم تعتمد على تأكيد فحص الشرعية اليدوي
 ✅ Manual Report Menu: تقرير الآن يعرض قائمة أقسام بالأزرار
 ✅ SEC On-Demand Menu: فحص SEC للقائمة وخارج القائمة عند الطلب
+✅ SEC Radar Speed: خارج القائمة آخر 6 ساعات فقط
+✅ SEC Split Results: فصل فرص/مراقبة SEC عن التحذيرات
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -4079,15 +4081,19 @@ def build_quick_summary_report(state):
 
 
 # =========================
-# v5.9.7.4 SEC On-Demand Menu
+# v5.9.7.5 SEC On-Demand Menu + Speed/Split
 # =========================
 
-SEC_ON_DEMAND_LOOKBACK_HOURS = int(os.getenv("SEC_ON_DEMAND_LOOKBACK_HOURS", "48"))
+# v5.9.7.5:
+# القائمة الخاصة تبقى أوسع لأن عددها محدود، أما خارج القائمة فهو رادار سريع للجديد فقط.
+SEC_WATCHLIST_LOOKBACK_HOURS = int(os.getenv("SEC_WATCHLIST_LOOKBACK_HOURS", "48"))
+SEC_OUTSIDE_LOOKBACK_HOURS = int(os.getenv("SEC_OUTSIDE_LOOKBACK_HOURS", "6"))
 SEC_ON_DEMAND_MAX_ITEMS = int(os.getenv("SEC_ON_DEMAND_MAX_ITEMS", "8"))
+SEC_OUTSIDE_MAX_ITEMS = int(os.getenv("SEC_OUTSIDE_MAX_ITEMS", "5"))
 
 
 def is_recent_for_sec_on_demand(item, hours=None):
-    hours = hours or SEC_ON_DEMAND_LOOKBACK_HOURS
+    hours = hours or SEC_WATCHLIST_LOOKBACK_HOURS
     published = item.get("published_at")
     if not published:
         return False
@@ -4102,10 +4108,12 @@ def is_recent_for_sec_on_demand(item, hours=None):
         return False
 
 
-def sec_on_demand_items():
+def sec_on_demand_items(hours=None):
     """
     يجلب SEC فقط عند الطلب. لا يستخدم AI ولا يغيّر منطق التنبيهات الأساسية.
+    hours يحدد نطاق البحث: القائمة الخاصة 48 ساعة، خارج القائمة 6 ساعات افتراضيًا.
     """
+    hours = hours or SEC_WATCHLIST_LOOKBACK_HOURS
     try:
         items = fetch_sec_news()
     except Exception as e:
@@ -4115,7 +4123,7 @@ def sec_on_demand_items():
     recent = []
     seen = set()
     for item in items:
-        if not is_recent_for_sec_on_demand(item):
+        if not is_recent_for_sec_on_demand(item, hours=hours):
             continue
         form = get_sec_form_from_item(item)
         ticker = normalize_common_ticker(item.get("ticker", ""))
@@ -4268,7 +4276,7 @@ def format_sec_signal_line(signal, index=None):
 
 def build_sec_watchlist_report(state=None):
     watchlist = set(load_watchlist_symbols())
-    items = sec_on_demand_items()
+    items = sec_on_demand_items(hours=SEC_WATCHLIST_LOOKBACK_HOURS)
     signals = []
 
     for item in items:
@@ -4286,7 +4294,7 @@ def build_sec_watchlist_report(state=None):
         "📄 SEC القائمة الخاصة",
         ksa_datetime_line(),
         "",
-        f"النطاق: آخر {SEC_ON_DEMAND_LOOKBACK_HOURS} ساعة",
+        f"النطاق: آخر {SEC_WATCHLIST_LOOKBACK_HOURS} ساعة",
         "يعرض الإفصاحات المهمة لأسهم القائمة فقط.",
         "",
     ]
@@ -4305,9 +4313,29 @@ def build_sec_watchlist_report(state=None):
     return "\n".join(lines).strip()
 
 
+def is_sec_positive_or_watch_signal(signal):
+    form = str(signal.get("form", "")).upper()
+    status = str(signal.get("status", ""))
+    return (
+        "🟢" in status
+        or form in {"SC 13D", "SC 13G"}
+        or (form == "8-K" and "مهم" in status)
+    )
+
+
+def is_sec_warning_signal(signal):
+    form = str(signal.get("form", "")).upper()
+    status = str(signal.get("status", ""))
+    return (
+        "🔴" in status
+        or "⚠️" in status
+        or form in {"424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3", "EFFECT", "FWP", "NT 10-Q", "NT 10-K", "DEF 14A", "PRE 14A"}
+    )
+
+
 def build_sec_outside_report(state=None):
     watchlist = set(load_watchlist_symbols())
-    items = sec_on_demand_items()
+    items = sec_on_demand_items(hours=SEC_OUTSIDE_LOOKBACK_HOURS)
     signals = []
 
     for item in items:
@@ -4318,26 +4346,66 @@ def build_sec_outside_report(state=None):
         if signal:
             signals.append(signal)
 
-    signals.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
-    signals = signals[:SEC_ON_DEMAND_MAX_ITEMS]
+    # v5.9.7.5: فصل الفرص عن التحذيرات حتى لا تظهر الطروحات كأنها فرص.
+    positive_signals = []
+    warning_signals = []
+    other_signals = []
+
+    for signal in signals:
+        if is_sec_positive_or_watch_signal(signal):
+            positive_signals.append(signal)
+        elif is_sec_warning_signal(signal):
+            warning_signals.append(signal)
+        else:
+            other_signals.append(signal)
+
+    positive_signals.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+    warning_signals.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+    other_signals.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+
+    # الحد الإجمالي الافتراضي 5 حتى يكون الرادار سريعًا ومناسبًا للجوال.
+    remaining = SEC_OUTSIDE_MAX_ITEMS
+    positive_signals = positive_signals[:min(3, remaining)]
+    remaining -= len(positive_signals)
+    warning_signals = warning_signals[:max(0, remaining)]
+    remaining -= len(warning_signals)
+    other_signals = other_signals[:max(0, remaining)]
 
     lines = [
         "🆕 SEC خارج القائمة — رادار عام",
         ksa_datetime_line(),
         "",
-        f"النطاق: آخر {SEC_ON_DEMAND_LOOKBACK_HOURS} ساعة",
-        "يعرض فرص/تحذيرات SEC من خارج القائمة فقط بعد فلترة الضوضاء.",
+        f"النطاق: آخر {SEC_OUTSIDE_LOOKBACK_HOURS} ساعات",
+        f"الحد الأقصى: {SEC_OUTSIDE_MAX_ITEMS} نتائج مختصرة",
+        "يعرض الجديد فقط من خارج القائمة بعد فلترة الضوضاء، ولا يضيف أي سهم تلقائيًا.",
         "",
+        "🟢 فرص/مراقبة خارج القائمة:",
     ]
 
-    if not signals:
-        lines.append("لا توجد فرص أو تحذيرات SEC مناسبة من خارج القائمة حاليًا.")
-    else:
-        for i, signal in enumerate(signals, start=1):
+    if positive_signals:
+        for i, signal in enumerate(positive_signals, start=1):
             lines.append(format_sec_signal_line(signal, i))
             lines.append("")
-        lines.append("ملاحظة: أي سهم خارج القائمة يظهر كرادار فقط، ولا يُضاف إلا بعد فحص الشرعية يدويًا وموافقتك.")
+    else:
+        lines.append("لا توجد فرص SEC إيجابية/مراقبة قوية خلال النطاق الحالي.")
+        lines.append("")
 
+    lines.append("🔴 تحذيرات خارج القائمة:")
+    if warning_signals:
+        for i, signal in enumerate(warning_signals, start=1):
+            lines.append(format_sec_signal_line(signal, i))
+            lines.append("")
+    else:
+        lines.append("لا توجد تحذيرات SEC قوية خلال النطاق الحالي.")
+        lines.append("")
+
+    if other_signals:
+        lines.append("🟡 إشارات أخرى:")
+        for i, signal in enumerate(other_signals, start=1):
+            lines.append(format_sec_signal_line(signal, i))
+            lines.append("")
+
+    lines.append("ملاحظة: أي سهم خارج القائمة يظهر كرادار فقط، ولا يُضاف إلا بعد فحص الشرعية يدويًا وموافقتك.")
     lines.append("المصدر: SEC EDGAR")
     return "\n".join(lines).strip()
 
@@ -4689,7 +4757,7 @@ def make_alert_buttons(ticker):
 
 def patch_telegram_buttons_manual_report():
     """
-    v5.9.7.4 Manual Report Menu + SEC On-Demand:
+    v5.9.7.5 Manual Report Menu + SEC On-Demand:
     أمر "تقرير الآن" يعرض قائمة أقسام بالأزرار بدل إرسال التقرير الكامل مباشرة.
     كما يلتقط callbacks الخاصة بالأقسام بدون الحاجة لتغيير أساس telegram_buttons.py.
     """
