@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.6 Manual Reports + Market Data Filter
+# AlphaBot Pro v5.9.7 Daily Opportunities Manual Mode
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.6.1 Watchlist Volume Sync Fix"
+VERSION = "v5.9.7 Daily Opportunities Manual Mode"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -65,6 +65,7 @@ SEC_FORM_COOLDOWN_MINUTES = 60
 
 STATE_FILE = "seen_news.json"
 WATCHLIST_FILE = os.getenv("WATCHLIST_FILE", "watchlist.json")
+DAILY_OPPORTUNITIES_FILE = os.getenv("DAILY_OPPORTUNITIES_FILE", "/data/daily_opportunities.json")
 ALERT_CONTEXT_FILE = "alert_context.json"
 
 
@@ -504,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.6.1:
+وضع التكلفة v5.9.7:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -513,6 +514,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ تقرير يدوي عند الطلب: تقرير الآن / التقرير العام الآن
 ✅ Market Data Filter: Nasdaq / S&P 500 / Dow / VIX
 ✅ Watchlist Volume Sync: قراءة القائمة من WATCHLIST_FILE
+✅ Daily Opportunities Manual Mode: فرص اليوم من فلتر Investing Pro+
+✅ أوامر فرص اليوم: /today_add /today_remove /today_list /today_clear
 ✅ Smart Silence عند عدم وجود تغيير
 ✅ تقارير ثابتة بتوقيت السعودية
 ✅ ألوان الحالات مفعلة
@@ -1258,6 +1261,227 @@ def load_watchlist_symbols():
     التقارير تستخدم load_watchlist_ordered_symbols للحفاظ على ترتيب القائمة.
     """
     return set(load_watchlist_ordered_symbols())
+
+
+
+# =========================
+# v5.9.7 Daily Opportunities Manual Mode
+# =========================
+
+def _ensure_parent_dir(path):
+    try:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
+    except Exception as e:
+        print(f"ensure parent dir error {path}: {e}", flush=True)
+
+
+def default_daily_opportunities_data():
+    return {
+        "date": current_ksa_date_key(),
+        "updated_at": now_utc().isoformat(),
+        "items": []
+    }
+
+
+def load_daily_opportunities():
+    """
+    فرص اليوم محفوظة في DAILY_OPPORTUNITIES_FILE داخل Railway Volume.
+    لا تُمسح تلقائيًا بعد الإغلاق؛ تبقى حتى يراجعها المستخدم أو يمسحها يدويًا.
+    """
+    if not os.path.exists(DAILY_OPPORTUNITIES_FILE):
+        data = default_daily_opportunities_data()
+        save_daily_opportunities(data)
+        return data
+
+    try:
+        with open(DAILY_OPPORTUNITIES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            raise ValueError("daily opportunities data is not dict")
+
+        data.setdefault("date", current_ksa_date_key())
+        data.setdefault("updated_at", now_utc().isoformat())
+        data.setdefault("items", [])
+
+        cleaned = []
+        seen = set()
+        for item in data.get("items", []):
+            if isinstance(item, str):
+                ticker = normalize_common_ticker(item)
+                row = {}
+            elif isinstance(item, dict):
+                ticker = normalize_common_ticker(item.get("ticker", ""))
+                row = dict(item)
+            else:
+                continue
+
+            if not ticker or ticker in seen:
+                continue
+
+            row["ticker"] = ticker
+            row.setdefault("status", "🟢 أولوية")
+            row.setdefault("state", "نشطة اليوم")
+            row.setdefault("reason", "مرشح من فلتر Investing Pro+ + شرعي")
+            row.setdefault("decision", "مراقبة قوية، لا مطاردة.")
+            row.setdefault("added_at", now_utc().isoformat())
+            cleaned.append(row)
+            seen.add(ticker)
+
+        data["items"] = cleaned
+        return data
+
+    except Exception as e:
+        print(f"load_daily_opportunities error: {e} | file={DAILY_OPPORTUNITIES_FILE}", flush=True)
+        data = default_daily_opportunities_data()
+        save_daily_opportunities(data)
+        return data
+
+
+def save_daily_opportunities(data):
+    try:
+        _ensure_parent_dir(DAILY_OPPORTUNITIES_FILE)
+        data["updated_at"] = now_utc().isoformat()
+        data.setdefault("date", current_ksa_date_key())
+        data.setdefault("items", [])
+
+        tmp = DAILY_OPPORTUNITIES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        os.replace(tmp, DAILY_OPPORTUNITIES_FILE)
+        return True
+    except Exception as e:
+        print(f"save_daily_opportunities error: {e} | file={DAILY_OPPORTUNITIES_FILE}", flush=True)
+        return False
+
+
+def add_daily_opportunity(ticker, status="🟢 أولوية", reason=None, decision=None, state_label="نشطة اليوم"):
+    ticker = normalize_common_ticker(ticker)
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+
+    data = load_daily_opportunities()
+    items = data.setdefault("items", [])
+
+    for item in items:
+        if normalize_common_ticker(item.get("ticker", "")) == ticker:
+            return True, f"{ticker} موجود مسبقًا في فرص اليوم"
+
+    items.append({
+        "ticker": ticker,
+        "status": status or "🟢 أولوية",
+        "state": state_label or "نشطة اليوم",
+        "reason": reason or "مرشح من فلتر Investing Pro+ + شرعي",
+        "decision": decision or "مراقبة قوية، لا مطاردة.",
+        "added_at": now_utc().isoformat(),
+    })
+
+    if not save_daily_opportunities(data):
+        return False, "تعذر حفظ فرص اليوم"
+
+    return True, f"تمت إضافة {ticker} إلى فرص اليوم"
+
+
+def remove_daily_opportunity(ticker):
+    ticker = normalize_common_ticker(ticker)
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+
+    data = load_daily_opportunities()
+    items = data.setdefault("items", [])
+    before = len(items)
+    data["items"] = [x for x in items if normalize_common_ticker(x.get("ticker", "")) != ticker]
+
+    if len(data["items"]) == before:
+        return False, f"{ticker} غير موجود في فرص اليوم"
+
+    if not save_daily_opportunities(data):
+        return False, "تعذر حفظ فرص اليوم"
+
+    return True, f"تم حذف {ticker} من فرص اليوم"
+
+
+def clear_daily_opportunities():
+    data = load_daily_opportunities()
+    count = len(data.get("items", []))
+    data["date"] = current_ksa_date_key()
+    data["items"] = []
+
+    if not save_daily_opportunities(data):
+        return False, "تعذر مسح فرص اليوم"
+
+    return True, f"تم مسح فرص اليوم ({count} سهم)"
+
+
+def get_daily_opportunity_items():
+    data = load_daily_opportunities()
+    return data.get("items", [])
+
+
+def format_daily_opportunities_list():
+    data = load_daily_opportunities()
+    items = data.get("items", [])
+
+    if not items:
+        return "🔥 فرص اليوم من فلتر Investing Pro+\n\nلا توجد فرص يومية مضافة حاليًا."
+
+    lines = [
+        "🔥 فرص اليوم من فلتر Investing Pro+",
+        f"📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}",
+        f"📌 العدد: {len(items)}",
+        "",
+    ]
+
+    for i, item in enumerate(items, start=1):
+        ticker = normalize_common_ticker(item.get("ticker", ""))
+        status = item.get("status", "🟢 أولوية")
+        state_label = item.get("state", "نشطة اليوم")
+        reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
+        lines.append(f"{i}. {ticker} — {status} — {state_label}\nالسبب: {reason}")
+
+    lines.append("")
+    lines.append(f"المصدر: {DAILY_OPPORTUNITIES_FILE}")
+    return "\n\n".join(lines)
+
+
+def format_daily_opportunities_section(state=None, compact=False):
+    """
+    قسم مستقل داخل التقارير. لا يضيف الأسهم إلى watchlist ولا يستخدم AI.
+    يعتمد فقط على الأسعار الخفيفة من Finnhub مثل القائمة الخاصة.
+    """
+    items = get_daily_opportunity_items()
+    lines = ["🔥 فرص اليوم من فلتر Investing Pro+"]
+
+    if not items:
+        lines.append("لا توجد فرص يومية مضافة حاليًا.")
+        return lines
+
+    for i, item in enumerate(items, start=1):
+        ticker = normalize_common_ticker(item.get("ticker", ""))
+        if not ticker:
+            continue
+
+        quote = get_stock_quote(ticker)
+        price_text = price_text_from_quote(quote)
+        status = item.get("status", "🟢 أولوية")
+        state_label = item.get("state", "نشطة اليوم")
+        reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
+        decision = item.get("decision", "مراقبة قوية، لا مطاردة.")
+
+        if compact:
+            lines.append(f"{ticker}: {status} — {price_text} | {state_label}")
+        else:
+            lines.append(
+                f"{i}) {ticker} — {status} — {state_label}\n"
+                f"السعر/التغير: {price_text}\n"
+                f"السبب: {reason}\n"
+                f"القرار: {decision}"
+            )
+
+    return lines
 
 def clean_text_for_priority(item):
     parts = []
@@ -2693,7 +2917,7 @@ def format_alert(item, analysis):
 
     priority_line = ""
     if item.get("_priority") is not None:
-        priority_line = f"⚙️ أولوية v5.9.6.1: {item.get('_priority')}\n"
+        priority_line = f"⚙️ أولوية v5.9.7: {item.get('_priority')}\n"
 
     msg = f"""{label}
 
@@ -3514,6 +3738,7 @@ def build_after_hours_news_report(report_title, state, scheduled_hhmm=None):
         data = classify_watchlist_ticker(ticker, state=state)
         lines.append(watchlist_mobile_line(data, include_reason=True))
 
+    lines.extend(["", *format_daily_opportunities_section(state, compact=False)])
     lines.extend(["", *build_top_watchlist_section(state, limit=3)])
     lines.extend([
         "",
@@ -3546,6 +3771,7 @@ def build_scheduled_report(report_title, state, scheduled_hhmm=None):
     lines.append("")
 
     lines.extend(build_watchlist_section(state, compact=compact))
+    lines.extend(["", *format_daily_opportunities_section(state, compact=compact)])
 
     lines.extend(["", *build_top_watchlist_section(state, limit=3)])
 
@@ -3582,6 +3808,7 @@ def build_manual_report(state):
 
     lines.append("")
     lines.extend(build_watchlist_section(state, compact=False))
+    lines.extend(["", *format_daily_opportunities_section(state, compact=False)])
     lines.extend(["", *build_top_watchlist_section(state, limit=3)])
 
     # بعد الإغلاق، التقرير اليدوي يعرض أيضًا خطة مختصرة مفيدة لليوم التالي.
@@ -3596,6 +3823,7 @@ def build_manual_report(state):
         "✅ فحص القائمة",
         f"عدد أسهم القائمة الحالية: {len(load_watchlist_symbols())}",
         f"المصدر: {WATCHLIST_FILE}",
+        f"فرص اليوم: {len(get_daily_opportunity_items())} | المصدر: {DAILY_OPPORTUNITIES_FILE}",
         "",
         "🎨 مفتاح الألوان:",
         "🟢 فرصة | 🔥 زخم | 🟡 انتظار | 🔴 خطر | ⚠️ تحذير | ⚪ بدون إشارة | 🔵 إدارة مركز",
@@ -3879,7 +4107,7 @@ def make_alert_buttons(ticker):
 
 
 # =========================
-# v5.9.6 Manual Report Command Hook
+# v5.9.7 Manual Report + Daily Opportunities Command Hook
 # =========================
 
 def patch_telegram_buttons_manual_report():
@@ -3911,19 +4139,58 @@ def patch_telegram_buttons_manual_report():
         "manual report",
     }
 
+    def _handle_today_command(chat_id, text):
+        parts = text.split()
+        cmd = parts[0].lower() if parts else ""
+
+        if cmd == "/today_add":
+            if len(parts) < 2:
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_add ALHC")
+                return True
+            ok, msg = add_daily_opportunity(parts[1])
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+            return True
+
+        if cmd == "/today_remove":
+            if len(parts) < 2:
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_remove ALHC")
+                return True
+            ok, msg = remove_daily_opportunity(parts[1])
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+            return True
+
+        if cmd == "/today_list":
+            send_telegram_to_chat(chat_id, format_daily_opportunities_list())
+            return True
+
+        if cmd == "/today_clear":
+            ok, msg = clear_daily_opportunities()
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+            return True
+
+        return False
+
     def patched_handle_text_message(message):
         try:
             chat_id = message.get("chat", {}).get("id")
             text = str(message.get("text", "") or "").strip()
 
-            if text.lower() in manual_commands or text in manual_commands:
-                allowed_fn = getattr(module, "_allowed_chat", None)
+            allowed_fn = getattr(module, "_allowed_chat", None)
+            allowed = False
+            try:
+                allowed = bool(allowed_fn(chat_id)) if allowed_fn else int(chat_id) in [int(x) for x in CHAT_IDS]
+            except Exception:
                 allowed = False
-                try:
-                    allowed = bool(allowed_fn(chat_id)) if allowed_fn else int(chat_id) in [int(x) for x in CHAT_IDS]
-                except Exception:
-                    allowed = False
 
+            if text.startswith("/today_"):
+                if not allowed:
+                    print(f"Unauthorized today opportunities command ignored: {chat_id}", flush=True)
+                    return
+                if _handle_today_command(chat_id, text):
+                    print(f"Daily opportunities command handled for chat {chat_id}: {text}", flush=True)
+                    return
+
+            if text.lower() in manual_commands or text in manual_commands:
                 if not allowed:
                     print(f"Unauthorized manual report request ignored: {chat_id}", flush=True)
                     return
@@ -3940,7 +4207,7 @@ def patch_telegram_buttons_manual_report():
 
     module.handle_text_message = patched_handle_text_message
     module._manual_report_patch_applied = True
-    print("Manual report command hook applied: تقرير الآن", flush=True)
+    print("Manual report + Daily Opportunities command hook applied", flush=True)
     return True
 
 
