@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.6 Quick Summary Percent Fix
+# AlphaBot Pro v5.9.7.7 SEC Positive Classification + Alerts Cycle 5
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.6.1 Quick Summary Visual Percent"
+VERSION = "v5.9.7.7 SEC Positive Classification + Alerts Cycle 5"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -53,7 +53,7 @@ LOW_PRICE_MIN_SCORE = 6
 BIG_STOCK_MIN_SCORE = 8
 UNKNOWN_PRICE_MIN_SCORE = 7
 
-MAX_ALERTS_PER_CYCLE = 3
+MAX_ALERTS_PER_CYCLE = 5
 MAX_DAILY_ALERTS = 80
 
 # v5.9.4.1 Cost Control
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7.6:
+وضع التكلفة {VERSION}:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -523,6 +523,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ SEC On-Demand Menu: فحص SEC للقائمة وخارج القائمة عند الطلب
 ✅ SEC Radar Speed: خارج القائمة آخر 6 ساعات فقط
 ✅ SEC Split Results: فصل فرص/مراقبة SEC عن التحذيرات
+✅ SEC Classification Label: 🟢 إيجابي قوي / 🟡 مراقبة / 🔴 سلبي
+✅ Alerts Cycle 5: MAX_ALERTS_PER_CYCLE = 5 مع بقاء AI = 3
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -2923,6 +2925,157 @@ def should_send_alert(item, analysis, state):
     return True, "ok"
 
 
+
+
+# =========================
+# v5.9.7.7 SEC Positive Classification
+# =========================
+
+SEC_POSITIVE_STRONG_WORDS = [
+    "open market purchase", "purchase of common stock", "acquired shares", "insider purchase",
+    "activist", "strategic investor", "material definitive agreement", "definitive agreement",
+    "contract", "purchase order", "strategic partnership", "partnership", "license agreement",
+    "licensing agreement", "supply agreement", "government contract", "award", "grant",
+    "government funding", "non-dilutive financing", "non dilutive financing", "credit facility",
+    "fda approval", "fda clearance", "breakthrough device", "fast track designation",
+    "orphan drug designation", "positive topline", "positive top-line", "positive phase",
+    "clinical success", "trial met", "meets primary endpoint", "met primary endpoint",
+    "merger agreement", "acquisition", "buyout", "tender offer", "nasdaq compliance regained",
+    "regained compliance", "compliance regained", "continued listing compliance"
+]
+
+SEC_NEGATIVE_STRONG_WORDS = [
+    "public offering", "registered direct", "private placement", "at-the-market", "atm offering",
+    "resale", "selling stockholder", "selling stockholders", "common stock", "ordinary shares",
+    "warrants", "pre-funded warrants", "units", "convertible", "prospectus supplement",
+    "free writing prospectus", "late filing", "unable to file", "nt 10-q", "nt 10-k",
+    "reverse split", "increase authorized", "authorized shares", "share increase",
+    "delisting", "non-compliance", "deficiency notice", "going concern", "substantial doubt",
+    "material weakness", "default", "bankruptcy", "chapter 11", "termination"
+]
+
+SEC_WATCH_WORDS = [
+    "s-3asr", "automatic shelf", "shelf registration", "registration statement",
+    "beneficial ownership", "institutional ownership", "13g", "effect"
+]
+
+
+def _sec_classification_text(item, analysis=None):
+    analysis = analysis or {}
+    parts = []
+    for key in ["title", "summary", "description", "raw", "source", "sec_form", "form"]:
+        value = item.get(key)
+        if value:
+            parts.append(str(value))
+    for key in ["category", "direction", "title_ar", "summary_ar", "why_important_ar", "trading_note_ar"]:
+        value = analysis.get(key)
+        if value:
+            parts.append(str(value))
+    return " ".join(parts).lower()
+
+
+def classify_sec_signal(item, analysis=None):
+    """
+    v5.9.7.7:
+    تصنيف واضح لتنبيهات SEC: إيجابي قوي / مراقبة / سلبي.
+    لا يغيّر قرار الإرسال؛ فقط يوضح نوع الإشارة للمستخدم.
+    """
+    analysis = analysis or {}
+    form_u = canonical_sec_form(get_sec_form_from_item(item))
+    text_l = _sec_classification_text(item, analysis)
+    category = normalize_category(analysis.get("category", ""))
+    direction = normalize_direction(analysis.get("direction", ""))
+
+    def has_any(words):
+        return any(w in text_l for w in words)
+
+    positive_hit = has_any(SEC_POSITIVE_STRONG_WORDS)
+    negative_hit = has_any(SEC_NEGATIVE_STRONG_WORDS)
+    watch_hit = has_any(SEC_WATCH_WORDS)
+
+    if form_u == "4":
+        try:
+            raw = item.get("raw", "")
+            if form4_has_open_market_purchase(raw):
+                return "🟢 إيجابي قوي", "شراء داخلي واضح من السوق"
+            enriched = enrich_sec_item(dict(item))
+            if form4_has_open_market_purchase(enriched.get("raw", "")):
+                return "🟢 إيجابي قوي", "شراء داخلي واضح من السوق"
+        except Exception:
+            pass
+        return "🟡 مراقبة", "Form 4 يحتاج تمييز هل هو شراء حقيقي أو منحة/خيارات"
+
+    if form_u == "SC 13D":
+        return "🟢 إيجابي قوي", "دخول/تغير ملكية مستثمر نشط محتمل"
+
+    if form_u == "8-K":
+        if any(w in text_l for w in ["nasdaq compliance regained", "regained compliance", "compliance regained", "continued listing compliance"]):
+            return "🟢 إيجابي قوي", "استعادة امتثال Nasdaq أو استمرار الإدراج"
+        if any(w in text_l for w in ["non-dilutive financing", "non dilutive financing", "grant", "government funding", "award"]):
+            return "🟢 إيجابي قوي", "تمويل/منحة غير مخففة أو دعم تمويلي إيجابي"
+        if any(w in text_l for w in ["fda approval", "fda clearance", "fast track designation", "orphan drug designation", "positive topline", "met primary endpoint", "meets primary endpoint"]):
+            return "🟢 إيجابي قوي", "خبر FDA/Clinical إيجابي"
+        if any(w in text_l for w in ["contract", "purchase order", "strategic partnership", "license agreement", "licensing agreement", "supply agreement", "government contract", "material definitive agreement", "definitive agreement"]):
+            if not any(w in text_l for w in ["termination", "terminated", "default", "breach"]):
+                return "🟢 إيجابي قوي", "عقد أو اتفاقية/صفقة مهمة"
+        if any(w in text_l for w in ["merger agreement", "acquisition", "buyout", "tender offer"]):
+            if not any(w in text_l for w in ["termination", "terminated", "cancelled", "canceled"]):
+                return "🟢 إيجابي قوي", "اندماج أو استحواذ/صفقة استراتيجية"
+        if negative_hit:
+            return "🔴 سلبي", "8-K يتضمن بندًا تحذيريًا أو سلبيًا"
+        return "🟡 مراقبة", "8-K مهم لكن اتجاهه يحتاج تأكيد من السعر والفوليوم"
+
+    if form_u == "SC 13G":
+        return "🟡 مراقبة", "دخول أو تغير ملكية مؤسسة كبيرة؛ إيجابي مشروط وليس شراء مباشر"
+
+    if form_u in {"424B5", "424B3", "424B4", "FWP"}:
+        return "🔴 سلبي", "نشرة/طرح أو تحديث نشرة قد يرتبط بتخفيف أو بيع أوراق مالية"
+
+    if form_u in {"NT 10-Q", "NT 10-K"}:
+        return "🔴 سلبي", "تأخر تقرير مالي يرفع مخاطر الشفافية والامتثال"
+
+    if form_u in {"DEF 14A", "PRE 14A"}:
+        if any(w in text_l for w in ["reverse split", "increase authorized", "authorized shares", "issuance of shares", "share issuance"]):
+            return "🔴 سلبي", "تصويت يتضمن reverse split أو زيادة/إصدار أسهم"
+        if any(w in text_l for w in ["merger vote", "acquisition approval", "strategic transaction", "asset sale"]):
+            return "🟡 مراقبة", "تصويت على صفقة أو حدث استراتيجي يحتاج متابعة"
+        return "🟡 مراقبة", "Proxy يحتاج قراءة البنود قبل الحكم"
+
+    if form_u in {"S-1", "S-3", "F-1", "F-3"}:
+        if "s-3asr" in text_l or "automatic shelf" in text_l:
+            if any(w in text_l for w in ["registered direct", "public offering", "atm offering", "selling stockholder", "selling stockholders"]):
+                return "🔴 سلبي", "تسجيل رف مع مؤشرات بيع/طرح أسهم"
+            return "🟡 مراقبة", "تسجيل رف تمويلي؛ ليس طرحًا مباشرًا الآن"
+        if negative_hit:
+            return "🔴 سلبي", "تسجيل أوراق مالية مع احتمال تخفيف أو بيع أسهم"
+        return "🟡 مراقبة", "تسجيل أوراق مالية يحتاج تفاصيل إضافية"
+
+    if form_u == "EFFECT":
+        if negative_hit:
+            return "🔴 سلبي", "تفعيل تسجيل مرتبط بطرح/بيع أوراق مالية"
+        return "🟡 مراقبة", "تفعيل تسجيل؛ تأثيره يعتمد على الإفصاح المرتبط به"
+
+    if form_u in {"10-Q", "10-K"}:
+        if any(w in text_l for w in ["going concern", "substantial doubt", "material weakness", "default", "liquidity", "bankruptcy", "chapter 11"]):
+            return "🔴 سلبي", "تقرير مالي يتضمن بنود مخاطر واضحة"
+        if any(w in text_l for w in ["revenue growth", "profitability", "reduced losses", "strong cash", "raised guidance"]):
+            return "🟢 إيجابي قوي", "تقرير مالي يتضمن مؤشرات تشغيلية/مالية إيجابية"
+        return "🟡 مراقبة", "تقرير مالي يحتاج قراءة النتائج والبنود المهمة"
+
+    if positive_hit and not negative_hit:
+        return "🟢 إيجابي قوي", "كلمات إيجابية قوية داخل الإفصاح"
+    if negative_hit:
+        return "🔴 سلبي", "كلمات تحذيرية أو تخفيفية داخل الإفصاح"
+    if direction == "إيجابي" and category in ["FDA / Clinical", "Contract / Partnership", "M&A", "Guidance"]:
+        return "🟢 إيجابي قوي", "اتجاه الخبر إيجابي وفئته عالية التأثير"
+    if direction == "سلبي":
+        return "🔴 سلبي", "التأثير المتوقع سلبي حسب تحليل الخبر"
+    if watch_hit:
+        return "🟡 مراقبة", "إشارة SEC تحتاج متابعة وليست قرارًا مباشرًا"
+
+    return "🟡 مراقبة", "إفصاح SEC مهم يحتاج متابعة السياق والسعر"
+
+
 # =========================
 # 14) FORMAT ALERT
 # =========================
@@ -3002,13 +3155,19 @@ def format_alert(item, analysis):
     if price_mode == "LOW":
         label = "🔥 خبر سهم منخفض السعر"
 
+    sec_class_label = ""
+    sec_class_reason = ""
+    sec_class_block = ""
+
     if is_sec_source(source):
-        if direction == "سلبي":
-            label = "🔴 إفصاح SEC مهم"
-        elif direction == "إيجابي":
-            label = "🟢 إفصاح SEC مهم"
+        sec_class_label, sec_class_reason = classify_sec_signal(item, analysis)
+        if "🟢" in sec_class_label:
+            label = "🟢 إفصاح SEC — إيجابي قوي"
+        elif "🔴" in sec_class_label:
+            label = "🔴 إفصاح SEC — سلبي"
         else:
-            label = "🟡 إفصاح SEC مهم"
+            label = "🟡 إفصاح SEC — مراقبة"
+        sec_class_block = f"🧭 تصنيف SEC: {sec_class_label}\n📌 سبب التصنيف: {sec_class_reason}\n"
 
     sec_line = ""
     if form:
@@ -3030,7 +3189,7 @@ def format_alert(item, analysis):
 ⭐ حالة القائمة: {'داخل القائمة الخاصة' if is_watchlist_symbol(ticker) else 'خارج القائمة / رادار عام'}
 {sec_line}{official_line}📌 نوع الخبر: {category}
 📊 التأثير المتوقع: {direction}
-🔥 قوة الخبر: {score}/10
+{sec_class_block}🔥 قوة الخبر: {score}/10
 {price_line}
 {priority_line}⏱️ وقت الخبر: {age}
 📰 المصدر: {source}
@@ -4294,6 +4453,12 @@ def sec_on_demand_importance(item, outside_watchlist=False):
     else:
         return None
 
+    sec_class_label, sec_class_reason = classify_sec_signal(item, {
+        "category": impact,
+        "direction": impact,
+        "summary_ar": decision,
+    })
+
     return {
         "ticker": ticker or "NO_TICKER",
         "form": form or "SEC",
@@ -4305,15 +4470,21 @@ def sec_on_demand_importance(item, outside_watchlist=False):
         "age": age,
         "url": url,
         "price_text": price_text,
+        "sec_class": sec_class_label,
+        "sec_class_reason": sec_class_reason,
     }
 
 
 def format_sec_signal_line(signal, index=None):
     prefix = f"{index}) " if index is not None else "• "
+    sec_class = signal.get("sec_class", "")
+    sec_reason = signal.get("sec_class_reason", "")
+    class_line = f"تصنيف SEC: {sec_class}\nسبب التصنيف: {sec_reason}\n" if sec_class else ""
     return (
         f"{prefix}{signal['ticker']} — {signal['status']} — {signal['form']}\n"
         f"السعر/التغير: {signal.get('price_text', 'غير متوفر')}\n"
         f"الوقت: {signal.get('age', 'غير معروف')} | التأثير: {signal.get('impact', 'مراقبة')}\n"
+        f"{class_line}"
         f"العنوان: {signal.get('title', '-')}\n"
         f"القرار: {signal.get('decision', 'مراقبة فقط')}"
     )
@@ -4359,22 +4530,27 @@ def build_sec_watchlist_report(state=None):
 
 
 def is_sec_positive_or_watch_signal(signal):
+    sec_class = str(signal.get("sec_class", ""))
     form = str(signal.get("form", "")).upper()
     status = str(signal.get("status", ""))
     return (
-        "🟢" in status
+        "🟢" in sec_class
+        or "🟡" in sec_class
+        or "🟢" in status
         or form in {"SC 13D", "SC 13G"}
         or (form == "8-K" and "مهم" in status)
     )
 
 
 def is_sec_warning_signal(signal):
+    sec_class = str(signal.get("sec_class", ""))
     form = str(signal.get("form", "")).upper()
     status = str(signal.get("status", ""))
     return (
-        "🔴" in status
+        "🔴" in sec_class
+        or "🔴" in status
         or "⚠️" in status
-        or form in {"424B5", "424B3", "424B4", "S-1", "S-3", "F-1", "F-3", "EFFECT", "FWP", "NT 10-Q", "NT 10-K", "DEF 14A", "PRE 14A"}
+        or form in {"424B5", "424B3", "424B4", "FWP", "NT 10-Q", "NT 10-K"}
     )
 
 
