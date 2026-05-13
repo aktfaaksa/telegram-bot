@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.2 Daily Opportunities Review + Buttons Polish
+# AlphaBot Pro v5.9.7.3 Manual Report Menu + Combined Signals
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.2 Daily Opportunities Review + Buttons Polish"
+VERSION = "v5.9.7.3 Manual Report Menu + Combined Signals"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7.2:
+وضع التكلفة v5.9.7.3:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -519,6 +519,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ أزرار فرص اليوم: زر 🔥 فرص اليوم داخل بطاقة السهم
 ✅ مراجعة فرص اليوم: /today_review + 🧹 مراجعة فرص اليوم
 ✅ الإضافة لفرص اليوم تعتمد على تأكيد فحص الشرعية اليدوي
+✅ Manual Report Menu: تقرير الآن يعرض قائمة أقسام بالأزرار
+✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
 ✅ تقارير ثابتة بتوقيت السعودية
@@ -1487,10 +1489,76 @@ def format_daily_opportunities_review():
     return "\n".join(lines)
 
 
+
+def classify_daily_opportunity_item(item):
+    """
+    v5.9.7.3 Daily Opportunities Status Logic:
+    لا تظهر كل فرص اليوم كأولوية خضراء دائمًا؛ الحالة تتغير حسب الزخم الحالي.
+    """
+    ticker = normalize_common_ticker(item.get("ticker", ""))
+    quote = get_stock_quote(ticker) if ticker else None
+    price_text = price_text_from_quote(quote)
+
+    try:
+        dp = float((quote or {}).get("change_percent") or 0)
+    except Exception:
+        dp = 0.0
+
+    category = "watch"
+    status = "🟡 متابعة"
+    state_label = item.get("state", "نشطة اليوم") or "نشطة اليوم"
+    reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
+    decision = item.get("decision", "مراقبة قوية، لا مطاردة.")
+
+    if quote is None:
+        status = "🟡 متابعة"
+        state_label = "تحتاج متابعة"
+        decision = "السعر غير متاح؛ راجع الحركة قبل القرار."
+        category = "watch"
+    elif dp >= 15:
+        status = "🔥 فرصة يومية قوية"
+        state_label = "نشطة اليوم"
+        decision = "مراقبة قوية، لا مطاردة بعد ارتفاع قوي."
+        category = "opportunity"
+    elif dp >= 2:
+        status = "🟢 فرصة يومية"
+        state_label = "نشطة اليوم"
+        decision = "مراقبة قوية بشرط استمرار الزخم والفوليوم."
+        category = "opportunity"
+    elif dp <= -10:
+        status = "⚠️ مراجعة"
+        state_label = "تحتاج حذف/مراجعة"
+        decision = "خرجت من شرط الزخم الحالي؛ راجع سبب الهبوط قبل إبقائها."
+        category = "warning"
+    elif dp <= -5:
+        status = "🔴 ضعف"
+        state_label = "تحتاج متابعة"
+        decision = "ليست فرصة نشطة الآن؛ انتظر ثباتًا أو خبرًا جديدًا."
+        category = "warning"
+    elif -2 <= dp <= 2:
+        status = "🟡 متابعة"
+        state_label = "هادئة"
+        decision = "متابعة فقط حتى يظهر زخم أو فوليوم واضح."
+        category = "watch"
+
+    return {
+        "ticker": ticker,
+        "quote": quote,
+        "price_text": price_text,
+        "change_percent": dp,
+        "status": status,
+        "state": state_label,
+        "reason": reason,
+        "decision": decision,
+        "category": category,
+        "source": "فرص اليوم",
+    }
+
 def format_daily_opportunities_section(state=None, compact=False):
     """
     قسم مستقل داخل التقارير. لا يضيف الأسهم إلى watchlist ولا يستخدم AI.
     يعتمد فقط على الأسعار الخفيفة من Finnhub مثل القائمة الخاصة.
+    v5.9.7.3: الحالة ديناميكية؛ السهم الهابط بقوة يظهر كمراجعة/ضعف وليس أولوية خضراء.
     """
     items = get_daily_opportunity_items()
     lines = ["🔥 فرص اليوم من فلتر Investing Pro+"]
@@ -1500,25 +1568,19 @@ def format_daily_opportunities_section(state=None, compact=False):
         return lines
 
     for i, item in enumerate(items, start=1):
-        ticker = normalize_common_ticker(item.get("ticker", ""))
+        data = classify_daily_opportunity_item(item)
+        ticker = data.get("ticker", "")
         if not ticker:
             continue
 
-        quote = get_stock_quote(ticker)
-        price_text = price_text_from_quote(quote)
-        status = item.get("status", "🟢 أولوية")
-        state_label = item.get("state", "نشطة اليوم")
-        reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
-        decision = item.get("decision", "مراقبة قوية، لا مطاردة.")
-
         if compact:
-            lines.append(f"{ticker}: {status} — {price_text} | {state_label}")
+            lines.append(f"{ticker}: {data['status']} — {data['price_text']} | {data['state']}")
         else:
             lines.append(
-                f"{i}) {ticker} — {status} — {state_label}\n"
-                f"السعر/التغير: {price_text}\n"
-                f"السبب: {reason}\n"
-                f"القرار: {decision}"
+                f"{i}) {ticker} — {data['status']} — {data['state']}\n"
+                f"السعر/التغير: {data['price_text']}\n"
+                f"السبب: {data['reason']}\n"
+                f"القرار: {data['decision']}"
             )
 
     return lines
@@ -3830,6 +3892,210 @@ def build_scheduled_report(report_title, state, scheduled_hhmm=None):
     return "\n\n".join(lines)
 
 
+
+def build_manual_report_menu_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 حالة السوق", "callback_data": "manual_section|market"},
+                {"text": "⭐ القائمة الخاصة", "callback_data": "manual_section|watchlist"},
+            ],
+            [
+                {"text": "🔥 فرص اليوم", "callback_data": "manual_section|daily"},
+                {"text": "⚡ أهم الفرص والتحذيرات", "callback_data": "manual_section|top"},
+            ],
+            [
+                {"text": "⚠️ المخاطر فقط", "callback_data": "manual_section|risks"},
+                {"text": "🧾 ملخص سريع", "callback_data": "manual_section|summary"},
+            ],
+            [
+                {"text": "🧹 مراجعة فرص اليوم", "callback_data": "manual_section|review"},
+                {"text": "📋 التقرير الكامل", "callback_data": "manual_section|full"},
+            ],
+        ]
+    }
+
+
+def build_manual_report_menu_text():
+    return "\n\n".join([
+        "📊 التقرير اليدوي — اختر القسم",
+        ksa_datetime_line(),
+        "اختر ما تريد عرضه:",
+        "📊 حالة السوق | ⭐ القائمة الخاصة | 🔥 فرص اليوم\n⚡ أهم الفرص والتحذيرات | ⚠️ المخاطر فقط | 🧾 ملخص سريع\n📋 التقرير الكامل | 🧹 مراجعة فرص اليوم",
+    ])
+
+
+def build_market_only_report(state=None):
+    return "\n\n".join([
+        "📊 حالة السوق العامة",
+        ksa_datetime_line(),
+        build_market_summary_line(current_ksa_time_hhmm()),
+        "ملاحظة: حالة السوق فلتر قرار وليست توصية دخول أو خروج.",
+    ])
+
+
+def build_watchlist_only_report(state):
+    lines = ["⭐ القائمة الخاصة", ksa_datetime_line(), ""]
+    lines.extend(build_watchlist_section(state, compact=False))
+    lines.extend(["", f"✅ عدد أسهم القائمة: {len(load_watchlist_ordered_symbols())}", f"المصدر: {WATCHLIST_FILE}"])
+    return "\n\n".join(lines)
+
+
+def build_daily_only_report(state=None):
+    lines = ["🔥 فرص اليوم من فلتر Investing Pro+", ksa_datetime_line(), ""]
+    section = format_daily_opportunities_section(state, compact=False)
+    # section يبدأ بنفس العنوان؛ نحذف العنوان المكرر
+    if section and section[0].startswith("🔥 فرص اليوم"):
+        section = section[1:]
+    lines.extend(section)
+    lines.extend(["", f"✅ فرص اليوم: {len(get_daily_opportunity_items())}", f"المصدر: {DAILY_OPPORTUNITIES_FILE}"])
+    return "\n\n".join(lines)
+
+
+def get_daily_opportunities_signals(limit_opportunities=4, limit_warnings=4):
+    opportunities = []
+    warnings = []
+    watch = []
+
+    for item in get_daily_opportunity_items():
+        data = classify_daily_opportunity_item(item)
+        if not data.get("ticker"):
+            continue
+        if data.get("category") == "warning":
+            warnings.append(data)
+        elif data.get("category") == "opportunity":
+            opportunities.append(data)
+        else:
+            watch.append(data)
+
+    opportunities.sort(key=lambda x: float(x.get("change_percent") or 0), reverse=True)
+    warnings.sort(key=lambda x: float(x.get("change_percent") or 0))
+    return opportunities[:limit_opportunities], warnings[:limit_warnings], watch
+
+
+def build_combined_top_signals_report(state, opportunities_limit=5, warnings_limit=5):
+    watch_opps, watch_warnings = get_top_opportunities_and_warnings(
+        state,
+        limit_opportunities=opportunities_limit,
+        limit_warnings=warnings_limit,
+    )
+    daily_opps, daily_warnings, _ = get_daily_opportunities_signals(
+        limit_opportunities=opportunities_limit,
+        limit_warnings=warnings_limit,
+    )
+
+    combined_opps = []
+    for d in daily_opps:
+        combined_opps.append({**d, "source": "فرص اليوم"})
+    for d in watch_opps:
+        combined_opps.append({**d, "source": "القائمة الخاصة", "change_percent": float((d.get("quote") or {}).get("change_percent") or 0)})
+
+    combined_warnings = []
+    for d in daily_warnings:
+        combined_warnings.append({**d, "source": "فرص اليوم"})
+    for d in watch_warnings:
+        combined_warnings.append({**d, "source": "القائمة الخاصة", "change_percent": float((d.get("quote") or {}).get("change_percent") or 0)})
+
+    combined_opps.sort(key=lambda x: float(x.get("change_percent") or 0), reverse=True)
+    combined_warnings.sort(key=lambda x: float(x.get("change_percent") or 0))
+
+    lines = ["⚡ أهم الفرص والتحذيرات", ksa_datetime_line(), ""]
+    lines.append("🔥 أهم الفرص/المتابعة:")
+    if combined_opps:
+        for i, data in enumerate(combined_opps[:opportunities_limit], start=1):
+            lines.append(
+                f"{i}) {data['ticker']} — {data['status']} — {data['price_text']}\n"
+                f"المصدر: {data.get('source', '-')}\n"
+                f"القرار: {data['decision']}"
+            )
+    else:
+        lines.append("لا توجد فرص قوية من القائمتين حاليًا.")
+
+    lines.append("")
+    lines.append("⚠️ أهم التحذيرات:")
+    if combined_warnings:
+        for i, data in enumerate(combined_warnings[:warnings_limit], start=1):
+            lines.append(
+                f"{i}) {data['ticker']} — {data['status']} — {data['price_text']}\n"
+                f"المصدر: {data.get('source', '-')}\n"
+                f"القرار: {data['decision']}"
+            )
+    else:
+        lines.append("لا توجد تحذيرات قوية من القائمتين حاليًا.")
+
+    lines.extend(["", "قاعدة سريعة: الفرصة اليومية الهابطة بقوة تتحول إلى مراجعة/تحذير وليست أولوية خضراء."])
+    return "\n\n".join(lines)
+
+
+def build_risks_only_report(state):
+    _, watch_warnings = get_top_opportunities_and_warnings(state, limit_opportunities=1, limit_warnings=6)
+    _, daily_warnings, _ = get_daily_opportunities_signals(limit_opportunities=1, limit_warnings=6)
+
+    combined = []
+    for d in daily_warnings:
+        combined.append({**d, "source": "فرص اليوم"})
+    for d in watch_warnings:
+        combined.append({**d, "source": "القائمة الخاصة", "change_percent": float((d.get("quote") or {}).get("change_percent") or 0)})
+    combined.sort(key=lambda x: float(x.get("change_percent") or 0))
+
+    lines = ["⚠️ المخاطر فقط", ksa_datetime_line(), ""]
+    if not combined:
+        lines.append("لا توجد مخاطر قوية حاليًا من القائمة الخاصة أو فرص اليوم.")
+    else:
+        for i, data in enumerate(combined[:8], start=1):
+            lines.append(
+                f"{i}) {data['ticker']} — {data['status']} — {data['price_text']}\n"
+                f"المصدر: {data.get('source', '-')}\n"
+                f"القرار: {data['decision']}"
+            )
+    return "\n\n".join(lines)
+
+
+def build_quick_summary_report(state):
+    daily_opps, daily_warnings, _ = get_daily_opportunities_signals(limit_opportunities=3, limit_warnings=3)
+    watch_opps, watch_warnings = get_top_opportunities_and_warnings(state, limit_opportunities=3, limit_warnings=3)
+    best = [x.get("ticker") for x in daily_opps[:2]] + [x.get("ticker") for x in watch_opps[:2]]
+    risks = [x.get("ticker") for x in daily_warnings[:2]] + [x.get("ticker") for x in watch_warnings[:2]]
+
+    return "\n".join([
+        "🧾 ملخص سريع",
+        ksa_datetime_line(),
+        "",
+        "السوق:",
+        build_market_summary_line(current_ksa_time_hhmm()).split("\n\n")[0],
+        "",
+        f"أفضل متابعة: {', '.join([x for x in best if x]) or 'لا يوجد'}",
+        f"أهم مخاطر: {', '.join([x for x in risks if x]) or 'لا يوجد'}",
+        f"القائمة الخاصة: {len(load_watchlist_ordered_symbols())} سهم",
+        f"فرص اليوم: {len(get_daily_opportunity_items())}",
+        "القرار: انتقائية ولا مطاردة بعد ارتفاع قوي.",
+    ])
+
+
+def build_manual_report_section(section, state):
+    section = str(section or "").lower()
+    if section == "market":
+        return build_market_only_report(state)
+    if section == "watchlist":
+        return build_watchlist_only_report(state)
+    if section == "daily":
+        return build_daily_only_report(state)
+    if section == "top":
+        return build_combined_top_signals_report(state)
+    if section == "risks":
+        return build_risks_only_report(state)
+    if section == "summary":
+        return build_quick_summary_report(state)
+    if section == "review":
+        return format_daily_opportunities_review()
+    if section == "full":
+        return build_manual_report(state)
+    return build_manual_report_menu_text()
+
+
+def send_manual_report_menu(chat_id):
+    return send_telegram_to_chat(chat_id, build_manual_report_menu_text(), reply_markup=build_manual_report_menu_keyboard())
+
 def build_manual_report(state):
     """
     v5.9.7.1 Manual Report Text Polish:
@@ -4150,8 +4416,9 @@ def make_alert_buttons(ticker):
 
 def patch_telegram_buttons_manual_report():
     """
-    يضيف أمر "تقرير الآن" بدون تعديل ملف telegram_buttons.py.
-    نستفيد من polling الموجود أصلًا في telegram_buttons، ونلتقط الأمر قبل اعتباره رمز سهم.
+    v5.9.7.3 Manual Report Menu:
+    أمر "تقرير الآن" يعرض قائمة أقسام بالأزرار بدل إرسال التقرير الكامل مباشرة.
+    كما يلتقط callbacks الخاصة بالأقسام بدون الحاجة لتغيير أساس telegram_buttons.py.
     """
     module = globals().get("telegram_buttons_module")
     if not module:
@@ -4160,8 +4427,9 @@ def patch_telegram_buttons_manual_report():
     if getattr(module, "_manual_report_patch_applied", False):
         return True
 
-    original_handler = getattr(module, "handle_text_message", None)
-    if not original_handler:
+    original_text_handler = getattr(module, "handle_text_message", None)
+    original_callback_handler = getattr(module, "handle_callback", None)
+    if not original_text_handler:
         print("Manual report hook skipped: handle_text_message not found", flush=True)
         return False
 
@@ -4172,10 +4440,18 @@ def patch_telegram_buttons_manual_report():
         "التقرير الان",
         "التقرير العام الآن",
         "التقرير العام الان",
+        "/report",
         "/report_now",
         "report now",
         "manual report",
     }
+
+    def _allowed_from_buttons(chat_id):
+        allowed_fn = getattr(module, "_allowed_chat", None)
+        try:
+            return bool(allowed_fn(chat_id)) if allowed_fn else int(chat_id) in [int(x) for x in CHAT_IDS]
+        except Exception:
+            return False
 
     def _handle_today_command(chat_id, text):
         parts = text.split()
@@ -4183,7 +4459,7 @@ def patch_telegram_buttons_manual_report():
 
         if cmd == "/today_add":
             if len(parts) < 2:
-                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_add ALHC")
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_add SYMBOL")
                 return True
             ok, msg = add_daily_opportunity(parts[1])
             send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
@@ -4191,7 +4467,7 @@ def patch_telegram_buttons_manual_report():
 
         if cmd == "/today_remove":
             if len(parts) < 2:
-                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_remove ALHC")
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_remove SYMBOL")
                 return True
             ok, msg = remove_daily_opportunity(parts[1])
             send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
@@ -4217,15 +4493,8 @@ def patch_telegram_buttons_manual_report():
             chat_id = message.get("chat", {}).get("id")
             text = str(message.get("text", "") or "").strip()
 
-            allowed_fn = getattr(module, "_allowed_chat", None)
-            allowed = False
-            try:
-                allowed = bool(allowed_fn(chat_id)) if allowed_fn else int(chat_id) in [int(x) for x in CHAT_IDS]
-            except Exception:
-                allowed = False
-
             if text.startswith("/today_"):
-                if not allowed:
+                if not _allowed_from_buttons(chat_id):
                     print(f"Unauthorized today opportunities command ignored: {chat_id}", flush=True)
                     return
                 if _handle_today_command(chat_id, text):
@@ -4233,29 +4502,54 @@ def patch_telegram_buttons_manual_report():
                     return
 
             if text.lower() in manual_commands or text in manual_commands:
-                if not allowed:
+                if not _allowed_from_buttons(chat_id):
                     print(f"Unauthorized manual report request ignored: {chat_id}", flush=True)
                     return
 
-                msg = build_manual_report(load_state())
-                send_telegram_to_chat(chat_id, msg)
-                print(f"Manual report command handled for chat {chat_id}", flush=True)
+                send_manual_report_menu(chat_id)
+                print(f"Manual report menu sent for chat {chat_id}", flush=True)
                 return
 
         except Exception as e:
             print(f"manual report command error: {e}", flush=True)
 
-        return original_handler(message)
+        return original_text_handler(message)
+
+    def patched_handle_callback(callback):
+        try:
+            callback_id = callback.get("id")
+            message = callback.get("message", {})
+            chat_id = message.get("chat", {}).get("id")
+            data = callback.get("data", "")
+
+            if str(data).startswith("manual_section|"):
+                answer_fn = getattr(module, "answer_callback", None)
+                if answer_fn:
+                    answer_fn(callback_id, "جاري تجهيز القسم...")
+
+                if not _allowed_from_buttons(chat_id):
+                    print(f"Unauthorized manual report callback ignored: {chat_id}", flush=True)
+                    return
+
+                _, section = data.split("|", 1)
+                msg = build_manual_report_section(section, load_state())
+                send_telegram_to_chat(chat_id, msg)
+                print(f"Manual report section sent: {section} to chat {chat_id}", flush=True)
+                return
+
+        except Exception as e:
+            print(f"manual report callback error: {e}", flush=True)
+
+        if original_callback_handler:
+            return original_callback_handler(callback)
+        return None
 
     module.handle_text_message = patched_handle_text_message
+    if original_callback_handler:
+        module.handle_callback = patched_handle_callback
     module._manual_report_patch_applied = True
-    print("Manual report + Daily Opportunities command hook applied", flush=True)
+    print("Manual report menu hook applied", flush=True)
     return True
-
-
-# =========================
-# 17) STARTUP CHECKS
-# =========================
 
 def startup_checks():
     print("===== AlphaBot Startup Checks =====", flush=True)
