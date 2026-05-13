@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.5 SEC Radar Speed + Split Results
+# AlphaBot Pro v5.9.7.6 Quick Summary Percent Fix
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.5 SEC Radar Speed + Split Results"
+VERSION = "v5.9.7.6.1 Quick Summary Visual Percent"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -505,7 +505,7 @@ OpenRouter: Minimal — للأخبار المهمة/الغامضة فقط
 مصادر الأسهم الصغيرة:
 GlobeNewswire + PR Newswire + BusinessWire
 
-وضع التكلفة v5.9.7.5:
+وضع التكلفة v5.9.7.6:
 ✅ SEC أولوية أولى قبل OpenRouter
 ✅ S-1 / S-3 / F-1 / F-3 لا تدخل AI إلا مع كلمات طرح/تخفيف واضحة أو إذا السهم في watchlist
 ✅ ترتيب الأخبار حسب الأهمية قبل التحليل
@@ -4058,11 +4058,56 @@ def build_risks_only_report(state):
     return "\n\n".join(lines)
 
 
+def quick_summary_symbol_with_percent(ticker, mode="auto"):
+    """
+    v5.9.7.6.1 Quick Summary Visual Percent:
+    عرض الرمز مع دائرة الحالة ونسبة التغير في الملخص السريع.
+    mode="best" يستخدم 🟢 عند عدم توفر السعر.
+    mode="risk" يستخدم 🔴 عند عدم توفر السعر.
+    mode="auto" يحدد اللون حسب النسبة.
+    """
+    ticker = normalize_common_ticker(ticker)
+    if not ticker:
+        return ""
+
+    quote = get_stock_quote(ticker)
+    fallback_icon = "🟢" if mode == "best" else "🔴" if mode == "risk" else "⚪"
+
+    if not quote:
+        return f"{ticker} {fallback_icon}"
+
+    try:
+        dp = float(quote.get("change_percent") or 0)
+    except Exception:
+        return f"{ticker} {fallback_icon}"
+
+    if mode == "best":
+        icon = "🟢" if dp >= 0 else "🟡"
+    elif mode == "risk":
+        icon = "🔴" if dp <= 0 else "⚠️"
+    else:
+        icon = "🟢" if dp > 0 else "🔴" if dp < 0 else "⚪"
+
+    if dp > 0:
+        return f"{ticker} — {icon} +{dp:.2f}%"
+    if dp < 0:
+        return f"{ticker} — {icon} {dp:.2f}%"
+    return f"{ticker} — {icon} 0.00%"
+
+
 def build_quick_summary_report(state):
     daily_opps, daily_warnings, _ = get_daily_opportunities_signals(limit_opportunities=3, limit_warnings=3)
     watch_opps, watch_warnings = get_top_opportunities_and_warnings(state, limit_opportunities=3, limit_warnings=3)
     best = [x.get("ticker") for x in daily_opps[:2]] + [x.get("ticker") for x in watch_opps[:2]]
     risks = [x.get("ticker") for x in daily_warnings[:2]] + [x.get("ticker") for x in watch_warnings[:2]]
+
+    best_text = " | ".join(
+        [quick_summary_symbol_with_percent(x, mode="best") for x in best if x]
+    ) or "لا يوجد"
+
+    risks_text = " | ".join(
+        [quick_summary_symbol_with_percent(x, mode="risk") for x in risks if x]
+    ) or "لا يوجد"
 
     return "\n".join([
         "🧾 ملخص سريع",
@@ -4071,8 +4116,8 @@ def build_quick_summary_report(state):
         "السوق:",
         build_market_summary_line(current_ksa_time_hhmm()).split("\n\n")[0],
         "",
-        f"أفضل متابعة: {', '.join([x for x in best if x]) or 'لا يوجد'}",
-        f"أهم مخاطر: {', '.join([x for x in risks if x]) or 'لا يوجد'}",
+        f"أفضل متابعة: {best_text}",
+        f"أهم مخاطر: {risks_text}",
         f"القائمة الخاصة: {len(load_watchlist_ordered_symbols())} سهم",
         f"فرص اليوم: {len(get_daily_opportunity_items())}",
         "القرار: انتقائية ولا مطاردة بعد ارتفاع قوي.",
@@ -4081,7 +4126,7 @@ def build_quick_summary_report(state):
 
 
 # =========================
-# v5.9.7.5 SEC On-Demand Menu + Speed/Split
+# v5.9.7.6 SEC On-Demand Menu + Speed/Split + Quick Summary Percent Fix
 # =========================
 
 # v5.9.7.5:
