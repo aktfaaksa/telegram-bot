@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.7 SEC Positive Classification + Alerts Cycle 5
+# AlphaBot Pro v5.9.7.7.1 Scheduled Reports Fix + Proxy Reverse Split Fix
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.7 SEC Positive Classification + Alerts Cycle 5"
+VERSION = "v5.9.7.7.1 Scheduled Reports Fix + Proxy Reverse Split Fix"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -101,7 +101,7 @@ REPORT_TIMES_KSA = {
 
 # لا نعتمد على مطابقة الدقيقة بالضبط لأن دورة البوت كل 90 ثانية وقد تفوّت 11:00:00.
 # لذلك نسمح بإرسال التقرير خلال نافذة قصيرة بعد وقته، مرة واحدة فقط يوميًا.
-REPORT_SEND_WINDOW_MINUTES = int(os.getenv("REPORT_SEND_WINDOW_MINUTES", "20"))
+REPORT_SEND_WINDOW_MINUTES = int(os.getenv("REPORT_SEND_WINDOW_MINUTES", "40"))
 MARKET_PULSE_WINDOW_MINUTES = int(os.getenv("MARKET_PULSE_WINDOW_MINUTES", "5"))
 
 # v5.9.5.6 Cleanup / Quiet Mode settings
@@ -409,14 +409,19 @@ CHAT_IDS = get_chat_ids()
 # =========================
 
 def send_telegram(message, reply_markup=None):
+    """
+    يرسل رسالة تيليجرام لكل المستلمين ويرجع True فقط إذا نجح الإرسال لكل Chat ID.
+    مهم للتقارير المجدولة: لا نسجل التقرير كمرسل إلا بعد نجاح الإرسال.
+    """
     if not BOT_TOKEN:
         print("BOT_TOKEN missing", flush=True)
-        return
+        return False
 
     if not CHAT_IDS:
         print("CHAT_IDS missing", flush=True)
-        return
+        return False
 
+    ok = True
     for chat_id in CHAT_IDS:
         try:
             payload = {
@@ -428,13 +433,19 @@ def send_telegram(message, reply_markup=None):
             if reply_markup:
                 payload["reply_markup"] = reply_markup
 
-            requests.post(
+            r = requests.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                 json=payload,
                 timeout=15
             )
+            if r.status_code != 200:
+                print(f"Telegram send error to {chat_id}: {r.status_code} | {r.text[:200]}", flush=True)
+                ok = False
         except Exception as e:
-            print(f"Telegram send error to {chat_id}: {e}", flush=True)
+            print(f"Telegram send exception to {chat_id}: {e}", flush=True)
+            ok = False
+
+    return ok
 
 
 def split_telegram_text(message, limit=3900):
@@ -525,6 +536,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ SEC Split Results: فصل فرص/مراقبة SEC عن التحذيرات
 ✅ SEC Classification Label: 🟢 إيجابي قوي / 🟡 مراقبة / 🔴 سلبي
 ✅ Alerts Cycle 5: MAX_ALERTS_PER_CYCLE = 5 مع بقاء AI = 3
+✅ Scheduled Reports Fix: نافذة التقارير 40 دقيقة + تسجيل الإرسال بعد نجاح تيليجرام فقط
+✅ Proxy Reverse Split Fix: PRE/DEF 14A مع reverse split = 🔴 سلبي
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -1817,7 +1830,7 @@ def sort_and_filter_news_items(news_items):
         reverse=True
     )
 
-    print(f"v5.9.5.7 Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
+    print(f"{VERSION} Priority Filter: {len(news_items)} -> {len(prioritized)}", flush=True)
 
     for i, item in enumerate(prioritized[:10], start=1):
         print(
@@ -2949,7 +2962,10 @@ SEC_NEGATIVE_STRONG_WORDS = [
     "resale", "selling stockholder", "selling stockholders", "common stock", "ordinary shares",
     "warrants", "pre-funded warrants", "units", "convertible", "prospectus supplement",
     "free writing prospectus", "late filing", "unable to file", "nt 10-q", "nt 10-k",
-    "reverse split", "increase authorized", "authorized shares", "share increase",
+    "reverse split", "stock split", "reverse stock split", "increase authorized", "authorized shares", "share increase",
+    "issuance of shares", "share issuance", "authorized share increase",
+    "انقسام عكسي", "تقسيم عكسي", "زيادة الأسهم", "زيادة الاسهم", "إصدار أسهم", "اصدار اسهم",
+    "الأسهم المصرح", "الاسهم المصرح", "زيادة الأسهم المصرح", "زيادة الاسهم المصرح",
     "delisting", "non-compliance", "deficiency notice", "going concern", "substantial doubt",
     "material weakness", "default", "bankruptcy", "chapter 11", "termination"
 ]
@@ -3035,9 +3051,18 @@ def classify_sec_signal(item, analysis=None):
         return "🔴 سلبي", "تأخر تقرير مالي يرفع مخاطر الشفافية والامتثال"
 
     if form_u in {"DEF 14A", "PRE 14A"}:
-        if any(w in text_l for w in ["reverse split", "increase authorized", "authorized shares", "issuance of shares", "share issuance"]):
-            return "🔴 سلبي", "تصويت يتضمن reverse split أو زيادة/إصدار أسهم"
-        if any(w in text_l for w in ["merger vote", "acquisition approval", "strategic transaction", "asset sale"]):
+        proxy_negative_words = [
+            "reverse split", "reverse stock split", "stock split",
+            "increase authorized", "authorized shares", "authorized share increase",
+            "issuance of shares", "share issuance", "issue shares",
+            "انقسام عكسي", "تقسيم عكسي",
+            "زيادة الأسهم", "زيادة الاسهم", "زيادة الأسهم المصرح", "زيادة الاسهم المصرح",
+            "الأسهم المصرح", "الاسهم المصرح",
+            "إصدار أسهم", "اصدار اسهم", "إصدار الأسهم", "اصدار الأسهم"
+        ]
+        if any(w in text_l for w in proxy_negative_words):
+            return "🔴 سلبي", "Proxy يتضمن reverse split أو زيادة/إصدار أسهم"
+        if any(w in text_l for w in ["merger vote", "acquisition approval", "strategic transaction", "asset sale", "تصويت على اندماج", "صفقة استراتيجية"]):
             return "🟡 مراقبة", "تصويت على صفقة أو حدث استراتيجي يحتاج متابعة"
         return "🟡 مراقبة", "Proxy يحتاج قراءة البنود قبل الحكم"
 
@@ -4705,13 +4730,21 @@ def send_manual_report_now(state=None):
     return True
 
 
+def _scheduled_report_sent_value_is_true(value):
+    """يدعم الصيغة القديمة bool والصيغة الجديدة dict."""
+    if isinstance(value, dict):
+        return bool(value.get("sent"))
+    return bool(value)
+
+
 def should_send_scheduled_report(state):
     """
-    يرسل التقرير إذا دخلنا نافذة وقته بتوقيت السعودية.
-    السبب: دورة البوت كل 90 ثانية تقريبًا، ومطابقة HH:MM بالضبط قد تجعل التقرير يفوت.
-    يرجع: (scheduled_hhmm, report_title) أو None.
+    يفحص هل يوجد تقرير مجدول مستحق الآن بتوقيت السعودية.
+    مهم: لا يسجل التقرير كمرسل هنا. التسجيل يتم فقط بعد نجاح إرسال تيليجرام.
+    يرجع: (scheduled_hhmm, report_title, report_key) أو None.
     """
-    current_minutes = minutes_from_hhmm(current_ksa_time_hhmm())
+    current_hhmm = current_ksa_time_hhmm()
+    current_minutes = minutes_from_hhmm(current_hhmm)
     date_key = current_ksa_date_key()
     sent = state.setdefault("scheduled_reports_sent", {})
 
@@ -4721,8 +4754,8 @@ def should_send_scheduled_report(state):
             k: v for k, v in sent.items() if str(k).startswith(date_key + "|")
         }
         sent = state["scheduled_reports_sent"]
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Scheduled report cleanup error: {e}", flush=True)
 
     for scheduled_hhmm, title in sorted(REPORT_TIMES_KSA.items(), key=lambda x: minutes_from_hhmm(x[0])):
         scheduled_minutes = minutes_from_hhmm(scheduled_hhmm)
@@ -4730,16 +4763,17 @@ def should_send_scheduled_report(state):
 
         if 0 <= diff <= REPORT_SEND_WINDOW_MINUTES:
             report_key = f"{date_key}|{scheduled_hhmm}"
-
-            if sent.get(report_key):
-                continue
-
-            sent[report_key] = True
+            already_sent = _scheduled_report_sent_value_is_true(sent.get(report_key))
             print(
-                f"Scheduled report due: {scheduled_hhmm} | current {current_ksa_time_hhmm()} KSA | {title}",
+                f"Scheduled report check: {scheduled_hhmm} | current={current_hhmm} KSA | "
+                f"diff={diff}m | window={REPORT_SEND_WINDOW_MINUTES}m | already_sent={already_sent}",
                 flush=True,
             )
-            return scheduled_hhmm, title
+
+            if already_sent:
+                return None
+
+            return scheduled_hhmm, title, report_key
 
     return None
 
@@ -4750,9 +4784,25 @@ def maybe_send_scheduled_report(state):
     if not scheduled:
         return False
 
-    scheduled_hhmm, report_title = scheduled
-    msg = build_scheduled_report(report_title, state, scheduled_hhmm=scheduled_hhmm)
-    send_telegram(msg)
+    scheduled_hhmm, report_title, report_key = scheduled
+    print(f"Scheduled report sending: {scheduled_hhmm} | {report_title}", flush=True)
+
+    try:
+        msg = build_scheduled_report(report_title, state, scheduled_hhmm=scheduled_hhmm)
+        sent_ok = send_telegram(msg)
+    except Exception as e:
+        print(f"Scheduled report build/send exception: {scheduled_hhmm} | {e}", flush=True)
+        return False
+
+    if not sent_ok:
+        print(f"Scheduled report Telegram send failed: {scheduled_hhmm}; will retry inside window", flush=True)
+        return False
+
+    state.setdefault("scheduled_reports_sent", {})[report_key] = {
+        "sent": True,
+        "sent_at": now_utc().isoformat(),
+        "title": report_title,
+    }
     state["last_scheduled_report_time"] = now_utc().isoformat()
     state["last_scheduled_report_hhmm"] = scheduled_hhmm
     print(f"Scheduled report sent: {scheduled_hhmm} | {report_title}", flush=True)
