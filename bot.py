@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.7.1 Scheduled Reports Fix + Proxy Reverse Split Fix
+# AlphaBot Pro v5.9.7.7.2 Scheduled Reports Hard Fix + Main Exchanges Only + 8-K Restructuring Fix
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.7.1 Scheduled Reports Fix + Proxy Reverse Split Fix"
+VERSION = "v5.9.7.7.2 Scheduled Reports Hard Fix + Main Exchanges Only + 8-K Restructuring Fix"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -411,7 +411,7 @@ CHAT_IDS = get_chat_ids()
 def send_telegram(message, reply_markup=None):
     """
     يرسل رسالة تيليجرام لكل المستلمين ويرجع True فقط إذا نجح الإرسال لكل Chat ID.
-    مهم للتقارير المجدولة: لا نسجل التقرير كمرسل إلا بعد نجاح الإرسال.
+    v5.9.7.7.2: يدعم تقسيم الرسائل الطويلة تلقائيًا، وهذا مهم للتقارير المجدولة.
     """
     if not BOT_TOKEN:
         print("BOT_TOKEN missing", flush=True)
@@ -422,28 +422,32 @@ def send_telegram(message, reply_markup=None):
         return False
 
     ok = True
+    parts = split_telegram_text(message)
+
     for chat_id in CHAT_IDS:
-        try:
-            payload = {
-                "chat_id": chat_id,
-                "text": message,
-                "disable_web_page_preview": True
-            }
+        for index, part in enumerate(parts):
+            try:
+                payload = {
+                    "chat_id": chat_id,
+                    "text": part,
+                    "disable_web_page_preview": True
+                }
 
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
+                # إذا فيه أزرار، نضعها فقط مع آخر جزء من الرسالة حتى لا تتكرر.
+                if reply_markup and index == len(parts) - 1:
+                    payload["reply_markup"] = reply_markup
 
-            r = requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json=payload,
-                timeout=15
-            )
-            if r.status_code != 200:
-                print(f"Telegram send error to {chat_id}: {r.status_code} | {r.text[:200]}", flush=True)
+                r = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json=payload,
+                    timeout=15
+                )
+                if r.status_code != 200:
+                    print(f"Telegram send error to {chat_id}: {r.status_code} | {r.text[:300]}", flush=True)
+                    ok = False
+            except Exception as e:
+                print(f"Telegram send exception to {chat_id}: {e}", flush=True)
                 ok = False
-        except Exception as e:
-            print(f"Telegram send exception to {chat_id}: {e}", flush=True)
-            ok = False
 
     return ok
 
@@ -536,8 +540,11 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ SEC Split Results: فصل فرص/مراقبة SEC عن التحذيرات
 ✅ SEC Classification Label: 🟢 إيجابي قوي / 🟡 مراقبة / 🔴 سلبي
 ✅ Alerts Cycle 5: MAX_ALERTS_PER_CYCLE = 5 مع بقاء AI = 3
+✅ Scheduled Reports Hard Fix: heartbeat داخل كل دورة + إرسال مجزأ للتقارير الطويلة
 ✅ Scheduled Reports Fix: نافذة التقارير 40 دقيقة + تسجيل الإرسال بعد نجاح تيليجرام فقط
 ✅ Proxy Reverse Split Fix: PRE/DEF 14A مع reverse split = 🔴 سلبي
+✅ 8-K Restructuring Fix: إعادة الهيكلة/الديون = 🔴 سلبي
+✅ Main Exchanges Only: استبعاد OTC/Pink من الرادار العام خارج القائمة
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -1286,6 +1293,116 @@ def load_watchlist_symbols():
     """
     return set(load_watchlist_ordered_symbols())
 
+
+# =========================
+# v5.9.7.7.2 Main Exchanges Only / OTC Filter
+# =========================
+
+PROFILE_CACHE = {}
+OTC_MARKET_WORDS = ["OTC", "PINK", "OTCQB", "OTCQX", "OTCBB", "GREY", "GREY MARKET", "OTHER OTC", "PINX"]
+MAIN_EXCHANGE_WORDS = ["NASDAQ", "NEW YORK STOCK EXCHANGE", "NYSE", "NYSE MKT", "NYSE AMERICAN", "AMEX", "NYSE ARCA"]
+
+
+def get_stock_profile(ticker):
+    """
+    يجلب ملف الشركة من Finnhub لمعرفة السوق/البورصة عند الإمكان.
+    يستخدم فقط كفلتر للرادار العام، ولا يمنع أسهم القائمة الخاصة.
+    """
+    ticker = normalize_common_ticker(ticker)
+
+    if not ticker or not FINNHUB_API_KEY:
+        return None
+
+    cached = PROFILE_CACHE.get(ticker)
+    if cached and now_utc() - cached.get("time", now_utc()) < timedelta(hours=6):
+        return cached.get("profile")
+
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/stock/profile2",
+            params={"symbol": ticker, "token": FINNHUB_API_KEY},
+            timeout=10,
+        )
+
+        if r.status_code != 200:
+            print(f"Profile error {ticker}: {r.status_code}", flush=True)
+            return None
+
+        data = r.json()
+        if not isinstance(data, dict) or not data:
+            return None
+
+        PROFILE_CACHE[ticker] = {"profile": data, "time": now_utc()}
+        return data
+
+    except Exception as e:
+        print(f"get_stock_profile error {ticker}: {e}", flush=True)
+        return None
+
+
+def _extract_exchange_hint_from_text(text):
+    text_u = str(text or "").upper()
+    for word in ["OTCQB", "OTCQX", "OTCBB", "OTC PINK", "PINK CURRENT", "OTC:", "OTC MARKETS"]:
+        if word in text_u:
+            return "OTC"
+    for word in ["NASDAQ", "NYSE AMERICAN", "NYSE", "AMEX"]:
+        if word in text_u:
+            return word
+    return ""
+
+
+def is_otc_or_pink_market(ticker, item=None):
+    """
+    True إذا كان السهم من OTC/Pink حسب Finnhub أو تلميح واضح من النص.
+    لا نستخدم التخمين الضعيف وحده حتى لا نحذف سهمًا رئيسيًا بالخطأ.
+    """
+    ticker = normalize_common_ticker(ticker)
+    if not ticker:
+        return False
+
+    # صيغ واضحة من مزودين/روابط خارجية.
+    raw_ticker = clean_text((item or {}).get("ticker", "")).upper()
+    if raw_ticker.endswith(".PK") or raw_ticker.endswith(".OB"):
+        return True
+
+    text_hint = _extract_exchange_hint_from_text(
+        f"{(item or {}).get('title','')} {(item or {}).get('raw','')} {(item or {}).get('source','')}"
+    )
+    if text_hint == "OTC":
+        return True
+
+    profile = get_stock_profile(ticker)
+    if not profile:
+        return False
+
+    exchange_text = " ".join([
+        str(profile.get("exchange", "")),
+        str(profile.get("finnhubIndustry", "")),
+        str(profile.get("marketCapitalization", "")),
+    ]).upper()
+
+    if any(word in exchange_text for word in OTC_MARKET_WORDS):
+        return True
+
+    return False
+
+
+def is_main_us_exchange(ticker, item=None):
+    """
+    مساعد اختياري: هل يظهر أن السهم من Nasdaq/NYSE/AMEX.
+    إذا لم تتوفر بيانات لا نحكم حتى لا نفقد أخبارًا مهمة بالخطأ.
+    """
+    ticker = normalize_common_ticker(ticker)
+    profile = get_stock_profile(ticker)
+    if not profile:
+        return None
+
+    exchange_text = str(profile.get("exchange", "")).upper()
+    if any(word in exchange_text for word in OTC_MARKET_WORDS):
+        return False
+    if any(word in exchange_text for word in MAIN_EXCHANGE_WORDS):
+        return True
+    return None
 
 
 # =========================
@@ -2879,6 +2996,12 @@ def should_send_alert(item, analysis, state):
     if not ticker and category != "Macro":
         return False, "no reliable ticker"
 
+    # v5.9.7.7.2: استبعاد OTC/Pink من الرادار العام خارج القائمة لأنها لا تفتح في منصة سهم.
+    # إذا كان السهم داخل القائمة الخاصة يدويًا لا نمنعه.
+    if ticker and category != "Macro" and ticker not in load_watchlist_symbols():
+        if is_otc_or_pink_market(ticker, item):
+            return False, "outside watchlist OTC/Pink skipped"
+
     if is_sec_source(item.get("source", "")) and sec_form:
         if not sec_form_cooldown_ok(state, item, ticker, sec_form):
             return False, f"SEC CIK/form cooldown for {ticker} {sec_form}"
@@ -2967,7 +3090,10 @@ SEC_NEGATIVE_STRONG_WORDS = [
     "انقسام عكسي", "تقسيم عكسي", "زيادة الأسهم", "زيادة الاسهم", "إصدار أسهم", "اصدار اسهم",
     "الأسهم المصرح", "الاسهم المصرح", "زيادة الأسهم المصرح", "زيادة الاسهم المصرح",
     "delisting", "non-compliance", "deficiency notice", "going concern", "substantial doubt",
-    "material weakness", "default", "bankruptcy", "chapter 11", "termination"
+    "material weakness", "default", "bankruptcy", "chapter 11", "termination",
+    "restructuring", "restructuring support agreement", "debt restructuring",
+    "credit agreement amendment", "forbearance", "exchange offer", "recapitalization",
+    "reorganization", "distressed", "إعادة هيكلة", "اعادة هيكلة", "الدائنين", "دائن"
 ]
 
 SEC_WATCH_WORDS = [
@@ -3025,6 +3151,19 @@ def classify_sec_signal(item, analysis=None):
         return "🟢 إيجابي قوي", "دخول/تغير ملكية مستثمر نشط محتمل"
 
     if form_u == "8-K":
+        # v5.9.7.7.2: السلبية أولًا حتى لا تخدعنا كلمة agreement في أخبار إعادة الهيكلة/الديون.
+        negative_8k_words = [
+            "reverse split", "reverse stock split", "stock split",
+            "restructuring", "restructuring support agreement", "debt restructuring",
+            "credit agreement amendment", "forbearance", "default", "liquidity",
+            "going concern", "substantial doubt", "bankruptcy", "chapter 11",
+            "material weakness", "delisting", "non-compliance", "deficiency notice",
+            "termination", "terminated", "breach",
+            "إعادة هيكلة", "اعادة هيكلة", "تقسيم عكسي", "انقسام عكسي", "الدائنين", "دائن"
+        ]
+        if any(w in text_l for w in negative_8k_words):
+            return "🔴 سلبي", "8-K يتضمن إعادة هيكلة/ديون أو بندًا تحذيريًا"
+
         if any(w in text_l for w in ["nasdaq compliance regained", "regained compliance", "compliance regained", "continued listing compliance"]):
             return "🟢 إيجابي قوي", "استعادة امتثال Nasdaq أو استمرار الإدراج"
         if any(w in text_l for w in ["non-dilutive financing", "non dilutive financing", "grant", "government funding", "award"]):
@@ -3032,11 +3171,9 @@ def classify_sec_signal(item, analysis=None):
         if any(w in text_l for w in ["fda approval", "fda clearance", "fast track designation", "orphan drug designation", "positive topline", "met primary endpoint", "meets primary endpoint"]):
             return "🟢 إيجابي قوي", "خبر FDA/Clinical إيجابي"
         if any(w in text_l for w in ["contract", "purchase order", "strategic partnership", "license agreement", "licensing agreement", "supply agreement", "government contract", "material definitive agreement", "definitive agreement"]):
-            if not any(w in text_l for w in ["termination", "terminated", "default", "breach"]):
-                return "🟢 إيجابي قوي", "عقد أو اتفاقية/صفقة مهمة"
+            return "🟢 إيجابي قوي", "عقد أو اتفاقية/صفقة مهمة"
         if any(w in text_l for w in ["merger agreement", "acquisition", "buyout", "tender offer"]):
-            if not any(w in text_l for w in ["termination", "terminated", "cancelled", "canceled"]):
-                return "🟢 إيجابي قوي", "اندماج أو استحواذ/صفقة استراتيجية"
+            return "🟢 إيجابي قوي", "اندماج أو استحواذ/صفقة استراتيجية"
         if negative_hit:
             return "🔴 سلبي", "8-K يتضمن بندًا تحذيريًا أو سلبيًا"
         return "🟡 مراقبة", "8-K مهم لكن اتجاهه يحتاج تأكيد من السعر والفوليوم"
@@ -4737,6 +4874,30 @@ def _scheduled_report_sent_value_is_true(value):
     return bool(value)
 
 
+def scheduled_reports_heartbeat(state=None):
+    """لوق ثابت داخل كل دورة حتى نتأكد أن فحص التقارير المجدولة يعمل فعليًا."""
+    try:
+        state = state or {}
+        current_hhmm = current_ksa_time_hhmm()
+        current_minutes = minutes_from_hhmm(current_hhmm)
+        next_items = []
+        for hhmm in sorted(REPORT_TIMES_KSA.keys(), key=minutes_from_hhmm):
+            diff = current_minutes - minutes_from_hhmm(hhmm)
+            if 0 <= diff <= REPORT_SEND_WINDOW_MINUTES:
+                key = f"{current_ksa_date_key()}|{hhmm}"
+                already_sent = _scheduled_report_sent_value_is_true(state.get("scheduled_reports_sent", {}).get(key))
+                next_items.append(f"{hhmm}:diff={diff}m:sent={already_sent}")
+
+        due_text = ", ".join(next_items) if next_items else "none"
+        print(
+            f"Scheduled reports heartbeat: current={current_hhmm} KSA | "
+            f"window={REPORT_SEND_WINDOW_MINUTES}m | due={due_text}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"Scheduled reports heartbeat error: {e}", flush=True)
+
+
 def should_send_scheduled_report(state):
     """
     يفحص هل يوجد تقرير مجدول مستحق الآن بتوقيت السعودية.
@@ -5248,6 +5409,11 @@ def run():
         try:
             print("Starting new cycle...", flush=True)
 
+            # v5.9.7.7.2 Hard Fix:
+            # نعيد تحميل state في كل دورة لأن الأزرار/الأوامر قد تحدث ملفات الحالة،
+            # ونطبع heartbeat ثابت للتقارير حتى تظهر في Railway Logs.
+            state = load_state()
+            scheduled_reports_heartbeat(state)
             maybe_send_scheduled_report(state)
             maybe_send_market_pulse(state)
 
@@ -5276,6 +5442,10 @@ def run():
                 if sent:
                     sent_count += 1
                     time.sleep(2)
+
+            # فحص ثانٍ بعد دورة الأخبار؛ إذا استغرق الجلب وقتًا طويلًا لا يفوت التقرير.
+            scheduled_reports_heartbeat(state)
+            maybe_send_scheduled_report(state)
 
             print(
                 f"Cycle done. Sent: {sent_count}. AI analyses: {ai_counter.get('count', 0)}/{MAX_AI_ANALYSES_PER_CYCLE}. Total items: {len(news_items)}",
