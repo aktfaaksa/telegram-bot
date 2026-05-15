@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.7.2 Scheduled Reports Hard Fix + Main Exchanges Only + 8-K Restructuring Fix
+# AlphaBot Pro v5.9.7.8 Daily Opportunities Auto Status + Auto Cleanup
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.7.2 Scheduled Reports Hard Fix + Main Exchanges Only + 8-K Restructuring Fix"
+VERSION = "v5.9.7.8 Daily Opportunities Auto Status + Auto Cleanup"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -529,8 +529,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ تقرير يدوي عند الطلب: تقرير الآن / التقرير العام الآن
 ✅ Market Data Filter: Nasdaq / S&P 500 / Dow / VIX
 ✅ Watchlist Volume Sync: قراءة القائمة من WATCHLIST_FILE
-✅ Daily Opportunities Manual Mode: فرص اليوم من فلتر Investing Pro+
-✅ أوامر فرص اليوم: /today_add /today_remove /today_list /today_clear
+✅ Daily Opportunities Auto Status: فرص اليوم من فلتر Investing Pro+ بحالة تلقائية
+✅ أوامر فرص اليوم: /today_add /today_set /today_remove /today_list /today_clear
 ✅ أزرار فرص اليوم: زر 🔥 فرص اليوم داخل بطاقة السهم
 ✅ مراجعة فرص اليوم: /today_review + 🧹 مراجعة فرص اليوم
 ✅ الإضافة لفرص اليوم تعتمد على تأكيد فحص الشرعية اليدوي
@@ -545,6 +545,9 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Proxy Reverse Split Fix: PRE/DEF 14A مع reverse split = 🔴 سلبي
 ✅ 8-K Restructuring Fix: إعادة الهيكلة/الديون = 🔴 سلبي
 ✅ Main Exchanges Only: استبعاد OTC/Pink من الرادار العام خارج القائمة
+✅ Daily Opportunities Auto Status: تضيف السهم فقط والبوت يحدد الحالة تلقائيًا
+✅ Daily Opportunities Auto Cleanup: تنظيف آمن قبل البري ماركت مع نسخة احتياطية
+✅ Earnings Opportunities: فصل فرص الأرباح اليوم وحذفها تلقائيًا في اليوم التالي
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -1406,7 +1409,7 @@ def is_main_us_exchange(ticker, item=None):
 
 
 # =========================
-# v5.9.7 Daily Opportunities Manual Mode
+# v5.9.7.8 Daily Opportunities Auto Status + Auto Cleanup
 # =========================
 
 def _ensure_parent_dir(path):
@@ -1419,79 +1422,115 @@ def _ensure_parent_dir(path):
 
 
 def default_daily_opportunities_data():
+    return {"date": current_ksa_date_key(), "timezone": "Asia/Riyadh", "updated_at": now_utc().isoformat(), "items": []}
+
+
+def _daily_cleanup_allowed_now():
+    return minutes_from_hhmm(current_ksa_time_hhmm()) >= minutes_from_hhmm("09:00")
+
+
+def _normalize_daily_category(value):
+    v = clean_text(value).lower()
+    if v in ["earnings", "earning", "earn", "ارباح", "أرباح", "الارباح", "الأرباح"]:
+        return "earnings"
+    return "daily"
+
+
+def _normalize_daily_status(value):
+    v = clean_text(value).lower()
+    if v in ["removed", "delete", "deleted", "محذوف"]:
+        return "removed"
+    if v in ["ended", "end", "منتهية", "انتهت"]:
+        return "ended"
+    if v in ["watch", "مراقبة"]:
+        return "watch"
+    return "active"
+
+
+def _daily_symbol_from_item(item):
+    if isinstance(item, str):
+        return normalize_common_ticker(item)
+    if not isinstance(item, dict):
+        return ""
+    return normalize_common_ticker(item.get("symbol") or item.get("ticker") or "")
+
+
+def _normalize_daily_item(item):
+    ticker = _daily_symbol_from_item(item)
+    if not ticker:
+        return None
+    row = dict(item) if isinstance(item, dict) else {}
+    category = _normalize_daily_category(row.get("category", "daily"))
+    status = _normalize_daily_status(row.get("status", "active"))
+    reason = clean_text(row.get("reason", ""))
+    if not reason:
+        reason = "فرصة أرباح اليوم + شرعي حسب فحص المستخدم" if category == "earnings" else "مرشح من فلتر Investing Pro+ + شرعي حسب فحص المستخدم"
+    decision = clean_text(row.get("decision", ""))
+    if not decision:
+        decision = "مراقبة ردة فعل السعر والفوليوم قبل/بعد إعلان الأرباح." if category == "earnings" else "البوت يحدد الحالة تلقائيًا حسب السعر والزخم والخبر وSEC."
+    added_at = row.get("added_at") or now_ksa().strftime("%Y-%m-%d %H:%M")
     return {
-        "date": current_ksa_date_key(),
-        "updated_at": now_utc().isoformat(),
-        "items": []
+        "symbol": ticker,
+        "ticker": ticker,
+        "category": category,
+        "status": status,
+        "added_at": added_at,
+        "reason": reason,
+        "decision": decision,
+        "priority": clean_text(row.get("priority", "auto")) or "auto",
     }
 
 
-def load_daily_opportunities():
-    """
-    فرص اليوم محفوظة في DAILY_OPPORTUNITIES_FILE داخل Railway Volume.
-    لا تُمسح تلقائيًا بعد الإغلاق؛ تبقى حتى يراجعها المستخدم أو يمسحها يدويًا.
-    """
+def _load_daily_opportunities_raw():
     if not os.path.exists(DAILY_OPPORTUNITIES_FILE):
         data = default_daily_opportunities_data()
         save_daily_opportunities(data)
         return data
+    with open(DAILY_OPPORTUNITIES_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("daily opportunities data is not dict")
+    data.setdefault("date", current_ksa_date_key())
+    data.setdefault("timezone", "Asia/Riyadh")
+    data.setdefault("updated_at", now_utc().isoformat())
+    data.setdefault("items", [])
+    return data
 
-    try:
-        with open(DAILY_OPPORTUNITIES_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
 
-        if not isinstance(data, dict):
-            raise ValueError("daily opportunities data is not dict")
-
-        data.setdefault("date", current_ksa_date_key())
-        data.setdefault("updated_at", now_utc().isoformat())
-        data.setdefault("items", [])
-
-        cleaned = []
-        seen = set()
-        for item in data.get("items", []):
-            if isinstance(item, str):
-                ticker = normalize_common_ticker(item)
-                row = {}
-            elif isinstance(item, dict):
-                ticker = normalize_common_ticker(item.get("ticker", ""))
-                row = dict(item)
-            else:
-                continue
-
-            if not ticker or ticker in seen:
-                continue
-
-            row["ticker"] = ticker
-            row.setdefault("status", "🟢 أولوية")
-            row.setdefault("state", "نشطة اليوم")
-            row.setdefault("reason", "مرشح من فلتر Investing Pro+ + شرعي")
-            row.setdefault("decision", "مراقبة قوية، لا مطاردة.")
-            row.setdefault("added_at", now_utc().isoformat())
-            cleaned.append(row)
-            seen.add(ticker)
-
-        data["items"] = cleaned
-        return data
-
-    except Exception as e:
-        print(f"load_daily_opportunities error: {e} | file={DAILY_OPPORTUNITIES_FILE}", flush=True)
-        data = default_daily_opportunities_data()
-        save_daily_opportunities(data)
-        return data
+def _normalize_daily_opportunities_data(data):
+    data.setdefault("date", current_ksa_date_key())
+    data.setdefault("timezone", "Asia/Riyadh")
+    data.setdefault("updated_at", now_utc().isoformat())
+    data.setdefault("items", [])
+    cleaned = []
+    seen = set()
+    for item in data.get("items", []):
+        row = _normalize_daily_item(item)
+        if not row:
+            continue
+        key = row["symbol"]
+        if key in seen:
+            for idx, old in enumerate(cleaned):
+                if old.get("symbol") == key:
+                    cleaned[idx].update(row)
+                    break
+            continue
+        cleaned.append(row)
+        seen.add(key)
+    data["items"] = cleaned
+    return data
 
 
 def save_daily_opportunities(data):
     try:
         _ensure_parent_dir(DAILY_OPPORTUNITIES_FILE)
-        data["updated_at"] = now_utc().isoformat()
+        data.setdefault("timezone", "Asia/Riyadh")
         data.setdefault("date", current_ksa_date_key())
         data.setdefault("items", [])
-
+        data["updated_at"] = now_utc().isoformat()
         tmp = DAILY_OPPORTUNITIES_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-
         os.replace(tmp, DAILY_OPPORTUNITIES_FILE)
         return True
     except Exception as e:
@@ -1499,185 +1538,285 @@ def save_daily_opportunities(data):
         return False
 
 
-def add_daily_opportunity(ticker, status="🟢 أولوية", reason=None, decision=None, state_label="نشطة اليوم"):
+def backup_daily_opportunities(data, old_date=None):
+    try:
+        _ensure_parent_dir(DAILY_OPPORTUNITIES_FILE)
+        folder = os.path.dirname(os.path.abspath(DAILY_OPPORTUNITIES_FILE)) or "."
+        safe_date = clean_text(old_date or data.get("date") or current_ksa_date_key()).replace("/", "-")
+        stamp = now_ksa().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(folder, f"daily_opportunities_backup_{safe_date}_{stamp}.json")
+        with open(backup_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return backup_path
+    except Exception as e:
+        print(f"daily opportunities backup error: {e}", flush=True)
+        return ""
+
+
+def cleanup_daily_opportunities_if_new_day(force=False, notify=False, chat_id=None, reason=""):
+    try:
+        data = _normalize_daily_opportunities_data(_load_daily_opportunities_raw())
+        today = current_ksa_date_key()
+        old_date = str(data.get("date") or today)
+        if old_date >= today:
+            return False, ""
+        if not force and not _daily_cleanup_allowed_now():
+            print(f"Daily opportunities cleanup skipped before 09:00 KSA: old_date={old_date} today={today}", flush=True)
+            return False, ""
+        active_items = [x for x in data.get("items", []) if _normalize_daily_status(x.get("status")) not in ["removed", "ended"]]
+        backup_path = backup_daily_opportunities(data, old_date=old_date)
+        data["date"] = today
+        data["timezone"] = "Asia/Riyadh"
+        data["items"] = []
+        save_daily_opportunities(data)
+        msg_lines = [
+            "🧹 تم تنظيف فرص اليوم القديمة",
+            f"التاريخ السابق: {old_date}",
+            f"التاريخ الجديد: {today}",
+            f"تم حذف: {len(active_items)} سهم من فرص اليوم/الأرباح",
+            "القائمة جاهزة لإضافة فرص اليوم الجديدة.",
+        ]
+        if backup_path:
+            msg_lines.append(f"نسخة احتياطية: {backup_path}")
+        if reason:
+            msg_lines.append(f"السبب: {reason}")
+        msg = "\n".join(msg_lines)
+        print(msg.replace("\n", " | "), flush=True)
+        if notify:
+            if chat_id:
+                send_telegram_to_chat(chat_id, msg)
+            else:
+                send_telegram(msg)
+        return True, msg
+    except Exception as e:
+        print(f"cleanup_daily_opportunities_if_new_day error: {e}", flush=True)
+        return False, ""
+
+
+def load_daily_opportunities():
+    try:
+        data = _normalize_daily_opportunities_data(_load_daily_opportunities_raw())
+        save_daily_opportunities(data)
+        return data
+    except Exception as e:
+        print(f"load_daily_opportunities error: {e} | file={DAILY_OPPORTUNITIES_FILE}", flush=True)
+        data = default_daily_opportunities_data()
+        save_daily_opportunities(data)
+        return data
+
+
+def parse_today_add_options(parts):
+    category = "daily"
+    for token in parts:
+        if _normalize_daily_category(token) == "earnings":
+            category = "earnings"
+    return category
+
+
+def add_daily_opportunity(ticker, category="daily", reason=None, decision=None):
     ticker = normalize_common_ticker(ticker)
     if not ticker:
         return False, "رمز السهم غير صحيح"
-
+    cleanup_daily_opportunities_if_new_day(force=True, notify=False, reason="إضافة فرصة جديدة في يوم جديد")
+    category = _normalize_daily_category(category)
     data = load_daily_opportunities()
+    data["date"] = current_ksa_date_key()
+    data["timezone"] = "Asia/Riyadh"
     items = data.setdefault("items", [])
-
-    for item in items:
-        if normalize_common_ticker(item.get("ticker", "")) == ticker:
-            return True, f"{ticker} موجود مسبقًا في فرص اليوم"
-
-    items.append({
+    new_row = _normalize_daily_item({
+        "symbol": ticker,
         "ticker": ticker,
-        "status": status or "🟢 أولوية",
-        "state": state_label or "نشطة اليوم",
-        "reason": reason or "مرشح من فلتر Investing Pro+ + شرعي",
-        "decision": decision or "مراقبة قوية، لا مطاردة.",
-        "added_at": now_utc().isoformat(),
+        "category": category,
+        "status": "active",
+        "reason": reason or ("فرصة أرباح اليوم + شرعي حسب فحص المستخدم" if category == "earnings" else "مرشح من فلتر Investing Pro+ + شرعي حسب فحص المستخدم"),
+        "decision": decision or ("مراقبة ردة فعل السعر والفوليوم قبل/بعد إعلان الأرباح." if category == "earnings" else "البوت يحدد الحالة تلقائيًا حسب السعر والزخم والخبر وSEC."),
+        "added_at": now_ksa().strftime("%Y-%m-%d %H:%M"),
     })
-
+    for item in items:
+        if _daily_symbol_from_item(item) == ticker:
+            item.update(new_row)
+            item["status"] = "active"
+            if not save_daily_opportunities(data):
+                return False, "تعذر حفظ فرص اليوم"
+            label = "فرص الأرباح اليوم" if category == "earnings" else "فرص اليوم"
+            return True, f"تم تحديث {ticker} داخل {label} — الحالة يحددها البوت تلقائيًا"
+    items.append(new_row)
     if not save_daily_opportunities(data):
         return False, "تعذر حفظ فرص اليوم"
+    label = "فرص الأرباح اليوم" if category == "earnings" else "فرص اليوم"
+    return True, f"تمت إضافة {ticker} إلى {label} — الحالة يحددها البوت تلقائيًا"
 
-    return True, f"تمت إضافة {ticker} إلى فرص اليوم"
+
+def set_daily_opportunity(ticker, value):
+    ticker = normalize_common_ticker(ticker)
+    value_l = clean_text(value).lower()
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+    if not value_l:
+        return False, "استخدم الأمر هكذا:\n/today_set SYMBOL daily|earnings|active|ended|removed"
+    data = load_daily_opportunities()
+    items = data.setdefault("items", [])
+    for item in items:
+        if _daily_symbol_from_item(item) == ticker:
+            if value_l in ["daily", "earnings", "earning", "earn"]:
+                item["category"] = _normalize_daily_category(value_l)
+                item["status"] = "active"
+            elif value_l in ["active", "watch", "ended", "removed"]:
+                item["status"] = _normalize_daily_status(value_l)
+            elif value_l in ["delete", "deleted", "remove"]:
+                item["status"] = "removed"
+            else:
+                return False, "القيمة غير معروفة. استخدم: daily / earnings / active / ended / removed"
+            if not save_daily_opportunities(data):
+                return False, "تعذر حفظ فرص اليوم"
+            return True, f"تم تحديث {ticker} إلى {item.get('category')} / {item.get('status')}"
+    return False, f"{ticker} غير موجود في فرص اليوم"
 
 
 def remove_daily_opportunity(ticker):
     ticker = normalize_common_ticker(ticker)
     if not ticker:
         return False, "رمز السهم غير صحيح"
-
     data = load_daily_opportunities()
     items = data.setdefault("items", [])
     before = len(items)
-    data["items"] = [x for x in items if normalize_common_ticker(x.get("ticker", "")) != ticker]
-
+    data["items"] = [x for x in items if _daily_symbol_from_item(x) != ticker]
     if len(data["items"]) == before:
         return False, f"{ticker} غير موجود في فرص اليوم"
-
     if not save_daily_opportunities(data):
         return False, "تعذر حفظ فرص اليوم"
-
     return True, f"تم حذف {ticker} من فرص اليوم"
 
 
 def clear_daily_opportunities():
     data = load_daily_opportunities()
-    count = len(data.get("items", []))
+    count = len([x for x in data.get("items", []) if _normalize_daily_status(x.get("status")) not in ["removed", "ended"]])
+    backup_daily_opportunities(data, old_date=data.get("date"))
     data["date"] = current_ksa_date_key()
+    data["timezone"] = "Asia/Riyadh"
     data["items"] = []
-
     if not save_daily_opportunities(data):
         return False, "تعذر مسح فرص اليوم"
+    return True, f"تم مسح فرص اليوم ({count} سهم) مع حفظ نسخة احتياطية"
 
-    return True, f"تم مسح فرص اليوم ({count} سهم)"
 
-
-def get_daily_opportunity_items():
+def get_daily_opportunity_items(category=None, include_inactive=False):
     data = load_daily_opportunities()
-    return data.get("items", [])
+    result = []
+    for item in data.get("items", []):
+        row = _normalize_daily_item(item)
+        if not row:
+            continue
+        if not include_inactive and row.get("status") in ["removed", "ended"]:
+            continue
+        if category and row.get("category") != category:
+            continue
+        result.append(row)
+    return result
 
 
-def format_daily_opportunities_list():
-    data = load_daily_opportunities()
-    items = data.get("items", [])
-
-    if not items:
-        return "🔥 فرص اليوم من فلتر Investing Pro+\n\nلا توجد فرص يومية مضافة حاليًا."
-
-    lines = [
-        "🔥 فرص اليوم من فلتر Investing Pro+",
-        f"📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}",
-        f"📌 العدد: {len(items)}",
-        "",
-    ]
-
-    for i, item in enumerate(items, start=1):
-        ticker = normalize_common_ticker(item.get("ticker", ""))
-        status = item.get("status", "🟢 أولوية")
-        state_label = item.get("state", "نشطة اليوم")
-        reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
-        lines.append(f"{i}. {ticker} — {status} — {state_label}\nالسبب: {reason}")
-
-    lines.append("")
-    lines.append(f"المصدر: {DAILY_OPPORTUNITIES_FILE}")
-    return "\n\n".join(lines)
+def _is_recent_context(context, hours=48):
+    try:
+        raw = context.get("time")
+        if not raw:
+            return False
+        dt = datetime.fromisoformat(str(raw))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return now_utc() - dt <= timedelta(hours=hours)
+    except Exception:
+        return False
 
 
-def format_daily_opportunities_review():
-    data = load_daily_opportunities()
-    items = data.get("items", [])
-
-    if not items:
-        return "🔥 مراجعة فرص اليوم\n\nلا توجد فرص يومية مضافة حاليًا."
-
-    lines = [
-        "🔥 مراجعة فرص اليوم قبل البري ماركت",
-        f"📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}",
-        f"📌 العدد: {len(items)}",
-        "",
-        "الهدف: لا يبقى في فرص اليوم إلا الأسهم النشطة فقط.",
-        "",
-    ]
-
-    for i, item in enumerate(items, start=1):
-        ticker = normalize_common_ticker(item.get("ticker", ""))
-        status = item.get("status", "🟢 أولوية")
-        state_label = item.get("state", "نشطة اليوم")
-        lines.append(f"{i}) {ticker} — {status} — {state_label}")
-
-    lines.extend([
-        "",
-        "للحذف:",
-        "/today_remove SYMBOL",
-        "",
-        "لتصفير القائمة كاملة:",
-        "/today_clear",
-        "",
-        f"المصدر: {DAILY_OPPORTUNITIES_FILE}",
-    ])
-
-    return "\n".join(lines)
+def _context_has_negative_sec(context):
+    if not context or not _is_recent_context(context, hours=48):
+        return False, ""
+    if not str(context.get("source", "")).upper().startswith("SEC"):
+        return False, ""
+    direction = normalize_direction(context.get("direction", ""))
+    form = canonical_sec_form(context.get("sec_form", ""))
+    category = normalize_category(context.get("category", ""))
+    text = f"{context.get('title','')} {context.get('why','')} {context.get('summary','')}".lower()
+    negative_forms = {"424B5", "424B3", "424B4", "FWP", "S-1", "S-3", "F-1", "F-3", "NT 10-Q", "NT 10-K"}
+    negative_words = ["offering", "resale", "selling stockholder", "warrant", "reverse split", "registered direct", "atm", "delisting", "going concern"]
+    if direction == "سلبي" and (form in negative_forms or "Offering" in category or any(w in text for w in negative_words)):
+        return True, form or category or "SEC سلبي"
+    return False, ""
 
 
-
-def classify_daily_opportunity_item(item):
-    """
-    v5.9.7.3 Daily Opportunities Status Logic:
-    لا تظهر كل فرص اليوم كأولوية خضراء دائمًا؛ الحالة تتغير حسب الزخم الحالي.
-    """
-    ticker = normalize_common_ticker(item.get("ticker", ""))
+def classify_daily_opportunity_item(item, state=None):
+    row = _normalize_daily_item(item)
+    ticker = row.get("symbol", "") if row else ""
     quote = get_stock_quote(ticker) if ticker else None
     price_text = price_text_from_quote(quote)
-
+    context = get_latest_ticker_context(state or {}, ticker)
     try:
         dp = float((quote or {}).get("change_percent") or 0)
     except Exception:
         dp = 0.0
-
-    category = "watch"
     status = "🟡 متابعة"
-    state_label = item.get("state", "نشطة اليوم") or "نشطة اليوم"
-    reason = item.get("reason", "مرشح من فلتر Investing Pro+ + شرعي")
-    decision = item.get("decision", "مراقبة قوية، لا مطاردة.")
-
-    if quote is None:
+    state_label = "هادئة"
+    reason = row.get("reason", "مرشح من فلتر Investing Pro+ + شرعي حسب فحص المستخدم") if row else ""
+    decision = "متابعة فقط حتى يظهر زخم أو فوليوم واضح."
+    bucket = "watch"
+    has_bad_sec, bad_sec_label = _context_has_negative_sec(context)
+    if has_bad_sec:
+        status = "🔴 خطر"
+        state_label = "SEC سلبي"
+        reason = f"وصل إفصاح SEC سلبي: {bad_sec_label}"
+        decision = "لا دخول الآن؛ راجع الخبر واحذف السهم إذا انتهت الفكرة."
+        bucket = "risk"
+    elif quote is None:
         status = "🟡 متابعة"
         state_label = "تحتاج متابعة"
         decision = "السعر غير متاح؛ راجع الحركة قبل القرار."
-        category = "watch"
-    elif dp >= 15:
-        status = "🔥 فرصة يومية قوية"
+        bucket = "watch"
+    elif dp >= 20:
+        status = "⚠️ لا مطاردة"
+        state_label = "صعود مبالغ"
+        reason = f"صعود قوي جدًا +{dp:.2f}% — احتمال مطاردة مرتفع"
+        decision = "انتظر تهدئة أو رجوع لمستوى دعم."
+        bucket = "warning"
+    elif dp >= 10:
+        status = "🔥 زخم قوي"
         state_label = "نشطة اليوم"
-        decision = "مراقبة قوية، لا مطاردة بعد ارتفاع قوي."
-        category = "opportunity"
-    elif dp >= 2:
-        status = "🟢 فرصة يومية"
+        reason = f"زخم سعري قوي +{dp:.2f}%"
+        decision = "مراقبة قوية، لا دخول إلا مع ثبات وفوليوم."
+        bucket = "opportunity"
+    elif dp >= 3:
+        status = "🟢 فرصة نشطة"
         state_label = "نشطة اليوم"
-        decision = "مراقبة قوية بشرط استمرار الزخم والفوليوم."
-        category = "opportunity"
+        reason = f"تحسن سعري واضح +{dp:.2f}%"
+        decision = "فرصة مراقبة بشرط استمرار الزخم والفوليوم."
+        bucket = "opportunity"
     elif dp <= -10:
-        status = "⚠️ مراجعة"
-        state_label = "تحتاج حذف/مراجعة"
-        decision = "خرجت من شرط الزخم الحالي؛ راجع سبب الهبوط قبل إبقائها."
-        category = "warning"
+        status = "🔴 خطر"
+        state_label = "هبوط قوي"
+        reason = f"هبوط قوي {dp:.2f}%"
+        decision = "لا دخول الآن؛ راجع سبب الهبوط."
+        bucket = "risk"
     elif dp <= -5:
-        status = "🔴 ضعف"
-        state_label = "تحتاج متابعة"
-        decision = "ليست فرصة نشطة الآن؛ انتظر ثباتًا أو خبرًا جديدًا."
-        category = "warning"
+        status = "⚠️ مراجعة"
+        state_label = "ضعف"
+        reason = f"فقد الزخم وهبوط {dp:.2f}%"
+        decision = "تحتاج مراجعة؛ ليست فرصة نشطة الآن."
+        bucket = "warning"
     elif -2 <= dp <= 2:
         status = "🟡 متابعة"
         state_label = "هادئة"
         decision = "متابعة فقط حتى يظهر زخم أو فوليوم واضح."
-        category = "watch"
-
+        bucket = "watch"
+    else:
+        status = "🟡 متابعة"
+        state_label = "نشطة اليوم" if dp > 0 else "تحتاج متابعة"
+        decision = "مراقبة فقط؛ لا توجد إشارة قوية كافية."
+        bucket = "watch"
+    if row and row.get("category") == "earnings" and bucket == "watch":
+        state_label = "أرباح اليوم"
+        decision = "مراقبة ردة فعل السعر والفوليوم قبل/بعد إعلان الأرباح."
     return {
         "ticker": ticker,
+        "symbol": ticker,
         "quote": quote,
         "price_text": price_text,
         "change_percent": dp,
@@ -1685,39 +1824,85 @@ def classify_daily_opportunity_item(item):
         "state": state_label,
         "reason": reason,
         "decision": decision,
-        "category": category,
-        "source": "فرص اليوم",
+        "bucket": bucket,
+        "category": row.get("category", "daily") if row else "daily",
+        "source": "فرص الأرباح" if row and row.get("category") == "earnings" else "فرص اليوم",
     }
 
-def format_daily_opportunities_section(state=None, compact=False):
-    """
-    قسم مستقل داخل التقارير. لا يضيف الأسهم إلى watchlist ولا يستخدم AI.
-    يعتمد فقط على الأسعار الخفيفة من Finnhub مثل القائمة الخاصة.
-    v5.9.7.3: الحالة ديناميكية؛ السهم الهابط بقوة يظهر كمراجعة/ضعف وليس أولوية خضراء.
-    """
-    items = get_daily_opportunity_items()
-    lines = ["🔥 فرص اليوم من فلتر Investing Pro+"]
 
+def _sort_daily_classified(items):
+    order = {"opportunity": 0, "watch": 1, "warning": 2, "risk": 3}
+    return sorted(items, key=lambda x: (order.get(x.get("bucket", "watch"), 9), -abs(float(x.get("change_percent") or 0)), x.get("ticker", "")))
+
+
+def format_daily_opportunities_list():
+    cleanup_daily_opportunities_if_new_day(force=False, notify=False, reason="عرض /today_list")
+    data = load_daily_opportunities()
+    daily_items = get_daily_opportunity_items(category="daily")
+    earnings_items = get_daily_opportunity_items(category="earnings")
+    if not daily_items and not earnings_items:
+        return f"🔥 فرص اليوم من فلتر Investing Pro+\n📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}\n\nلا توجد فرص يومية مضافة حاليًا."
+    lines = [
+        "🔥 فرص اليوم من فلتر Investing Pro+",
+        f"📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}",
+        f"📌 العدد: {len(daily_items) + len(earnings_items)}",
+        "",
+        "ملاحظة: أضف السهم فقط، والبوت يحدد الحالة تلقائيًا حسب السعر والزخم والخبر وSEC.",
+        "",
+    ]
+    if daily_items:
+        classified = _sort_daily_classified([classify_daily_opportunity_item(x, load_state()) for x in daily_items])
+        for i, data_row in enumerate(classified, start=1):
+            lines.append(f"{i}. {data_row['ticker']} — {data_row['status']} — {data_row['state']}\nالسعر/التغير: {data_row['price_text']}\nالقرار: {data_row['decision']}")
+    else:
+        lines.append("لا توجد فرص يومية عادية.")
+    if earnings_items:
+        lines.extend(["", "📊 فرص الأرباح اليوم"])
+        classified_earnings = _sort_daily_classified([classify_daily_opportunity_item(x, load_state()) for x in earnings_items])
+        for i, data_row in enumerate(classified_earnings, start=1):
+            lines.append(f"{i}. {data_row['ticker']} — {data_row['status']} — {data_row['state']}\nالسعر/التغير: {data_row['price_text']}\nالقرار: {data_row['decision']}")
+    lines.append("")
+    lines.append(f"المصدر: {DAILY_OPPORTUNITIES_FILE}")
+    return "\n\n".join(lines)
+
+
+def format_daily_opportunities_review():
+    cleanup_daily_opportunities_if_new_day(force=False, notify=False, reason="مراجعة فرص اليوم")
+    data = load_daily_opportunities()
+    items = get_daily_opportunity_items()
     if not items:
+        return "🔥 مراجعة فرص اليوم\n\nلا توجد فرص يومية مضافة حاليًا."
+    classified = _sort_daily_classified([classify_daily_opportunity_item(x, load_state()) for x in items])
+    lines = ["🔥 مراجعة فرص اليوم قبل البري ماركت", f"📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}", f"📌 العدد: {len(items)}", "", "الهدف: إبقاء الأسهم المناسبة فقط وحذف ما انتهت فكرته.", ""]
+    for i, row in enumerate(classified, start=1):
+        cat_label = "📊 أرباح" if row.get("category") == "earnings" else "🔥 يومية"
+        lines.append(f"{i}) {row['ticker']} — {cat_label} — {row['status']} — {row['state']}\nالسعر/التغير: {row['price_text']}\nالقرار: {row['decision']}")
+    lines.extend(["", "أوامر مفيدة:", "/today_remove SYMBOL  ← حذف سهم", "/today_set SYMBOL earnings  ← تحويل لفرص الأرباح", "/today_set SYMBOL daily  ← تحويل لفرص اليوم", "/today_clear  ← تصفير القائمة كاملة", "", f"المصدر: {DAILY_OPPORTUNITIES_FILE}"])
+    return "\n".join(lines)
+
+
+def format_daily_opportunities_section(state=None, compact=False):
+    cleanup_daily_opportunities_if_new_day(force=False, notify=True, reason="قبل تقرير مجدول")
+    daily_items = get_daily_opportunity_items(category="daily")
+    earnings_items = get_daily_opportunity_items(category="earnings")
+    lines = ["🔥 فرص اليوم"]
+    if not daily_items and not earnings_items:
         lines.append("لا توجد فرص يومية مضافة حاليًا.")
         return lines
-
-    for i, item in enumerate(items, start=1):
-        data = classify_daily_opportunity_item(item)
-        ticker = data.get("ticker", "")
-        if not ticker:
-            continue
-
+    classified_daily = _sort_daily_classified([classify_daily_opportunity_item(x, state or {}) for x in daily_items])[:10]
+    for i, data in enumerate(classified_daily, start=1):
         if compact:
-            lines.append(f"{ticker}: {data['status']} — {data['price_text']} | {data['state']}")
+            lines.append(f"{data['ticker']}: {data['status']} — {data['price_text']} | {data['state']}")
         else:
-            lines.append(
-                f"{i}) {ticker} — {data['status']} — {data['state']}\n"
-                f"السعر/التغير: {data['price_text']}\n"
-                f"السبب: {data['reason']}\n"
-                f"القرار: {data['decision']}"
-            )
-
+            lines.append(f"{i}) {data['ticker']} — {data['status']} — {data['state']}\nالسعر/التغير: {data['price_text']}\nالسبب: {data['reason']}\nالقرار: {data['decision']}")
+    classified_earnings = _sort_daily_classified([classify_daily_opportunity_item(x, state or {}) for x in earnings_items])[:5]
+    if classified_earnings:
+        lines.extend(["", "📊 فرص الأرباح اليوم"])
+        for i, data in enumerate(classified_earnings, start=1):
+            if compact:
+                lines.append(f"{data['ticker']}: {data['status']} — {data['price_text']} | {data['state']}")
+            else:
+                lines.append(f"{i}) {data['ticker']} — {data['status']} — {data['state']}\nالسعر/التغير: {data['price_text']}\nالسبب: {data['reason']}\nالقرار: {data['decision']}")
     return lines
 
 def clean_text_for_priority(item):
@@ -5232,9 +5417,18 @@ def patch_telegram_buttons_manual_report():
 
         if cmd == "/today_add":
             if len(parts) < 2:
-                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_add SYMBOL")
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_add SYMBOL\nأو لفرص الأرباح:\n/today_add SYMBOL earnings")
                 return True
-            ok, msg = add_daily_opportunity(parts[1])
+            category = parse_today_add_options(parts[2:])
+            ok, msg = add_daily_opportunity(parts[1], category=category)
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
+            return True
+
+        if cmd == "/today_set":
+            if len(parts) < 3:
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/today_set SYMBOL daily|earnings|active|ended|removed")
+                return True
+            ok, msg = set_daily_opportunity(parts[1], parts[2])
             send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_daily_opportunities_list())
             return True
 
@@ -5352,6 +5546,8 @@ def startup_checks():
     print(f"MARKET_PULSE_ENABLED: {MARKET_PULSE_ENABLED}", flush=True)
     print(f"SMART_SILENCE_ENABLED: {SMART_SILENCE_ENABLED}", flush=True)
     print("SCHEDULED_REPORTS_KSA: ON", flush=True)
+    print("DAILY_OPPORTUNITIES_AUTO_STATUS: ON", flush=True)
+    print("DAILY_OPPORTUNITIES_AUTO_CLEANUP: ON", flush=True)
     print("MANUAL_REPORTS: ON", flush=True)
     print(f"MARKET_DATA_FILTER: {'ON' if MARKET_DATA_ENABLED else 'OFF'}", flush=True)
     print("===================================", flush=True)
@@ -5404,6 +5600,7 @@ def run():
         print(f"Interactive Watchlist startup error: {e}", flush=True)
 
     state = load_state()
+    cleanup_daily_opportunities_if_new_day(force=False, notify=True, reason="تشغيل البوت")
 
     while True:
         try:
@@ -5413,6 +5610,7 @@ def run():
             # نعيد تحميل state في كل دورة لأن الأزرار/الأوامر قد تحدث ملفات الحالة،
             # ونطبع heartbeat ثابت للتقارير حتى تظهر في Railway Logs.
             state = load_state()
+            cleanup_daily_opportunities_if_new_day(force=False, notify=True, reason="دورة البوت")
             scheduled_reports_heartbeat(state)
             maybe_send_scheduled_report(state)
             maybe_send_market_pulse(state)
