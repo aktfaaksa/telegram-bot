@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.9.1 SEC Mixed Classification + Reason Polish
+# AlphaBot Pro v5.9.7.10 Scheduled Earnings Opportunities
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.9.1 SEC Mixed Classification + Reason Polish"
+VERSION = "v5.9.7.10 Scheduled Earnings Opportunities"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -66,6 +66,7 @@ SEC_FORM_COOLDOWN_MINUTES = 60
 STATE_FILE = "seen_news.json"
 WATCHLIST_FILE = os.getenv("WATCHLIST_FILE", "watchlist.json")
 DAILY_OPPORTUNITIES_FILE = os.getenv("DAILY_OPPORTUNITIES_FILE", "/data/daily_opportunities.json")
+EARNINGS_OPPORTUNITIES_FILE = os.getenv("EARNINGS_OPPORTUNITIES_FILE", "/data/earnings_opportunities.json")
 ALERT_CONTEXT_FILE = "alert_context.json"
 
 
@@ -670,6 +671,7 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Daily Opportunities Auto Status: تضيف السهم فقط والبوت يحدد الحالة تلقائيًا
 ✅ Daily Opportunities Auto Cleanup: تنظيف آمن قبل البري ماركت مع نسخة احتياطية
 ✅ Earnings Opportunities: فصل فرص الأرباح اليوم وحذفها تلقائيًا في اليوم التالي
+✅ Scheduled Earnings Opportunities: /earnings_add SYMBOL YYYY-MM-DD
 ✅ Market Day Filter: إيقاف/اختصار التقارير في الويكند وعطل NYSE
 ✅ US Holidays 2026: دعم الإغلاق الكامل والإغلاق المبكر 1:00 م ET
 ✅ SEC Mixed Classification: تحسين الحالات المختلطة وسبب التصنيف
@@ -1965,7 +1967,7 @@ def format_daily_opportunities_list():
     cleanup_daily_opportunities_if_new_day(force=False, notify=False, reason="عرض /today_list")
     data = load_daily_opportunities()
     daily_items = get_daily_opportunity_items(category="daily")
-    earnings_items = get_daily_opportunity_items(category="earnings")
+    earnings_items = get_daily_opportunity_items(category="earnings") + get_today_scheduled_earnings_items()
     if not daily_items and not earnings_items:
         return f"🔥 فرص اليوم من فلتر Investing Pro+\n📅 تاريخ القائمة: {data.get('date', current_ksa_date_key())}\n\nلا توجد فرص يومية مضافة حاليًا."
     lines = [
@@ -2010,7 +2012,7 @@ def format_daily_opportunities_review():
 def format_daily_opportunities_section(state=None, compact=False):
     cleanup_daily_opportunities_if_new_day(force=False, notify=True, reason="قبل تقرير مجدول")
     daily_items = get_daily_opportunity_items(category="daily")
-    earnings_items = get_daily_opportunity_items(category="earnings")
+    earnings_items = get_daily_opportunity_items(category="earnings") + get_today_scheduled_earnings_items()
     lines = ["🔥 فرص اليوم"]
     if not daily_items and not earnings_items:
         lines.append("لا توجد فرص يومية مضافة حاليًا.")
@@ -2030,6 +2032,239 @@ def format_daily_opportunities_section(state=None, compact=False):
             else:
                 lines.append(f"{i}) {data['ticker']} — {data['status']} — {data['state']}\nالسعر/التغير: {data['price_text']}\nالسبب: {data['reason']}\nالقرار: {data['decision']}")
     return lines
+
+
+# =========================
+# v5.9.7.10 Scheduled Earnings Opportunities
+# =========================
+
+def default_scheduled_earnings_data():
+    return {
+        "timezone": "Asia/Riyadh",
+        "updated_at": now_utc().isoformat(),
+        "items": [],
+    }
+
+
+def _valid_ymd(value):
+    value = clean_text(value)
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return value
+    except Exception:
+        return ""
+
+
+def _normalize_scheduled_earning_item(item):
+    if not isinstance(item, dict):
+        return None
+    ticker = normalize_common_ticker(item.get("symbol") or item.get("ticker") or "")
+    earnings_date = _valid_ymd(item.get("earnings_date") or item.get("date") or "")
+    if not ticker or not earnings_date:
+        return None
+    return {
+        "symbol": ticker,
+        "ticker": ticker,
+        "category": "earnings",
+        "earnings_date": earnings_date,
+        "added_at": clean_text(item.get("added_at")) or now_ksa().strftime("%Y-%m-%d %H:%M"),
+        "status": clean_text(item.get("status")) or "scheduled",
+        "reason": clean_text(item.get("reason")) or "فرصة أرباح مجدولة + شرعي حسب فحص المستخدم",
+        "decision": clean_text(item.get("decision")) or "يظهر السهم فقط في يوم إعلان الأرباح، والبوت يحدد الحالة تلقائيًا.",
+    }
+
+
+def load_scheduled_earnings():
+    if not os.path.exists(EARNINGS_OPPORTUNITIES_FILE):
+        data = default_scheduled_earnings_data()
+        save_scheduled_earnings(data)
+        return data
+    try:
+        with open(EARNINGS_OPPORTUNITIES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("scheduled earnings data is not dict")
+        data.setdefault("timezone", "Asia/Riyadh")
+        data.setdefault("updated_at", now_utc().isoformat())
+        data.setdefault("items", [])
+        cleaned = []
+        seen = set()
+        for item in data.get("items", []):
+            row = _normalize_scheduled_earning_item(item)
+            if not row:
+                continue
+            key = row["symbol"]
+            if key in seen:
+                for idx, old in enumerate(cleaned):
+                    if old.get("symbol") == key:
+                        cleaned[idx].update(row)
+                        break
+                continue
+            cleaned.append(row)
+            seen.add(key)
+        data["items"] = cleaned
+        return data
+    except Exception as e:
+        print(f"load_scheduled_earnings error: {e} | file={EARNINGS_OPPORTUNITIES_FILE}", flush=True)
+        data = default_scheduled_earnings_data()
+        save_scheduled_earnings(data)
+        return data
+
+
+def save_scheduled_earnings(data):
+    try:
+        _ensure_parent_dir(EARNINGS_OPPORTUNITIES_FILE)
+        data.setdefault("timezone", "Asia/Riyadh")
+        data.setdefault("items", [])
+        data["updated_at"] = now_utc().isoformat()
+        tmp = EARNINGS_OPPORTUNITIES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, EARNINGS_OPPORTUNITIES_FILE)
+        return True
+    except Exception as e:
+        print(f"save_scheduled_earnings error: {e} | file={EARNINGS_OPPORTUNITIES_FILE}", flush=True)
+        return False
+
+
+def cleanup_expired_scheduled_earnings(force=False, notify=False, chat_id=None, reason=""):
+    try:
+        today = current_ksa_date_key()
+        # لا ننظف مباشرة بعد منتصف الليل؛ ننتظر 8:00 ص بتوقيت السعودية إلا عند force.
+        if not force and minutes_from_hhmm(current_ksa_time_hhmm()) < minutes_from_hhmm("08:00"):
+            return False, ""
+        data = load_scheduled_earnings()
+        items = data.get("items", [])
+        expired = [x for x in items if str(x.get("earnings_date", "")) < today]
+        if not expired:
+            return False, ""
+        data["items"] = [x for x in items if str(x.get("earnings_date", "")) >= today]
+        if not save_scheduled_earnings(data):
+            return False, "تعذر تنظيف فرص الأرباح المجدولة"
+        symbols = ", ".join([x.get("symbol", "") for x in expired if x.get("symbol")])
+        msg = "\n".join([
+            "🧹 تم حذف فرص الأرباح المجدولة المنتهية",
+            f"📅 التاريخ الحالي: {today}",
+            f"📌 العدد: {len(expired)}",
+            f"الأسهم: {symbols or 'غير محدد'}",
+            f"المصدر: {EARNINGS_OPPORTUNITIES_FILE}",
+        ])
+        if reason:
+            msg += f"\nالسبب: {reason}"
+        print(msg.replace("\n", " | "), flush=True)
+        if notify:
+            if chat_id:
+                send_telegram_to_chat(chat_id, msg)
+            else:
+                send_telegram(msg)
+        return True, msg
+    except Exception as e:
+        print(f"cleanup_expired_scheduled_earnings error: {e}", flush=True)
+        return False, ""
+
+
+def add_scheduled_earning(ticker, earnings_date):
+    ticker = normalize_common_ticker(ticker)
+    earnings_date = _valid_ymd(earnings_date)
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+    if not earnings_date:
+        return False, "صيغة التاريخ غير صحيحة. استخدم YYYY-MM-DD"
+    cleanup_expired_scheduled_earnings(force=False, notify=False, reason="إضافة فرصة أرباح مجدولة")
+    data = load_scheduled_earnings()
+    items = data.setdefault("items", [])
+    for item in items:
+        if normalize_common_ticker(item.get("symbol", "")) == ticker:
+            old_date = item.get("earnings_date", "")
+            item.update({
+                "symbol": ticker,
+                "ticker": ticker,
+                "category": "earnings",
+                "earnings_date": earnings_date,
+                "status": "scheduled",
+                "added_at": item.get("added_at") or now_ksa().strftime("%Y-%m-%d %H:%M"),
+                "reason": "فرصة أرباح مجدولة + شرعي حسب فحص المستخدم",
+                "decision": "يظهر السهم فقط في يوم إعلان الأرباح، والبوت يحدد الحالة تلقائيًا.",
+            })
+            if not save_scheduled_earnings(data):
+                return False, "تعذر حفظ فرص الأرباح المجدولة"
+            if old_date == earnings_date:
+                return True, f"{ticker} موجود مسبقًا في فرص الأرباح المجدولة بتاريخ {earnings_date}"
+            return True, f"تم تحديث تاريخ أرباح {ticker}: {old_date or 'غير محدد'} → {earnings_date}"
+    items.append({
+        "symbol": ticker,
+        "ticker": ticker,
+        "category": "earnings",
+        "earnings_date": earnings_date,
+        "added_at": now_ksa().strftime("%Y-%m-%d %H:%M"),
+        "status": "scheduled",
+        "reason": "فرصة أرباح مجدولة + شرعي حسب فحص المستخدم",
+        "decision": "يظهر السهم فقط في يوم إعلان الأرباح، والبوت يحدد الحالة تلقائيًا.",
+    })
+    if not save_scheduled_earnings(data):
+        return False, "تعذر حفظ فرص الأرباح المجدولة"
+    return True, f"تمت جدولة {ticker} كفرصة أرباح بتاريخ {earnings_date}"
+
+
+def remove_scheduled_earning(ticker):
+    ticker = normalize_common_ticker(ticker)
+    if not ticker:
+        return False, "رمز السهم غير صحيح"
+    data = load_scheduled_earnings()
+    items = data.setdefault("items", [])
+    before = len(items)
+    data["items"] = [x for x in items if normalize_common_ticker(x.get("symbol", "")) != ticker]
+    if len(data["items"]) == before:
+        return False, f"{ticker} غير موجود في فرص الأرباح المجدولة"
+    if not save_scheduled_earnings(data):
+        return False, "تعذر حفظ فرص الأرباح المجدولة"
+    return True, f"تم حذف {ticker} من فرص الأرباح المجدولة"
+
+
+def get_scheduled_earnings_items(status=None):
+    data = load_scheduled_earnings()
+    items = []
+    for item in data.get("items", []):
+        row = _normalize_scheduled_earning_item(item)
+        if not row:
+            continue
+        if status and row.get("status") != status:
+            continue
+        items.append(row)
+    return sorted(items, key=lambda x: (x.get("earnings_date", ""), x.get("symbol", "")))
+
+
+def get_today_scheduled_earnings_items():
+    today = current_ksa_date_key()
+    rows = []
+    for item in get_scheduled_earnings_items():
+        if item.get("earnings_date") == today and item.get("status") != "removed":
+            # نمررها إلى مصنف فرص اليوم كفرصة أرباح نشطة لهذا اليوم فقط.
+            rows.append({
+                "symbol": item.get("symbol"),
+                "ticker": item.get("symbol"),
+                "category": "earnings",
+                "status": "active",
+                "added_at": item.get("added_at"),
+                "reason": "إعلان أرباح اليوم + شرعي حسب فحص المستخدم",
+                "decision": "مراقبة ردة فعل السعر والفوليوم قبل/بعد إعلان الأرباح.",
+                "earnings_date": item.get("earnings_date"),
+                "scheduled": True,
+            })
+    return rows
+
+
+def format_scheduled_earnings_list():
+    cleanup_expired_scheduled_earnings(force=False, notify=False, reason="عرض /earnings_list")
+    items = get_scheduled_earnings_items()
+    if not items:
+        return f"📅 فرص أرباح مجدولة\n\nلا توجد فرص أرباح مجدولة حاليًا.\n\nالمصدر: {EARNINGS_OPPORTUNITIES_FILE}"
+    lines = ["📅 فرص أرباح مجدولة", f"📌 العدد: {len(items)}", ""]
+    for item in items:
+        lines.append(f"{item['symbol']} — {item['earnings_date']} — {item.get('status', 'scheduled')}")
+    lines.extend(["", f"المصدر: {EARNINGS_OPPORTUNITIES_FILE}"])
+    return "\n".join(lines)
+
 
 def clean_text_for_priority(item):
     parts = []
@@ -5752,6 +5987,39 @@ def patch_telegram_buttons_manual_report():
 
         return False
 
+    def _handle_earnings_command(chat_id, text):
+        parts = text.split()
+        cmd = parts[0].lower() if parts else ""
+
+        if cmd == "/earnings_add":
+            if len(parts) < 3:
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/earnings_add SYMBOL YYYY-MM-DD")
+                return True
+            ok, msg = add_scheduled_earning(parts[1], parts[2])
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_scheduled_earnings_list())
+            return True
+
+        if cmd == "/earnings_list":
+            send_telegram_to_chat(chat_id, format_scheduled_earnings_list())
+            return True
+
+        if cmd == "/earnings_remove":
+            if len(parts) < 2:
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/earnings_remove SYMBOL")
+                return True
+            ok, msg = remove_scheduled_earning(parts[1])
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_scheduled_earnings_list())
+            return True
+
+        if cmd == "/earnings_clear_expired":
+            ok, msg = cleanup_expired_scheduled_earnings(force=True, notify=False, reason="أمر يدوي")
+            if not msg:
+                msg = "لا توجد فرص أرباح منتهية للحذف."
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "ℹ️ ") + msg + "\n\n" + format_scheduled_earnings_list())
+            return True
+
+        return False
+
     def patched_handle_text_message(message):
         try:
             chat_id = message.get("chat", {}).get("id")
@@ -5763,6 +6031,14 @@ def patch_telegram_buttons_manual_report():
                     return
                 if _handle_today_command(chat_id, text):
                     print(f"Daily opportunities command handled for chat {chat_id}: {text}", flush=True)
+                    return
+
+            if text.startswith("/earnings_"):
+                if not _allowed_from_buttons(chat_id):
+                    print(f"Unauthorized earnings opportunities command ignored: {chat_id}", flush=True)
+                    return
+                if _handle_earnings_command(chat_id, text):
+                    print(f"Scheduled earnings command handled for chat {chat_id}: {text}", flush=True)
                     return
 
             if text.lower() in manual_commands or text in manual_commands:
@@ -5901,6 +6177,7 @@ def run():
 
     state = load_state()
     cleanup_daily_opportunities_if_new_day(force=False, notify=True, reason="تشغيل البوت")
+    cleanup_expired_scheduled_earnings(force=False, notify=True, reason="تشغيل البوت")
 
     while True:
         try:
@@ -5911,6 +6188,7 @@ def run():
             # ونطبع heartbeat ثابت للتقارير حتى تظهر في Railway Logs.
             state = load_state()
             cleanup_daily_opportunities_if_new_day(force=False, notify=True, reason="دورة البوت")
+            cleanup_expired_scheduled_earnings(force=False, notify=True, reason="دورة البوت")
             scheduled_reports_heartbeat(state)
             maybe_send_scheduled_report(state)
             maybe_send_market_pulse(state)
