@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.10 Scheduled Earnings Opportunities
+# AlphaBot Pro v5.9.7.10.1 Earnings List Grouped View
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.10 Scheduled Earnings Opportunities"
+VERSION = "v5.9.7.10.1 Earnings List Grouped View"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -672,6 +672,7 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Daily Opportunities Auto Cleanup: تنظيف آمن قبل البري ماركت مع نسخة احتياطية
 ✅ Earnings Opportunities: فصل فرص الأرباح اليوم وحذفها تلقائيًا في اليوم التالي
 ✅ Scheduled Earnings Opportunities: /earnings_add SYMBOL YYYY-MM-DD
+✅ Earnings List Grouped View: عرض /earnings_list مجمع حسب اليوم
 ✅ Market Day Filter: إيقاف/اختصار التقارير في الويكند وعطل NYSE
 ✅ US Holidays 2026: دعم الإغلاق الكامل والإغلاق المبكر 1:00 م ET
 ✅ SEC Mixed Classification: تحسين الحالات المختلطة وسبب التصنيف
@@ -2254,15 +2255,100 @@ def get_today_scheduled_earnings_items():
     return rows
 
 
+AR_WEEKDAYS = {
+    0: "الاثنين",
+    1: "الثلاثاء",
+    2: "الأربعاء",
+    3: "الخميس",
+    4: "الجمعة",
+    5: "السبت",
+    6: "الأحد",
+}
+
+AR_MONTHS = {
+    1: "يناير",
+    2: "فبراير",
+    3: "مارس",
+    4: "أبريل",
+    5: "مايو",
+    6: "يونيو",
+    7: "يوليو",
+    8: "أغسطس",
+    9: "سبتمبر",
+    10: "أكتوبر",
+    11: "نوفمبر",
+    12: "ديسمبر",
+}
+
+
+def format_arabic_day_label(date_key):
+    """
+    يحول YYYY-MM-DD إلى صيغة عربية مختصرة مثل:
+    الاثنين 18 مايو
+    """
+    try:
+        dt = datetime.strptime(str(date_key), "%Y-%m-%d")
+        day_name = AR_WEEKDAYS.get(dt.weekday(), "")
+        month_name = AR_MONTHS.get(dt.month, f"شهر {dt.month}")
+        return f"{day_name} {dt.day} {month_name}"
+    except Exception:
+        return str(date_key)
+
+
 def format_scheduled_earnings_list():
     cleanup_expired_scheduled_earnings(force=False, notify=False, reason="عرض /earnings_list")
     items = get_scheduled_earnings_items()
     if not items:
         return f"📅 فرص أرباح مجدولة\n\nلا توجد فرص أرباح مجدولة حاليًا.\n\nالمصدر: {EARNINGS_OPPORTUNITIES_FILE}"
-    lines = ["📅 فرص أرباح مجدولة", f"📌 العدد: {len(items)}", ""]
+
+    # تجميع الأسهم حسب التاريخ مع إظهار الأيام الفارغة بين أول وآخر تاريخ.
+    grouped = {}
     for item in items:
-        lines.append(f"{item['symbol']} — {item['earnings_date']} — {item.get('status', 'scheduled')}")
-    lines.extend(["", f"المصدر: {EARNINGS_OPPORTUNITIES_FILE}"])
+        date_key = item.get("earnings_date", "")
+        if not date_key:
+            continue
+        grouped.setdefault(date_key, [])
+        symbol = normalize_common_ticker(item.get("symbol") or item.get("ticker") or "")
+        status = clean_text(item.get("status")) or "scheduled"
+        if symbol:
+            grouped[date_key].append((symbol, status))
+
+    valid_dates = []
+    for date_key in grouped.keys():
+        try:
+            valid_dates.append(datetime.strptime(date_key, "%Y-%m-%d").date())
+        except Exception:
+            pass
+
+    lines = ["📅 فرص أرباح مجدولة", f"📌 العدد: {len(items)}", ""]
+
+    if not valid_dates:
+        for item in items:
+            lines.append(f"{item['symbol']} — {item['earnings_date']} — {item.get('status', 'scheduled')}")
+        lines.extend(["", f"المصدر: {EARNINGS_OPPORTUNITIES_FILE}"])
+        return "\n".join(lines)
+
+    start_date = min(valid_dates)
+    end_date = max(valid_dates)
+    current = start_date
+
+    while current <= end_date:
+        date_key = current.strftime("%Y-%m-%d")
+        lines.append(f"{format_arabic_day_label(date_key)}:")
+        symbols = sorted(grouped.get(date_key, []), key=lambda x: x[0])
+        if symbols:
+            for symbol, status in symbols:
+                # نبقي الحالة مختصرة، ولا نكررها إذا كانت scheduled الافتراضية.
+                if status and status != "scheduled":
+                    lines.append(f"{symbol} — {status}")
+                else:
+                    lines.append(symbol)
+        else:
+            lines.append("لا يوجد")
+        lines.append("")
+        current = current + timedelta(days=1)
+
+    lines.append(f"المصدر: {EARNINGS_OPPORTUNITIES_FILE}")
     return "\n".join(lines)
 
 
