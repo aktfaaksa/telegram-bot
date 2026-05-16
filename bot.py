@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.8 Daily Opportunities Auto Status + Auto Cleanup
+# AlphaBot Pro v5.9.7.9 Market Day Filter + US Holidays
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.8 Daily Opportunities Auto Status + Auto Cleanup"
+VERSION = "v5.9.7.9 Market Day Filter + US Holidays"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -98,6 +98,28 @@ REPORT_TIMES_KSA = {
     "23:30": "🚨 تقرير 11:30 م — ملخص الإغلاق وخطة اليوم التالي",
     "23:45": "🚨 تقرير 11:45 م — فحص الأخبار بعد الإغلاق",
 }
+
+# v5.9.7.9 Market Day Filter + US Holidays
+# الإغلاقات الكاملة القادمة لبورصة نيويورك/السوق الأمريكي في 2026.
+# ملاحظة: نستخدم تاريخ السعودية لنفس يوم التداول؛ هذا مناسب للتقارير النهارية بتوقيت السعودية.
+US_MARKET_CLOSED_DATES_2026 = {
+    "2026-05-25": "يوم ذكرى الشهداء",
+    "2026-06-19": "Juneteenth",
+    "2026-07-03": "عيد الاستقلال - ملاحظ",
+    "2026-09-07": "عيد العمال",
+    "2026-11-26": "عيد الشكر",
+    "2026-12-25": "عيد الميلاد",
+}
+
+# إغلاق مبكر 1:00 م بتوقيت نيويورك = تقريبًا 9:00 م بتوقيت السعودية في هذه التواريخ.
+US_MARKET_EARLY_CLOSE_DATES_2026 = {
+    "2026-11-27": "عيد الشكر - إغلاق مبكر 1:00 م ET",
+    "2026-12-24": "عيد الميلاد - إغلاق مبكر 1:00 م ET",
+}
+
+EARLY_MARKET_CLOSE_KSA = os.getenv("EARLY_MARKET_CLOSE_KSA", "21:00")
+MARKET_CLOSED_NOTICE_HHMM = os.getenv("MARKET_CLOSED_NOTICE_HHMM", "11:00")
+
 
 # لا نعتمد على مطابقة الدقيقة بالضبط لأن دورة البوت كل 90 ثانية وقد تفوّت 11:00:00.
 # لذلك نسمح بإرسال التقرير خلال نافذة قصيرة بعد وقته، مرة واحدة فقط يوميًا.
@@ -366,11 +388,111 @@ def minutes_from_hhmm(value):
         return 0
 
 
+def is_weekend_ksa(date_key=None):
+    try:
+        if date_key:
+            dt = datetime.strptime(date_key, "%Y-%m-%d")
+        else:
+            dt = now_ksa().replace(tzinfo=None)
+        # Monday=0 ... Saturday=5, Sunday=6
+        return dt.weekday() in (5, 6)
+    except Exception:
+        return False
+
+
+def get_market_closed_reason_ksa(date_key=None):
+    """يرجع سبب الإغلاق الكامل إذا كان السوق مغلقًا في هذا التاريخ، وإلا يرجع نصًا فارغًا."""
+    date_key = date_key or current_ksa_date_key()
+
+    if is_weekend_ksa(date_key):
+        return "عطلة نهاية الأسبوع"
+
+    if date_key in US_MARKET_CLOSED_DATES_2026:
+        return US_MARKET_CLOSED_DATES_2026[date_key]
+
+    return ""
+
+
+def is_us_market_closed_today_ksa(date_key=None):
+    return bool(get_market_closed_reason_ksa(date_key))
+
+
+def get_early_close_reason_ksa(date_key=None):
+    date_key = date_key or current_ksa_date_key()
+    return US_MARKET_EARLY_CLOSE_DATES_2026.get(date_key, "")
+
+
+def is_us_market_early_close_today_ksa(date_key=None):
+    return bool(get_early_close_reason_ksa(date_key))
+
+
+def get_market_close_ksa_for_today(date_key=None):
+    if is_us_market_early_close_today_ksa(date_key):
+        return EARLY_MARKET_CLOSE_KSA
+    return MARKET_CLOSE_KSA
+
+
 def is_market_time_ksa():
+    if is_us_market_closed_today_ksa():
+        return False
+
     current = minutes_from_hhmm(current_ksa_time_hhmm())
     start = minutes_from_hhmm(MARKET_OPEN_KSA)
-    end = minutes_from_hhmm(MARKET_CLOSE_KSA)
+    end = minutes_from_hhmm(get_market_close_ksa_for_today())
     return start <= current <= end
+
+
+def is_after_early_close_report_time(scheduled_hhmm):
+    if not is_us_market_early_close_today_ksa():
+        return False
+    return minutes_from_hhmm(scheduled_hhmm) >= minutes_from_hhmm(EARLY_MARKET_CLOSE_KSA)
+
+
+def build_market_closed_notice(reason=None, early_close=False):
+    date_key = current_ksa_date_key()
+    if early_close:
+        reason = reason or get_early_close_reason_ksa(date_key) or "إغلاق مبكر"
+        return "\n".join([
+            "📌 السوق الأمريكي أغلق مبكرًا اليوم",
+            ksa_datetime_line(),
+            "",
+            f"السبب: {reason}",
+            f"وقت الإغلاق المبكر المعتمد: {EARLY_MARKET_CLOSE_KSA} بتوقيت السعودية تقريبًا",
+            "",
+            "لا توجد تقارير تداول كاملة بعد الإغلاق المبكر.",
+            "Market Pulse متوقف بعد الإغلاق.",
+            "آخر الأسعار المعروضة قد تكون من آخر جلسة متاحة.",
+        ])
+
+    reason = reason or get_market_closed_reason_ksa(date_key) or "السوق مغلق"
+    return "\n".join([
+        "📌 السوق الأمريكي مغلق اليوم",
+        ksa_datetime_line(),
+        "",
+        f"السبب: {reason}",
+        "لا توجد تقارير تداول كاملة مجدولة اليوم.",
+        "Market Pulse متوقف أثناء الإغلاق.",
+        "آخر الأسعار المعروضة قد تكون من آخر جلسة متاحة.",
+    ])
+
+
+def mark_scheduled_reports_as_skipped(state, date_key=None, start_hhmm=None, reason="market_closed"):
+    """يمنع تكرار التقارير في أيام الإغلاق أو بعد الإغلاق المبكر."""
+    date_key = date_key or current_ksa_date_key()
+    sent = state.setdefault("scheduled_reports_sent", {})
+    start_minutes = minutes_from_hhmm(start_hhmm) if start_hhmm else None
+
+    for hhmm, title in REPORT_TIMES_KSA.items():
+        if start_minutes is not None and minutes_from_hhmm(hhmm) < start_minutes:
+            continue
+        sent[f"{date_key}|{hhmm}"] = {
+            "sent": True,
+            "skipped": True,
+            "reason": reason,
+            "title": title,
+            "sent_at": now_utc().isoformat(),
+        }
+
 
 
 # =========================
@@ -548,6 +670,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Daily Opportunities Auto Status: تضيف السهم فقط والبوت يحدد الحالة تلقائيًا
 ✅ Daily Opportunities Auto Cleanup: تنظيف آمن قبل البري ماركت مع نسخة احتياطية
 ✅ Earnings Opportunities: فصل فرص الأرباح اليوم وحذفها تلقائيًا في اليوم التالي
+✅ Market Day Filter: إيقاف/اختصار التقارير في الويكند وعطل NYSE
+✅ US Holidays 2026: دعم الإغلاق الكامل والإغلاق المبكر 1:00 م ET
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -5064,6 +5188,14 @@ def scheduled_reports_heartbeat(state=None):
     try:
         state = state or {}
         current_hhmm = current_ksa_time_hhmm()
+        closed_reason = get_market_closed_reason_ksa()
+        early_reason = get_early_close_reason_ksa()
+        if closed_reason:
+            print(f"Scheduled reports heartbeat: current={current_hhmm} KSA | market closed: {closed_reason}", flush=True)
+            return
+        if early_reason and minutes_from_hhmm(current_hhmm) >= minutes_from_hhmm(EARLY_MARKET_CLOSE_KSA):
+            print(f"Scheduled reports heartbeat: current={current_hhmm} KSA | early close active: {early_reason}", flush=True)
+            return
         current_minutes = minutes_from_hhmm(current_hhmm)
         next_items = []
         for hhmm in sorted(REPORT_TIMES_KSA.keys(), key=minutes_from_hhmm):
@@ -5131,6 +5263,58 @@ def maybe_send_scheduled_report(state):
         return False
 
     scheduled_hhmm, report_title, report_key = scheduled
+    date_key = current_ksa_date_key()
+
+    closed_reason = get_market_closed_reason_ksa(date_key)
+    if closed_reason:
+        notice_key = f"{date_key}|MARKET_CLOSED_NOTICE"
+        already_notice = _scheduled_report_sent_value_is_true(state.get("scheduled_reports_sent", {}).get(notice_key))
+        if already_notice:
+            mark_scheduled_reports_as_skipped(state, date_key=date_key, reason="market_closed")
+            save_state(state)
+            return False
+
+        print(f"Scheduled report skipped: market closed | {closed_reason}", flush=True)
+        sent_ok = send_telegram(build_market_closed_notice(closed_reason, early_close=False))
+        if not sent_ok:
+            print("Market closed notice send failed; will retry inside window", flush=True)
+            return False
+
+        state.setdefault("scheduled_reports_sent", {})[notice_key] = {
+            "sent": True,
+            "skipped": True,
+            "reason": closed_reason,
+            "sent_at": now_utc().isoformat(),
+        }
+        mark_scheduled_reports_as_skipped(state, date_key=date_key, reason=f"market_closed:{closed_reason}")
+        save_state(state)
+        return True
+
+    if is_after_early_close_report_time(scheduled_hhmm):
+        early_reason = get_early_close_reason_ksa(date_key) or "إغلاق مبكر"
+        notice_key = f"{date_key}|EARLY_CLOSE_NOTICE"
+        already_notice = _scheduled_report_sent_value_is_true(state.get("scheduled_reports_sent", {}).get(notice_key))
+        if already_notice:
+            mark_scheduled_reports_as_skipped(state, date_key=date_key, start_hhmm=scheduled_hhmm, reason="early_close")
+            save_state(state)
+            return False
+
+        print(f"Scheduled report skipped: early close | {scheduled_hhmm} | {early_reason}", flush=True)
+        sent_ok = send_telegram(build_market_closed_notice(early_reason, early_close=True))
+        if not sent_ok:
+            print("Early close notice send failed; will retry inside window", flush=True)
+            return False
+
+        state.setdefault("scheduled_reports_sent", {})[notice_key] = {
+            "sent": True,
+            "skipped": True,
+            "reason": early_reason,
+            "sent_at": now_utc().isoformat(),
+        }
+        mark_scheduled_reports_as_skipped(state, date_key=date_key, start_hhmm=scheduled_hhmm, reason=f"early_close:{early_reason}")
+        save_state(state)
+        return True
+
     print(f"Scheduled report sending: {scheduled_hhmm} | {report_title}", flush=True)
 
     try:
@@ -5158,6 +5342,16 @@ def maybe_send_scheduled_report(state):
 
 def should_run_market_pulse(state):
     if not MARKET_PULSE_ENABLED:
+        return False
+
+    closed_reason = get_market_closed_reason_ksa()
+    if closed_reason:
+        print(f"Market Pulse skipped: market closed | {closed_reason}", flush=True)
+        return False
+
+    early_reason = get_early_close_reason_ksa()
+    if early_reason and minutes_from_hhmm(current_ksa_time_hhmm()) > minutes_from_hhmm(EARLY_MARKET_CLOSE_KSA):
+        print(f"Market Pulse skipped: early close | {early_reason}", flush=True)
         return False
 
     if not is_market_time_ksa():
@@ -5548,6 +5742,9 @@ def startup_checks():
     print("SCHEDULED_REPORTS_KSA: ON", flush=True)
     print("DAILY_OPPORTUNITIES_AUTO_STATUS: ON", flush=True)
     print("DAILY_OPPORTUNITIES_AUTO_CLEANUP: ON", flush=True)
+    print("MARKET_DAY_FILTER: ON", flush=True)
+    print(f"US_MARKET_CLOSED_TODAY: {get_market_closed_reason_ksa() or 'NO'}", flush=True)
+    print(f"US_MARKET_EARLY_CLOSE_TODAY: {get_early_close_reason_ksa() or 'NO'}", flush=True)
     print("MANUAL_REPORTS: ON", flush=True)
     print(f"MARKET_DATA_FILTER: {'ON' if MARKET_DATA_ENABLED else 'OFF'}", flush=True)
     print("===================================", flush=True)
