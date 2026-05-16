@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.9 Market Day Filter + US Holidays
+# AlphaBot Pro v5.9.7.9.1 SEC Mixed Classification + Reason Polish
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.9 Market Day Filter + US Holidays"
+VERSION = "v5.9.7.9.1 SEC Mixed Classification + Reason Polish"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -672,6 +672,8 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Earnings Opportunities: فصل فرص الأرباح اليوم وحذفها تلقائيًا في اليوم التالي
 ✅ Market Day Filter: إيقاف/اختصار التقارير في الويكند وعطل NYSE
 ✅ US Holidays 2026: دعم الإغلاق الكامل والإغلاق المبكر 1:00 م ET
+✅ SEC Mixed Classification: تحسين الحالات المختلطة وسبب التصنيف
+✅ SEC Reason Polish: Legal/FDA/IPO/Proxy/SPAC/ETF filters
 ✅ Combined Top Signals: أهم الفرص والتحذيرات من القائمة الخاصة + فرص اليوم
 ✅ Text Polish: اختصار فحص الملفات في التقرير اليدوي
 ✅ Smart Silence عند عدم وجود تغيير
@@ -2156,6 +2158,11 @@ def get_news_priority(item):
 
     priority = 0
 
+    # v5.9.7.9.1: تجاهل ETF/Trust/Staked/Crypto من الرادار العام خارج القائمة.
+    if source_type == "sec" and ticker not in load_watchlist_symbols() and is_etf_trust_staked_crypto_sec_item(item):
+        print(f"ETF/Trust/Crypto SEC skipped: {ticker or 'NO_TICKER'} | {form} | {item.get('title')}", flush=True)
+        return 0
+
     # 1) تجاهل أخبار مكاتب المحاماة الضعيفة غالبًا
     if is_low_value_law_news(item):
         return -10
@@ -3425,11 +3432,32 @@ def _sec_classification_text(item, analysis=None):
     return " ".join(parts).lower()
 
 
+def _has_any_text(text_l, words):
+    return any(w in text_l for w in words)
+
+
+def is_etf_trust_staked_crypto_sec_item(item, analysis=None):
+    """
+    v5.9.7.9.1:
+    يلتقط إفصاحات ETF / Trust / Staked / Crypto حتى لا تُعامل كسهم شركة تشغيلية عادي.
+    """
+    text_l = _sec_classification_text(item, analysis or {})
+    form_u = canonical_sec_form(get_sec_form_from_item(item))
+    if form_u not in {"S-1", "S-3", "F-1", "F-3", "424B3", "424B4", "424B5", "FWP", "EFFECT"}:
+        return False
+
+    etf_crypto_words = [
+        " etf", "exchange-traded fund", "exchange traded fund", "fund", "trust",
+        "staked", "staking", "bitcoin", "ethereum", "solana", "trx", "crypto",
+        "cryptocurrency", "digital asset", "canary", "grayscale", "bitwise", "21shares",
+    ]
+    return _has_any_text(text_l, etf_crypto_words)
+
+
 def classify_sec_signal(item, analysis=None):
     """
-    v5.9.7.7:
-    تصنيف واضح لتنبيهات SEC: إيجابي قوي / مراقبة / سلبي.
-    لا يغيّر قرار الإرسال؛ فقط يوضح نوع الإشارة للمستخدم.
+    v5.9.7.9.1:
+    تصنيف SEC أدق: إيجابي قوي / مراقبة / سلبي، مع معالجة الحالات المختلطة والسبب المناسب.
     """
     analysis = analysis or {}
     form_u = canonical_sec_form(get_sec_form_from_item(item))
@@ -3438,11 +3466,68 @@ def classify_sec_signal(item, analysis=None):
     direction = normalize_direction(analysis.get("direction", ""))
 
     def has_any(words):
-        return any(w in text_l for w in words)
+        return _has_any_text(text_l, words)
 
-    positive_hit = has_any(SEC_POSITIVE_STRONG_WORDS)
+    legal_words = [
+        "lawsuit", "litigation", "complaint", "legal action", "class action filed",
+        "securities act", "exchange act", "proxy materials", "14a-9", "injunction",
+        "دعوى", "قضائية", "قانونية", "مواد الوكالة"
+    ]
+    severe_legal_words = ["sec investigation", "doj investigation", "subpoena", "charged by the sec", "fraud", "enforcement"]
+
+    liquidation_words = ["liquidation", "dissolution", "wind up", "winding up", "plan of liquidation", "تصفية", "حل الشركة"]
+    reverse_split_words = ["reverse split", "reverse stock split", "stock split", "انقسام عكسي", "تقسيم عكسي"]
+    increase_share_words = [
+        "increase authorized", "authorized shares", "authorized share increase",
+        "issuance of shares", "share issuance", "issue shares",
+        "زيادة الأسهم", "زيادة الاسهم", "إصدار أسهم", "اصدار اسهم"
+    ]
+    restructuring_words = [
+        "restructuring", "restructuring support agreement", "debt restructuring",
+        "credit agreement amendment", "forbearance", "default", "liquidity",
+        "going concern", "substantial doubt", "bankruptcy", "chapter 11",
+        "material weakness", "delisting", "non-compliance", "deficiency notice",
+        "termination", "terminated", "breach",
+        "إعادة هيكلة", "اعادة هيكلة", "الدائنين", "دائن"
+    ]
+    offering_words = [
+        "public offering", "registered direct", "private placement", "at-the-market", "atm offering",
+        "offering", "resale", "selling stockholder", "selling stockholders", "common stock",
+        "ordinary shares", "warrants", "pre-funded warrants", "units", "convertible",
+        "prospectus supplement", "free writing prospectus", "pipe", "preferred stock",
+        "طرح", "نشرة", "ضمانات", "أسهم ممتازة"
+    ]
+    strong_offering_words = [
+        "424b5", "registered direct", "at-the-market", "atm", "warrants", "selling stockholder",
+        "selling stockholders", "pipe", "pre-funded", "preferred stock", "convertible", "resale",
+        "million shares", "shares of common stock", "ordinary shares"
+    ]
+    clinical_positive_words = [
+        "fda approval", "fda clearance", "fast track designation", "orphan drug designation",
+        "snda accepted", "nda accepted", "pdufa", "successful fda meeting", "positive topline",
+        "positive data", "positive clinical", "met primary endpoint", "meets primary endpoint",
+        "safety and efficacy", "dose-dependent", "dose dependent", "phase 1", "phase 2", "phase 3",
+        "قبول", "إدارة الغذاء", "سلامة وفعالية", "بيانات إيجابية", "نتائج إيجابية"
+    ]
+    mna_words = ["merger", "acquisition", "buyout", "tender offer", "asset sale", "strategic transaction", "استحواذ", "اندماج"]
+    mna_soft_words = ["asset swap", "station swap", "exchange of stations", "no cash consideration", "without cash consideration", "مبادلة", "بدون مقابل نقدي"]
+    earnings_positive_words = ["revenue growth", "gross profit", "profitability", "raised guidance", "record revenue", "إيرادات قياسية", "نمو الإيرادات"]
+    earnings_negative_words = ["net loss increased", "increased net loss", "higher net loss", "loss widened", "زيادة الخسارة", "الخسارة الصافية"]
+    spac_extension_words = ["spac", "extension", "extend", "business combination deadline", "initial business combination", "تمديد", "شركة استحواذ ذات أغراض خاصة"]
+    ipo_words = ["initial public offering", " ipo", "إكتتاب عام أولي", "اكتتاب عام أولي", "listing", "إدراج", "nasdaq capital market", "nasdaq global select"]
+    light_424b3_words = ["quarterly report", "10-q", "form 10-q", "incorporat", "supplement no", "تقرير ربع", "تحديث تقرير"]
+
     negative_hit = has_any(SEC_NEGATIVE_STRONG_WORDS)
+    positive_hit = has_any(SEC_POSITIVE_STRONG_WORDS)
     watch_hit = has_any(SEC_WATCH_WORDS)
+    legal_hit = has_any(legal_words)
+    offering_hit = has_any(offering_words)
+    strong_offering_hit = has_any(strong_offering_words)
+    clinical_hit = has_any(clinical_positive_words)
+    mna_hit = has_any(mna_words)
+
+    if is_etf_trust_staked_crypto_sec_item(item, analysis):
+        return "🟡 مراقبة", "ETF/Trust/Crypto/Staked — ليس سهم شركة تشغيلية عادي"
 
     if form_u == "4":
         try:
@@ -3459,65 +3544,81 @@ def classify_sec_signal(item, analysis=None):
     if form_u == "SC 13D":
         return "🟢 إيجابي قوي", "دخول/تغير ملكية مستثمر نشط محتمل"
 
-    if form_u == "8-K":
-        # v5.9.7.7.2: السلبية أولًا حتى لا تخدعنا كلمة agreement في أخبار إعادة الهيكلة/الديون.
-        negative_8k_words = [
-            "reverse split", "reverse stock split", "stock split",
-            "restructuring", "restructuring support agreement", "debt restructuring",
-            "credit agreement amendment", "forbearance", "default", "liquidity",
-            "going concern", "substantial doubt", "bankruptcy", "chapter 11",
-            "material weakness", "delisting", "non-compliance", "deficiency notice",
-            "termination", "terminated", "breach",
-            "إعادة هيكلة", "اعادة هيكلة", "تقسيم عكسي", "انقسام عكسي", "الدائنين", "دائن"
-        ]
-        if any(w in text_l for w in negative_8k_words):
-            return "🔴 سلبي", "8-K يتضمن إعادة هيكلة/ديون أو بندًا تحذيريًا"
-
-        if any(w in text_l for w in ["nasdaq compliance regained", "regained compliance", "compliance regained", "continued listing compliance"]):
-            return "🟢 إيجابي قوي", "استعادة امتثال Nasdaq أو استمرار الإدراج"
-        if any(w in text_l for w in ["non-dilutive financing", "non dilutive financing", "grant", "government funding", "award"]):
-            return "🟢 إيجابي قوي", "تمويل/منحة غير مخففة أو دعم تمويلي إيجابي"
-        if any(w in text_l for w in ["fda approval", "fda clearance", "fast track designation", "orphan drug designation", "positive topline", "met primary endpoint", "meets primary endpoint"]):
-            return "🟢 إيجابي قوي", "خبر FDA/Clinical إيجابي"
-        if any(w in text_l for w in ["contract", "purchase order", "strategic partnership", "license agreement", "licensing agreement", "supply agreement", "government contract", "material definitive agreement", "definitive agreement"]):
-            return "🟢 إيجابي قوي", "عقد أو اتفاقية/صفقة مهمة"
-        if any(w in text_l for w in ["merger agreement", "acquisition", "buyout", "tender offer"]):
-            return "🟢 إيجابي قوي", "اندماج أو استحواذ/صفقة استراتيجية"
-        if negative_hit:
-            return "🔴 سلبي", "8-K يتضمن بندًا تحذيريًا أو سلبيًا"
-        return "🟡 مراقبة", "8-K مهم لكن اتجاهه يحتاج تأكيد من السعر والفوليوم"
-
     if form_u == "SC 13G":
         return "🟡 مراقبة", "دخول أو تغير ملكية مؤسسة كبيرة؛ إيجابي مشروط وليس شراء مباشر"
-
-    if form_u in {"424B5", "424B3", "424B4", "FWP"}:
-        return "🔴 سلبي", "نشرة/طرح أو تحديث نشرة قد يرتبط بتخفيف أو بيع أوراق مالية"
 
     if form_u in {"NT 10-Q", "NT 10-K"}:
         return "🔴 سلبي", "تأخر تقرير مالي يرفع مخاطر الشفافية والامتثال"
 
     if form_u in {"DEF 14A", "PRE 14A"}:
-        proxy_negative_words = [
-            "reverse split", "reverse stock split", "stock split",
-            "increase authorized", "authorized shares", "authorized share increase",
-            "issuance of shares", "share issuance", "issue shares",
-            "انقسام عكسي", "تقسيم عكسي",
-            "زيادة الأسهم", "زيادة الاسهم", "زيادة الأسهم المصرح", "زيادة الاسهم المصرح",
-            "الأسهم المصرح", "الاسهم المصرح",
-            "إصدار أسهم", "اصدار اسهم", "إصدار الأسهم", "اصدار الأسهم"
-        ]
-        if any(w in text_l for w in proxy_negative_words):
-            return "🔴 سلبي", "Proxy يتضمن reverse split أو زيادة/إصدار أسهم"
+        if has_any(liquidation_words):
+            return "🔴 سلبي", "Proxy يتضمن تصفية/حل الشركة، وهذا حدث سلبي جوهري"
+        if has_any(reverse_split_words):
+            return "🔴 سلبي", "Proxy يتضمن reverse split، وهذا غالبًا ضغط سلبي على السهم"
+        if has_any(increase_share_words):
+            return "🔴 سلبي", "Proxy يتضمن زيادة/إصدار أسهم قد تسبب تخفيفًا"
+        if has_any(spac_extension_words):
+            return "🟡 مراقبة", "SPAC Extension — تمديد مهلة إتمام اندماج وليس فرصة مباشرة"
         if any(w in text_l for w in ["merger vote", "acquisition approval", "strategic transaction", "asset sale", "تصويت على اندماج", "صفقة استراتيجية"]):
             return "🟡 مراقبة", "تصويت على صفقة أو حدث استراتيجي يحتاج متابعة"
         return "🟡 مراقبة", "Proxy يحتاج قراءة البنود قبل الحكم"
 
+    if form_u == "8-K":
+        # أولوية Legal/Lawsuit أعلى من M&A حتى لا تخدعنا كلمة acquisition.
+        if legal_hit:
+            if has_any(severe_legal_words):
+                return "🔴 سلبي", "8-K يتضمن تحقيقًا/إجراء قانونيًا عالي المخاطر"
+            return "🟡 مراقبة", "8-K يتضمن دعوى/إجراء قانوني قد يؤثر على الصفقة أو السهم"
+
+        if has_any(liquidation_words):
+            return "🔴 سلبي", "8-K يتضمن تصفية/حل الشركة"
+        if has_any(reverse_split_words):
+            return "🔴 سلبي", "8-K يتضمن Reverse Split، وهذا غالبًا ضغط سلبي"
+        if has_any(restructuring_words):
+            return "🔴 سلبي", "8-K يتضمن إعادة هيكلة/ديون أو بندًا تحذيريًا"
+
+        mixed_financing = offering_hit or has_any(["financing", "direct offering", "private placement", "preferred stock", "pipe", "warrants"])
+        if clinical_hit and mixed_financing:
+            return "🟡 مراقبة", "خبر FDA/Clinical إيجابي لكن توجد مؤشرات تمويل/طرح تقلل قوة الإشارة"
+        if clinical_hit:
+            return "🟢 إيجابي قوي", "خبر FDA/Clinical أو بيانات تنظيمية إيجابية"
+
+        if mna_hit and mixed_financing:
+            return "🟡 مراقبة", "اندماج/صفقة مع تمويل أو طرح خاص؛ الإشارة مختلطة"
+        if mna_hit and has_any(mna_soft_words):
+            return "🟡 مراقبة", "صفقة أصول/مبادلة قد تكون إيجابية لكن أثرها المالي يحتاج متابعة"
+        if mna_hit:
+            return "🟢 إيجابي قوي", "اندماج أو استحواذ/صفقة استراتيجية"
+
+        if has_any(["nasdaq compliance regained", "regained compliance", "compliance regained", "continued listing compliance"]):
+            return "🟢 إيجابي قوي", "استعادة امتثال Nasdaq أو استمرار الإدراج"
+        if has_any(["non-dilutive financing", "non dilutive financing", "grant", "government funding", "award"]):
+            return "🟢 إيجابي قوي", "تمويل/منحة غير مخففة أو دعم تمويلي إيجابي"
+        if has_any(["contract", "purchase order", "strategic partnership", "license agreement", "licensing agreement", "supply agreement", "government contract", "material definitive agreement", "definitive agreement"]):
+            return "🟢 إيجابي قوي", "عقد أو اتفاقية/صفقة مهمة"
+        if negative_hit:
+            return "🔴 سلبي", "8-K يتضمن بندًا تحذيريًا أو سلبيًا"
+        return "🟡 مراقبة", "8-K مهم لكن اتجاهه يحتاج تأكيد من السعر والفوليوم"
+
+    if form_u == "424B4" and has_any(ipo_words):
+        return "🟡 مراقبة", "IPO / إدراج جديد — ليس تخفيفًا عاديًا لشركة متداولة"
+
+    if form_u in {"424B5", "FWP"}:
+        return "🔴 سلبي", "نشرة/طرح مباشر أو تحديث طرح قد يسبب تخفيفًا أو بيع أوراق مالية"
+
+    if form_u == "424B3":
+        if strong_offering_hit or re.search(r"\b\d{1,3}(?:,\d{3})+\s+shares\b", text_l):
+            return "🔴 سلبي", "424B3 يتضمن بيع/إعادة بيع أسهم أو warrants بشكل واضح"
+        if has_any(light_424b3_words):
+            return "🟡 مراقبة", "424B3 يبدو تحديث نشرة/إدراج 10-Q؛ سلبي خفيف يحتاج متابعة"
+        return "🔴 سلبي", "نشرة/طرح أو تحديث نشرة قد يرتبط بتخفيف أو بيع أوراق مالية"
+
     if form_u in {"S-1", "S-3", "F-1", "F-3"}:
         if "s-3asr" in text_l or "automatic shelf" in text_l:
-            if any(w in text_l for w in ["registered direct", "public offering", "atm offering", "selling stockholder", "selling stockholders"]):
+            if strong_offering_hit:
                 return "🔴 سلبي", "تسجيل رف مع مؤشرات بيع/طرح أسهم"
             return "🟡 مراقبة", "تسجيل رف تمويلي؛ ليس طرحًا مباشرًا الآن"
-        if negative_hit:
+        if strong_offering_hit or negative_hit:
             return "🔴 سلبي", "تسجيل أوراق مالية مع احتمال تخفيف أو بيع أسهم"
         return "🟡 مراقبة", "تسجيل أوراق مالية يحتاج تفاصيل إضافية"
 
@@ -3527,9 +3628,11 @@ def classify_sec_signal(item, analysis=None):
         return "🟡 مراقبة", "تفعيل تسجيل؛ تأثيره يعتمد على الإفصاح المرتبط به"
 
     if form_u in {"10-Q", "10-K"}:
-        if any(w in text_l for w in ["going concern", "substantial doubt", "material weakness", "default", "liquidity", "bankruptcy", "chapter 11"]):
+        if has_any(["going concern", "substantial doubt", "material weakness", "default", "liquidity", "bankruptcy", "chapter 11"]):
             return "🔴 سلبي", "تقرير مالي يتضمن بنود مخاطر واضحة"
-        if any(w in text_l for w in ["revenue growth", "profitability", "reduced losses", "strong cash", "raised guidance"]):
+        if has_any(earnings_positive_words) and has_any(earnings_negative_words):
+            return "🟡 مراقبة", "نتائج مالية مختلطة: نمو تشغيلي مع زيادة خسائر/مخاطر"
+        if has_any(earnings_positive_words):
             return "🟢 إيجابي قوي", "تقرير مالي يتضمن مؤشرات تشغيلية/مالية إيجابية"
         return "🟡 مراقبة", "تقرير مالي يحتاج قراءة النتائج والبنود المهمة"
 
