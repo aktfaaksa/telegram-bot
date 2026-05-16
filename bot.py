@@ -1,4 +1,4 @@
-# AlphaBot Pro v5.9.7.10.1 Earnings List Grouped View
+# AlphaBot Pro v5.9.7.10.2 Earnings Time Display
 # RSS + Small-Cap Newswires + Finnhub + SEC Advanced Filings + OpenRouter + Telegram
 # Gemini Primary + GPT-4o-mini Fallback + Interactive Watchlist + Translated Company News
 # SEC Priority Mode + S-1/S-3/F-1/F-3 Smart Filter + Scheduled Reports + Market Pulse
@@ -28,7 +28,7 @@ except Exception as e:
 # 1) SETTINGS
 # =========================
 
-VERSION = "v5.9.7.10.1 Earnings List Grouped View"
+VERSION = "v5.9.7.10.2 Earnings Time Display"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -671,8 +671,9 @@ GlobeNewswire + PR Newswire + BusinessWire
 ✅ Daily Opportunities Auto Status: تضيف السهم فقط والبوت يحدد الحالة تلقائيًا
 ✅ Daily Opportunities Auto Cleanup: تنظيف آمن قبل البري ماركت مع نسخة احتياطية
 ✅ Earnings Opportunities: فصل فرص الأرباح اليوم وحذفها تلقائيًا في اليوم التالي
-✅ Scheduled Earnings Opportunities: /earnings_add SYMBOL YYYY-MM-DD
+✅ Scheduled Earnings Opportunities: /earnings_add SYMBOL YYYY-MM-DD [pre/after] [HH:MM]
 ✅ Earnings List Grouped View: عرض /earnings_list مجمع حسب اليوم
+✅ Earnings Time Display: عرض فترة ووقت إعلان الأرباح بتوقيت السعودية
 ✅ Market Day Filter: إيقاف/اختصار التقارير في الويكند وعطل NYSE
 ✅ US Holidays 2026: دعم الإغلاق الكامل والإغلاق المبكر 1:00 م ET
 ✅ SEC Mixed Classification: تحسين الحالات المختلطة وسبب التصنيف
@@ -1955,6 +1956,8 @@ def classify_daily_opportunity_item(item, state=None):
         "decision": decision,
         "bucket": bucket,
         "category": row.get("category", "daily") if row else "daily",
+        "earnings_session": row.get("earnings_session", "") if row else "",
+        "earnings_time_ksa": row.get("earnings_time_ksa", "") if row else "",
         "source": "فرص الأرباح" if row and row.get("category") == "earnings" else "فرص اليوم",
     }
 
@@ -1989,7 +1992,9 @@ def format_daily_opportunities_list():
         lines.extend(["", "📊 فرص الأرباح اليوم"])
         classified_earnings = _sort_daily_classified([classify_daily_opportunity_item(x, load_state()) for x in earnings_items])
         for i, data_row in enumerate(classified_earnings, start=1):
-            lines.append(f"{i}. {data_row['ticker']} — {data_row['status']} — {data_row['state']}\nالسعر/التغير: {data_row['price_text']}\nالقرار: {data_row['decision']}")
+            timing = format_earnings_timing(data_row)
+            timing_part = f" — {timing}" if timing and timing != "الوقت غير محدد" else ""
+            lines.append(f"{i}. {data_row['ticker']}{timing_part} — {data_row['status']} — {data_row['state']}\nالسعر/التغير: {data_row['price_text']}\nالقرار: {data_row['decision']}")
     lines.append("")
     lines.append(f"المصدر: {DAILY_OPPORTUNITIES_FILE}")
     return "\n\n".join(lines)
@@ -2029,9 +2034,13 @@ def format_daily_opportunities_section(state=None, compact=False):
         lines.extend(["", "📊 فرص الأرباح اليوم"])
         for i, data in enumerate(classified_earnings, start=1):
             if compact:
-                lines.append(f"{data['ticker']}: {data['status']} — {data['price_text']} | {data['state']}")
+                timing = format_earnings_timing(data) if data.get("category") == "earnings" else ""
+                timing_part = f" — {timing}" if timing and timing != "الوقت غير محدد" else ""
+                lines.append(f"{data['ticker']}{timing_part}: {data['status']} — {data['price_text']} | {data['state']}")
             else:
-                lines.append(f"{i}) {data['ticker']} — {data['status']} — {data['state']}\nالسعر/التغير: {data['price_text']}\nالسبب: {data['reason']}\nالقرار: {data['decision']}")
+                timing = format_earnings_timing(data) if data.get("category") == "earnings" else ""
+                timing_part = f" — {timing}" if timing and timing != "الوقت غير محدد" else ""
+                lines.append(f"{i}) {data['ticker']}{timing_part} — {data['status']} — {data['state']}\nالسعر/التغير: {data['price_text']}\nالسبب: {data['reason']}\nالقرار: {data['decision']}")
     return lines
 
 
@@ -2056,6 +2065,87 @@ def _valid_ymd(value):
         return ""
 
 
+def normalize_earnings_session(value):
+    """
+    يحول اختصارات فترة إعلان الأرباح إلى نص عربي موحد.
+    pre/before/bmo = قبل السوق
+    after/amc = بعد الإغلاق
+    """
+    v = clean_text(value).lower()
+    if not v:
+        return ""
+    if v in ["pre", "before", "bmo", "before_market", "before-market", "قبل", "قبل_السوق", "قبل السوق"]:
+        return "قبل السوق"
+    if v in ["after", "amc", "after_market", "after-market", "بعد", "بعد_الإغلاق", "بعد الإغلاق", "بعد السوق"]:
+        return "بعد الإغلاق"
+    if v in ["during", "market", "open", "intraday", "أثناء", "اثناء"]:
+        return "أثناء السوق"
+    return clean_text(value)
+
+
+def normalize_earnings_time(value):
+    """
+    يقبل وقت السعودية بصيغة HH:MM 24-hour ويحفظه كما هو.
+    مثال: 15:00 / 23:30 / 00:00
+    """
+    v = clean_text(value)
+    m = re.match(r"^(\d{1,2}):(\d{2})$", v)
+    if not m:
+        return ""
+    h = int(m.group(1))
+    minute = int(m.group(2))
+    if h < 0 or h > 23 or minute < 0 or minute > 59:
+        return ""
+    return f"{h:02d}:{minute:02d}"
+
+
+def format_ksa_time_ar(value):
+    """يعرض HH:MM كصيغة عربية مختصرة مثل 3:00 م."""
+    v = normalize_earnings_time(value)
+    if not v:
+        return ""
+    h, m = [int(x) for x in v.split(":")]
+    suffix = "ص" if h < 12 else "م"
+    h12 = h % 12
+    if h12 == 0:
+        h12 = 12
+    return f"{h12}:{m:02d} {suffix}"
+
+
+def parse_earnings_timing_args(args):
+    """
+    يدعم صيغ مثل:
+    /earnings_add BEKE 2026-05-19 pre 15:00
+    /earnings_add RAMP 2026-05-21 after 23:30
+    /earnings_add SBLK 2026-05-20 23:00
+    """
+    session = ""
+    time_ksa = ""
+    for arg in args:
+        t = normalize_earnings_time(arg)
+        if t:
+            time_ksa = t
+            continue
+        sess = normalize_earnings_session(arg)
+        if sess:
+            session = sess
+    return session, time_ksa
+
+
+def format_earnings_timing(item):
+    session = clean_text(item.get("earnings_session", ""))
+    time_ksa = normalize_earnings_time(item.get("earnings_time_ksa") or item.get("earnings_time") or "")
+    time_label = format_ksa_time_ar(time_ksa)
+
+    if session and time_label:
+        return f"{session} — {time_label}"
+    if session:
+        return session
+    if time_label:
+        return time_label
+    return "الوقت غير محدد"
+
+
 def _normalize_scheduled_earning_item(item):
     if not isinstance(item, dict):
         return None
@@ -2068,6 +2158,9 @@ def _normalize_scheduled_earning_item(item):
         "ticker": ticker,
         "category": "earnings",
         "earnings_date": earnings_date,
+        "earnings_session": normalize_earnings_session(item.get("earnings_session") or item.get("session") or ""),
+        "earnings_time_ksa": normalize_earnings_time(item.get("earnings_time_ksa") or item.get("earnings_time") or item.get("time") or ""),
+        "timezone": clean_text(item.get("timezone")) or "Asia/Riyadh",
         "added_at": clean_text(item.get("added_at")) or now_ksa().strftime("%Y-%m-%d %H:%M"),
         "status": clean_text(item.get("status")) or "scheduled",
         "reason": clean_text(item.get("reason")) or "فرصة أرباح مجدولة + شرعي حسب فحص المستخدم",
@@ -2164,9 +2257,11 @@ def cleanup_expired_scheduled_earnings(force=False, notify=False, chat_id=None, 
         return False, ""
 
 
-def add_scheduled_earning(ticker, earnings_date):
+def add_scheduled_earning(ticker, earnings_date, earnings_session="", earnings_time_ksa=""):
     ticker = normalize_common_ticker(ticker)
     earnings_date = _valid_ymd(earnings_date)
+    earnings_session = normalize_earnings_session(earnings_session)
+    earnings_time_ksa = normalize_earnings_time(earnings_time_ksa)
     if not ticker:
         return False, "رمز السهم غير صحيح"
     if not earnings_date:
@@ -2182,6 +2277,9 @@ def add_scheduled_earning(ticker, earnings_date):
                 "ticker": ticker,
                 "category": "earnings",
                 "earnings_date": earnings_date,
+                "earnings_session": earnings_session or item.get("earnings_session", ""),
+                "earnings_time_ksa": earnings_time_ksa or item.get("earnings_time_ksa", ""),
+                "timezone": "Asia/Riyadh",
                 "status": "scheduled",
                 "added_at": item.get("added_at") or now_ksa().strftime("%Y-%m-%d %H:%M"),
                 "reason": "فرصة أرباح مجدولة + شرعي حسب فحص المستخدم",
@@ -2189,14 +2287,18 @@ def add_scheduled_earning(ticker, earnings_date):
             })
             if not save_scheduled_earnings(data):
                 return False, "تعذر حفظ فرص الأرباح المجدولة"
+            timing = format_earnings_timing(item)
             if old_date == earnings_date:
-                return True, f"{ticker} موجود مسبقًا في فرص الأرباح المجدولة بتاريخ {earnings_date}"
-            return True, f"تم تحديث تاريخ أرباح {ticker}: {old_date or 'غير محدد'} → {earnings_date}"
+                return True, f"{ticker} موجود مسبقًا في فرص الأرباح المجدولة بتاريخ {earnings_date} — {timing}"
+            return True, f"تم تحديث تاريخ أرباح {ticker}: {old_date or 'غير محدد'} → {earnings_date} — {timing}"
     items.append({
         "symbol": ticker,
         "ticker": ticker,
         "category": "earnings",
         "earnings_date": earnings_date,
+        "earnings_session": earnings_session,
+        "earnings_time_ksa": earnings_time_ksa,
+        "timezone": "Asia/Riyadh",
         "added_at": now_ksa().strftime("%Y-%m-%d %H:%M"),
         "status": "scheduled",
         "reason": "فرصة أرباح مجدولة + شرعي حسب فحص المستخدم",
@@ -2204,7 +2306,8 @@ def add_scheduled_earning(ticker, earnings_date):
     })
     if not save_scheduled_earnings(data):
         return False, "تعذر حفظ فرص الأرباح المجدولة"
-    return True, f"تمت جدولة {ticker} كفرصة أرباح بتاريخ {earnings_date}"
+    timing = format_earnings_timing(items[-1])
+    return True, f"تمت جدولة {ticker} كفرصة أرباح بتاريخ {earnings_date} — {timing}"
 
 
 def remove_scheduled_earning(ticker):
@@ -2250,6 +2353,9 @@ def get_today_scheduled_earnings_items():
                 "reason": "إعلان أرباح اليوم + شرعي حسب فحص المستخدم",
                 "decision": "مراقبة ردة فعل السعر والفوليوم قبل/بعد إعلان الأرباح.",
                 "earnings_date": item.get("earnings_date"),
+                "earnings_session": item.get("earnings_session", ""),
+                "earnings_time_ksa": item.get("earnings_time_ksa", ""),
+                "timezone": "Asia/Riyadh",
                 "scheduled": True,
             })
     return rows
@@ -2311,7 +2417,7 @@ def format_scheduled_earnings_list():
         symbol = normalize_common_ticker(item.get("symbol") or item.get("ticker") or "")
         status = clean_text(item.get("status")) or "scheduled"
         if symbol:
-            grouped[date_key].append((symbol, status))
+            grouped[date_key].append((symbol, status, format_earnings_timing(item)))
 
     valid_dates = []
     for date_key in grouped.keys():
@@ -2324,7 +2430,7 @@ def format_scheduled_earnings_list():
 
     if not valid_dates:
         for item in items:
-            lines.append(f"{item['symbol']} — {item['earnings_date']} — {item.get('status', 'scheduled')}")
+            lines.append(f"{item['symbol']} — {item['earnings_date']} — {format_earnings_timing(item)} — {item.get('status', 'scheduled')}")
         lines.extend(["", f"المصدر: {EARNINGS_OPPORTUNITIES_FILE}"])
         return "\n".join(lines)
 
@@ -2337,12 +2443,13 @@ def format_scheduled_earnings_list():
         lines.append(f"{format_arabic_day_label(date_key)}:")
         symbols = sorted(grouped.get(date_key, []), key=lambda x: x[0])
         if symbols:
-            for symbol, status in symbols:
+            for symbol, status, timing in symbols:
+                timing_label = timing if timing else "الوقت غير محدد"
                 # نبقي الحالة مختصرة، ولا نكررها إذا كانت scheduled الافتراضية.
                 if status and status != "scheduled":
-                    lines.append(f"{symbol} — {status}")
+                    lines.append(f"{symbol} — {timing_label} — {status}")
                 else:
-                    lines.append(symbol)
+                    lines.append(f"{symbol} — {timing_label}")
         else:
             lines.append("لا يوجد")
         lines.append("")
@@ -6079,9 +6186,19 @@ def patch_telegram_buttons_manual_report():
 
         if cmd == "/earnings_add":
             if len(parts) < 3:
-                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/earnings_add SYMBOL YYYY-MM-DD")
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/earnings_add SYMBOL YYYY-MM-DD [pre/after] [HH:MM]")
                 return True
-            ok, msg = add_scheduled_earning(parts[1], parts[2])
+            earnings_session, earnings_time_ksa = parse_earnings_timing_args(parts[3:])
+            ok, msg = add_scheduled_earning(parts[1], parts[2], earnings_session, earnings_time_ksa)
+            send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_scheduled_earnings_list())
+            return True
+
+        if cmd == "/earnings_set":
+            if len(parts) < 3:
+                send_telegram_to_chat(chat_id, "استخدم الأمر هكذا:\n/earnings_set SYMBOL YYYY-MM-DD pre 15:00")
+                return True
+            earnings_session, earnings_time_ksa = parse_earnings_timing_args(parts[3:])
+            ok, msg = add_scheduled_earning(parts[1], parts[2], earnings_session, earnings_time_ksa)
             send_telegram_to_chat(chat_id, ("✅ " if ok else "⚠️ ") + msg + "\n\n" + format_scheduled_earnings_list())
             return True
 
